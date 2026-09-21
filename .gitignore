@@ -1,0 +1,16 @@
+# Google API Credentials (CRITICAL TO KEEP SECRET)
+client_secret.json
+token.json
+client_secret_*.json
+credentials.json
+
+# Logs
+backup_log.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Testing
+TestBackups/
