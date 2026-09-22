@@ -1,8 +1,24 @@
 """
-Enterprise Database Cloud Backup Automation
-Dual-Mode Application:
-- Desktop GUI Application (Default on double-click or shortcut)
-- Silent Scheduled Task Runner (When invoked with --auto by Task Scheduler)
+Enterprise Database Cloud Backup Automation - Application Entrypoint Router
+=============================================================================
+Author: Dulnindu Saranga
+Target OS: Windows 10 / 11 / Windows Server
+Architecture: Dual-Mode Application (GUI + Headless CLI / Task Scheduler)
+
+Operational Modes:
+1. Desktop GUI Mode (Default):
+   Triggered on normal user invocation (double-clicking the desktop icon or 
+   running without CLI flags). Initializes the CustomTkinter presentation layer.
+
+2. Automated Headless Mode (--auto or -a):
+   Triggered exclusively by Windows Task Scheduler (configured for Mondays at 02:00 AM).
+   Operates silently without creating any graphical windows, evaluates the Monday 
+   guard condition, performs the backup pipeline, logs telemetry, and exits with 
+   an OS-level return code (0 = success, 1 = failure).
+
+3. Manual CLI Mode (--manual-cli or --cli):
+   Allows administrators or site engineers to run the backup interactively from 
+   Command Prompt / PowerShell with terminal feedback.
 """
 
 import os
@@ -10,17 +26,32 @@ import sys
 import logging
 from datetime import datetime
 
-# Allow OAuth scope relaxation
+# -----------------------------------------------------------------------------
+# GOOGLE OAUTH SCOPE RELAXATION
+# -----------------------------------------------------------------------------
+# Google Cloud periodically normalizes/consolidates legacy scope URLs.
+# Setting this environment variable instructs oauthlib to accept modernized 
+# canonical scopes returned by Google servers without raising a ScopeChangedError.
 os.environ['OAUTHLIB_RELAX_TOKEN_SCOPE'] = '1'
 
-# Protect against None stdout/stderr in windowed/noconsole executables
+# -----------------------------------------------------------------------------
+# WINDOWED EXECUTABLE STREAM SANITIZATION
+# -----------------------------------------------------------------------------
+# When compiled with PyInstaller using the --windowed / --noconsole flag,
+# Windows does not attach a console subsystem. In this state, sys.stdout and 
+# sys.stderr are None. Attempting to print() or flush() would raise an unhandled 
+# AttributeError: 'NoneType' object has no attribute 'write'. 
+# Redirecting to os.devnull ensures total runtime stability.
 if sys.stdout is None:
     sys.stdout = open(os.devnull, 'w')
 if sys.stderr is None:
     sys.stderr = open(os.devnull, 'w')
 
 
-# Core modules
+# -----------------------------------------------------------------------------
+# CORE ENGINE IMPORTS
+# -----------------------------------------------------------------------------
+# backup_core is completely headless and thread-safe.
 from backup_core import (
     BASE_DIR,
     LOG_FILE,
@@ -30,8 +61,18 @@ from backup_core import (
     emit_log
 )
 
+
 def run_automated_mode():
-    """Silent automated execution designed for Windows Task Scheduler."""
+    """
+    Executes the unattended, silent backup cycle for Windows Task Scheduler.
+    
+    Workflow:
+    1. Read configuration (config.json).
+    2. Enforce the Monday-only operational constraint (if enabled).
+    3. Validate non-interactive Google OAuth credentials (credentials.json).
+    4. Execute the complete backup, compression, cloud upload, and disk cleanup cycle.
+    5. Terminate the process with exit code 0 (success) or 1 (failure) for OS monitoring.
+    """
     emit_log("=" * 60)
     emit_log("TASK SCHEDULER INVOCATION: --auto flag detected")
     emit_log("=" * 60)
@@ -39,29 +80,42 @@ def run_automated_mode():
     config = load_config()
     strictly_mondays = config.get("STRICTLY_MONDAYS_ONLY", True)
     
-    # Monday check (weekday() == 0 for Monday)
-    if strictly_mondays and datetime.today().weekday() != 0:
-        emit_log(f"Today is {datetime.today().strftime('%A')}. Backup configured for Mondays only. Exiting safely.")
+    # In Python's datetime module: 0 = Monday, 1 = Tuesday, ..., 6 = Sunday.
+    today_weekday = datetime.today().weekday()
+    if strictly_mondays and today_weekday != 0:
+        day_name = datetime.today().strftime('%A')
+        emit_log(f"Today is {day_name}. Backup configured for Mondays only. Exiting safely with exit code 0.")
         sys.exit(0)
 
     emit_log("Monday check passed (or restriction disabled). Running automated backup...")
     
-    # Authenticate non-interactively (uses token.json)
+    # Authenticate non-interactively (uses cached refresh token from credentials.json).
+    # interactive=False prevents the engine from trying to launch a web browser on an unattended server.
     creds = authenticate(interactive=False)
     if not creds:
-        emit_log("Task Scheduler failed: Could not obtain valid Google Credentials (token.json).", "critical")
+        emit_log("Task Scheduler failed: Could not obtain valid Google Credentials (credentials.json missing or revoked).", "critical")
         sys.exit(1)
 
+    # Run the full automated backup pipeline across all target databases
     success, summary = run_full_backup(config=config)
     emit_log(f"Automated backup result: {summary}")
+    
+    # Return explicit exit code to Windows Task Scheduler history
     sys.exit(0 if success else 1)
 
+
 def run_manual_cli():
-    """Manual terminal CLI runner."""
+    """
+    Executes an interactive terminal CLI session for manual server testing.
+    Useful when remoted into a client server via SSH or PowerShell session.
+    """
     print("=" * 60)
     print("  DATABASE CLOUD BACKUP - CLI MANUAL MODE")
     print("=" * 60)
+    
     config = load_config()
+    
+    # In manual mode, interactive=True allows launching the browser if login is needed
     creds = authenticate(interactive=True)
     if not creds:
         print("Error: Could not authenticate with Google.")
@@ -71,21 +125,31 @@ def run_manual_cli():
     print(f"\nResult: {summary}")
     sys.exit(0 if success else 1)
 
+
 def main():
-    # Detect execution mode from CLI arguments
+    """
+    Primary application entrypoint.
+    Inspects sys.argv to dynamically route execution between GUI and CLI daemons.
+    """
+    # Route 1: Windows Task Scheduler execution
     if "--auto" in sys.argv or "-a" in sys.argv:
         run_automated_mode()
+        
+    # Route 2: Command-line terminal execution
     elif "--manual-cli" in sys.argv or "--cli" in sys.argv:
         run_manual_cli()
+        
+    # Route 3: Standard user desktop execution (default)
     else:
-        # Launch Desktop GUI Application
         try:
             from app_gui import BackupAutomationApp
             app = BackupAutomationApp()
             app.mainloop()
         except Exception as e:
+            # Fallback to console error log if GUI display server fails to initialize
             emit_log(f"Failed to launch GUI, falling back to CLI menu: {e}", "error")
             run_manual_cli()
+
 
 if __name__ == "__main__":
     main()
