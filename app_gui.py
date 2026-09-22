@@ -27,6 +27,8 @@ from backup_core import (
     disable_scheduler,
     detect_sql_server_instances,
     detect_user_databases,
+    cleanup_local_backup_folder,
+    format_file_size,
     emit_log
 )
 
@@ -194,33 +196,43 @@ class BackupAutomationApp(ctk.CTk):
 
         ctk.CTkButton(
             links_frame,
-            text="📁 Open Local Backups",
+            text="📁 Open Backups",
             font=ctk.CTkFont(size=12),
             fg_color="#374151",
             hover_color="#4b5563",
-            width=170,
+            width=135,
             command=self._open_local_backup_folder
-        ).pack(side="left", padx=8)
+        ).pack(side="left", padx=5)
 
         ctk.CTkButton(
             links_frame,
-            text="☁ Open Google Drive",
+            text="☁ Open Drive",
             font=ctk.CTkFont(size=12),
             fg_color="#374151",
             hover_color="#4b5563",
-            width=170,
+            width=135,
             command=self._open_google_drive
-        ).pack(side="left", padx=8)
+        ).pack(side="left", padx=5)
 
         ctk.CTkButton(
             links_frame,
-            text="📊 Open Google Sheet",
+            text="📊 Open Sheet",
             font=ctk.CTkFont(size=12),
             fg_color="#374151",
             hover_color="#4b5563",
-            width=170,
+            width=135,
             command=self._open_google_sheet
-        ).pack(side="left", padx=8)
+        ).pack(side="left", padx=5)
+
+        ctk.CTkButton(
+            links_frame,
+            text="🧹 Clean Storage",
+            font=ctk.CTkFont(size=12),
+            fg_color="#374151",
+            hover_color="#dc2626",
+            width=135,
+            command=self._clean_local_storage
+        ).pack(side="left", padx=5)
 
     # ── TAB 2: SCHEDULE ───────────────────────────────────────────────
     def _build_schedule_tab(self):
@@ -367,7 +379,16 @@ class BackupAutomationApp(ctk.CTk):
         # Google Sheet ID
         self._create_field_label(scroll, "Google Sheet ID:")
         self.entry_sheet_id = ctk.CTkEntry(scroll, width=500)
-        self.entry_sheet_id.pack(anchor="w", padx=20, pady=(0, 15))
+        self.entry_sheet_id.pack(anchor="w", padx=20, pady=(0, 10))
+
+        # Storage Management Setting
+        self.chk_delete_local = ctk.CTkCheckBox(
+            scroll,
+            text="Delete local backup file after upload (Preserves local storage drive space)",
+            font=ctk.CTkFont(size=12),
+            text_color="#d1d5db"
+        )
+        self.chk_delete_local.pack(anchor="w", padx=20, pady=(5, 15))
 
         # Buttons
         btn_frame = ctk.CTkFrame(scroll, fg_color="transparent")
@@ -493,6 +514,11 @@ class BackupAutomationApp(ctk.CTk):
         else:
             self.monday_only_switch.deselect()
 
+        if c.get("DELETE_LOCAL_AFTER_UPLOAD", True):
+            self.chk_delete_local.select()
+        else:
+            self.chk_delete_local.deselect()
+
     def _auto_detect_sql(self):
         instances = detect_sql_server_instances()
         if instances:
@@ -533,7 +559,8 @@ class BackupAutomationApp(ctk.CTk):
             "GOOGLE_DRIVE_FOLDER_ID": self.entry_drive_id.get().strip(),
             "GOOGLE_SHEET_ID": self.entry_sheet_id.get().strip(),
             "STRICTLY_MONDAYS_ONLY": bool(self.monday_only_switch.get()),
-            "SCHEDULE_TIME": self.entry_sched_time.get().strip() or "02:00"
+            "SCHEDULE_TIME": self.entry_sched_time.get().strip() or "02:00",
+            "DELETE_LOCAL_AFTER_UPLOAD": bool(self.chk_delete_local.get())
         }
 
         ok, msg = save_config(new_config)
@@ -586,6 +613,19 @@ class BackupAutomationApp(ctk.CTk):
             os.startfile(folder)
         else:
             messagebox.showwarning("Warning", f"Folder not found: {folder}")
+
+    def _clean_local_storage(self):
+        folder = self.config_data.get("BACKUP_FOLDER", "C:\\temp\\backups")
+        if not os.path.exists(folder):
+            messagebox.showinfo("Storage Cleaned", f"Backup folder does not exist yet:\n{folder}\n0 files found.")
+            return
+
+        if messagebox.askyesno("Clean Storage Drive", f"Delete all residual backup files (.bak and .zip) from:\n{folder}\n\nProceed to free local storage drive space?"):
+            deleted, freed = cleanup_local_backup_folder(folder=folder, log_cb=self.append_log)
+            if deleted > 0:
+                messagebox.showinfo("Storage Cleaned", f"Successfully cleaned storage drive!\nRemoved: {deleted} files\nSpace freed: {format_file_size(freed)}")
+            else:
+                messagebox.showinfo("Storage Cleaned", "Storage drive is already clean.\n0 residual backup files found.")
 
     def _open_google_drive(self):
         folder_id = self.config_data.get("GOOGLE_DRIVE_FOLDER_ID", "")

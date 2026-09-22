@@ -10,5 +10,6 @@
     ],
     "GOOGLE_DRIVE_FOLDER_ID": "1LKuo7j4cHvvP0-p0C6PVo6gdkgoVBaQ4",
     "GOOGLE_SHEET_ID": "1FAnmfTAixeDgwA5f3TvJ9IEtFp1OuFTyw3UpDiOdvwg",
-    "STRICTLY_MONDAYS_ONLY": true
+    "STRICTLY_MONDAYS_ONLY": true,
+    "DELETE_LOCAL_AFTER_UPLOAD": true
 }

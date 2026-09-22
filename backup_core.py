@@ -89,7 +89,8 @@ def load_config():
         "GOOGLE_DRIVE_FOLDER_ID": "1LKuo7j4cHvvP0-p0C6PVo6gdkgoVBaQ4",
         "GOOGLE_SHEET_ID": "1FAnmfTAixeDgwA5f3TvJ9IEtFp1OuFTyw3UpDiOdvwg",
         "STRICTLY_MONDAYS_ONLY": True,
-        "SCHEDULE_TIME": "02:00"
+        "SCHEDULE_TIME": "02:00",
+        "DELETE_LOCAL_AFTER_UPLOAD": True
     }
     
     if not os.path.exists(CONFIG_FILE):
@@ -426,8 +427,17 @@ def run_full_backup(config=None, log_cb=None, progress_cb=None, status_cb=None):
                     log_cb=log_cb
                 )
                 success_count += 1
+                
+                # Delete local backup file from storage drive after upload and logging
+                if config.get("DELETE_LOCAL_AFTER_UPLOAD", True):
+                    try:
+                        if os.path.exists(backup_zip):
+                            os.remove(backup_zip)
+                            emit_log(f"Local storage cleaned: Deleted '{file_name}' from storage drive.", "info", log_cb)
+                    except Exception as clean_err:
+                        emit_log(f"Notice: Could not delete local backup file '{file_name}': {clean_err}", "warning", log_cb)
             else:
-                emit_log(f"Upload failed for {db_name}.", "error", log_cb)
+                emit_log(f"Upload failed for {db_name}. Local backup preserved at: {backup_zip}", "error", log_cb)
         else:
             emit_log(f"Skipping upload for {db_name}: backup creation failed.", "warning", log_cb)
 
@@ -443,6 +453,33 @@ def run_full_backup(config=None, log_cb=None, progress_cb=None, status_cb=None):
         status_cb("Completed" if success_count == total_dbs else "Completed with Warnings")
         
     return (success_count == total_dbs), summary
+
+def cleanup_local_backup_folder(folder=None, log_cb=None):
+    """Deletes all residual .bak and .zip files from the local backup directory to free disk space."""
+    if not folder:
+        config = load_config()
+        folder = config.get("BACKUP_FOLDER", "C:\\temp\\backups")
+    if not os.path.exists(folder):
+        return 0, 0
+    deleted_files = 0
+    freed_bytes = 0
+    for fname in os.listdir(folder):
+        if fname.lower().endswith(('.bak', '.zip')):
+            fpath = os.path.join(folder, fname)
+            try:
+                if os.path.isfile(fpath):
+                    sz = os.path.getsize(fpath)
+                    os.remove(fpath)
+                    deleted_files += 1
+                    freed_bytes += sz
+            except Exception as e:
+                emit_log(f"Failed to delete {fname}: {e}", "warning", log_cb)
+    if deleted_files > 0:
+        freed_str = format_file_size(freed_bytes)
+        emit_log(f"Local storage cleaned: Removed {deleted_files} files, freed {freed_str} of disk space.", "info", log_cb)
+    else:
+        emit_log("Local storage is already clean (0 residual backup files found).", "info", log_cb)
+    return deleted_files, freed_bytes
 
 # ================= TASK SCHEDULER HELPERS =================
 def get_scheduler_status(task_name=TASK_SCHEDULER_NAME):
