@@ -15,12 +15,15 @@ Built as a robust, client-side deployment package, it guarantees seamless disast
 
 ## ✨ Key Features
 
+- **Modern Desktop GUI Application:** Built with CustomTkinter for sleek Windows 11 aesthetics, featuring dashboard stats, manual one-click backup button, live real-time diagnostics, and an integrated configuration editor.
+- **Installable Standalone Executable:** Zero-dependency Windows standalone app (`DatabaseBackupApp.exe`) with a one-click installer (`Install_Desktop_App.bat`) that creates Desktop and Start Menu shortcuts. No Python installation required on the client machine!
+- **Dual-Mode Execution:** Functions as an interactive desktop GUI for user control, and automatically runs completely silent in the background when called with `--auto` by Windows Task Scheduler.
 - **Native SQL Extraction:** Interfaces directly with `sqlcmd` to generate high-fidelity `.bak` files.
 - **Maximum Deflation Compression:** Utilizes advanced `.zip` deflation algorithms to compress backups, reducing upload payload size and saving bandwidth.
 - **Automated Cloud Sync:** Seamlessly integrates with the Google Drive API (OAuth 2.0 Production Mode) to securely upload backups to off-site cloud storage.
-- **Real-time Monitoring:** Logs every successful backup, file size, and timestamp into a centralized Google Sheet for easy client oversight.
-- **Resilient Error Handling:** Includes custom exponential backoff logic for network interruptions and automatic quota-exceeded handling.
-- **Zero-Touch Deployment:** Includes automated `.bat` scripts that instantly install dependencies and register the script as a background Windows Task.
+- **Real-time Monitoring & Google Sheets Logging:** Logs every successful backup, file size, timestamp, and shareable download link directly into a centralized Google Sheet.
+- **In-App Schedule Management:** Toggle or adjust the weekly Monday 02:00 AM Windows Task Scheduler automation directly from the app interface without touching batch files or command prompt.
+- **Resilient Error Handling:** Exponential backoff retries for network disruptions, storage quota detection, and automatic credential refresh.
 
 ## 🏗 Architecture
 

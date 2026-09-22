@@ -14,3 +14,8 @@ __pycache__/
 
 # Testing
 TestBackups/
+
+# PyInstaller builds & distribution
+build/
+dist/
+*.spec

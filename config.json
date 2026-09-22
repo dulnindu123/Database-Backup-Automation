@@ -1,12 +1,12 @@
 {
-    "SQL_SERVER_NAME": "localhost\\SQLEXPRESS",
+    "SQL_SERVER_NAME": "localhost\\SQL25SARANGA",
     "SQL_USERNAME": "",
     "SQL_PASSWORD": "",
     "BACKUP_FOLDER": "C:\\temp\\backups",
     "BACKUP_EXTENSION": ".zip",
     "TARGET_DATABASES": [
-        "SuperForm",
-        "GeelongGlass"
+        "UserDB",
+        "RGT"
     ],
     "GOOGLE_DRIVE_FOLDER_ID": "1LKuo7j4cHvvP0-p0C6PVo6gdkgoVBaQ4",
     "GOOGLE_SHEET_ID": "1FAnmfTAixeDgwA5f3TvJ9IEtFp1OuFTyw3UpDiOdvwg",
