@@ -327,22 +327,70 @@ def test_google_connection(creds, drive_folder_id, sheet_id, log_cb=None):
 # 4. DATABASE EXTRACTION & HIGH-RATIO COMPRESSION
 # =============================================================================
 
+def grant_sql_folder_permissions(folder_path):
+    """
+    Grants NTFS write/modify permissions on the target directory for the SQL Server
+    service account and standard user accounts using Windows icacls.
+    Uses well-known language-independent SIDs:
+    - *S-1-1-0: Everyone
+    - *S-1-5-32-545: Builtin Users
+    """
+    try:
+        norm_path = os.path.normpath(folder_path)
+        if not os.path.exists(norm_path):
+            os.makedirs(norm_path, exist_ok=True)
+        # Grant Everyone Modify (OI)(CI)M permissions
+        subprocess.run(
+            f'icacls "{norm_path}" /grant *S-1-1-0:(OI)(CI)M /T /C /Q',
+            shell=True, capture_output=True, text=True, timeout=10
+        )
+        # Grant Users Modify (OI)(CI)M permissions
+        subprocess.run(
+            f'icacls "{norm_path}" /grant *S-1-5-32-545:(OI)(CI)M /T /C /Q',
+            shell=True, capture_output=True, text=True, timeout=10
+        )
+    except Exception:
+        pass
+
+
+def get_sql_instance_default_backup_path(sql_server, sql_user="", sql_password=""):
+    """
+    Queries SQL Server instance for its default backup directory,
+    which is guaranteed to have write permissions for the SQL Server engine service.
+    """
+    query = "SET NOCOUNT ON; SELECT CAST(SERVERPROPERTY('InstanceDefaultBackupPath') AS VARCHAR(500))"
+    if sql_user and sql_password:
+        cmd = f'sqlcmd -S "{sql_server}" -U "{sql_user}" -P "{sql_password}" -C -h -1 -W -Q "{query}"'
+    else:
+        cmd = f'sqlcmd -S "{sql_server}" -E -C -h -1 -W -Q "{query}"'
+    try:
+        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
+        if res.returncode == 0 and res.stdout.strip():
+            lines = [line.strip() for line in res.stdout.strip().splitlines() if line.strip() and not line.strip().startswith("-")]
+            if lines:
+                candidate = os.path.normpath(lines[0])
+                if os.path.isdir(candidate):
+                    return candidate
+    except Exception:
+        pass
+    return None
+
+
 def generate_and_compress_backup(folder, db_name, sql_server, sql_user="", sql_password="", log_cb=None):
     """
     Executes native Microsoft SQL Server database backup and Level 9 Deflate compression.
     
-    Workflow:
-    1. Ensures target directory exists (creates C:\temp\backups if missing).
-    2. Constructs sqlcmd CLI command line:
-       - Uses -E (Windows Trusted Auth) if no SQL user/password are provided.
-       - Injects -C ('Trust Server Certificate') to circumvent Microsoft ODBC Driver 18 
-         mandatory TLS certificate failures on local self-signed instances.
-    3. Runs sqlcmd as an isolated subprocess with stdout/stderr capture.
-    4. Validates that the .bak file was created and is non-empty.
-    5. Compresses the raw .bak into a .zip archive using zipfile.ZIP_DEFLATED at compresslevel=9.
-    6. PHASE 1 STORAGE CLEANUP: Deletes the raw .bak dump immediately upon successful zip creation.
-    7. Returns the absolute path to the generated .zip archive.
+    Resilience & Failover Features:
+    1. Normalizes all folder and file paths to standard Windows backslashes.
+    2. Proactively configures NTFS permissions via icacls on the destination directory.
+    3. Traps SQL Server Error 5 (Operating system error 5: Access is denied) and Msg 3201:
+       If the SQL Server service account lacks rights to write to user-space folders
+       (e.g., Desktop or Documents), it automatically queries SQL Server's internal 
+       InstanceDefaultBackupPath, runs the backup to that authorized location,
+       compresses the archive directly into the user's requested destination, and purges
+       the temporary .bak from the SQL Server directory.
     """
+    folder = os.path.normpath(folder)
     if not os.path.exists(folder):
         try:
             os.makedirs(folder, exist_ok=True)
@@ -351,11 +399,14 @@ def generate_and_compress_backup(folder, db_name, sql_server, sql_user="", sql_p
             emit_log(f"Backup folder does not exist and could not be created: {e}", "critical", log_cb)
             return None
             
+    # Proactively ensure SQL service account has write permissions to target folder
+    grant_sql_folder_permissions(folder)
+            
     date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
     bak_filename = f"{db_name}_{date_str}.bak"
     zip_filename = f"{db_name}_{date_str}.zip"
-    bak_filepath = os.path.join(folder, bak_filename)
-    zip_filepath = os.path.join(folder, zip_filename)
+    bak_filepath = os.path.normpath(os.path.join(folder, bak_filename))
+    zip_filepath = os.path.normpath(os.path.join(folder, zip_filename))
     
     emit_log(f"Initiating SQL backup for database '{db_name}'...", "info", log_cb)
     
@@ -368,26 +419,80 @@ def generate_and_compress_backup(folder, db_name, sql_server, sql_user="", sql_p
     try:
         # Execute database backup in isolated subprocess
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-        if result.returncode != 0 or not os.path.exists(bak_filepath):
-            err_msg = result.stderr or result.stdout
-            emit_log(f"SQL Backup failed for {db_name}: {err_msg}", "error", log_cb)
-            return None
+        backup_succeeded = (result.returncode == 0 and os.path.exists(bak_filepath))
+
+        if not backup_succeeded:
+            err_msg = ((result.stderr or "") + "\n" + (result.stdout or "")).strip()
+            
+            # Detect SQL Server Error 5 / Msg 3201 (Access is denied to backup device)
+            is_access_denied = (
+                "error 5" in err_msg.lower() or 
+                "access is denied" in err_msg.lower() or 
+                "3201" in err_msg or
+                "cannot open backup device" in err_msg.lower()
+            )
+            
+            if is_access_denied:
+                emit_log(f"SQL Server service account lacks write access to '{folder}' (Error 5: Access is denied).", "warning", log_cb)
+                emit_log("Engaging automated failover: resolving SQL Server native authorized backup directory...", "info", log_cb)
+                
+                # Priority 1: SQL Server's native InstanceDefaultBackupPath
+                fallback_folder = get_sql_instance_default_backup_path(sql_server, sql_user, sql_password)
+                if not fallback_folder:
+                    # Priority 2: Standard public temp backup folder
+                    fallback_folder = os.path.normpath("C:\\temp\\backups")
+                    os.makedirs(fallback_folder, exist_ok=True)
+                    grant_sql_folder_permissions(fallback_folder)
+                    
+                emit_log(f"Failing over to SQL-authorized directory: {fallback_folder}", "info", log_cb)
+                fallback_bak = os.path.normpath(os.path.join(fallback_folder, bak_filename))
+                
+                if sql_user and sql_password:
+                    cmd_fb = f'sqlcmd -S "{sql_server}" -U "{sql_user}" -P "{sql_password}" -C -Q "BACKUP DATABASE [{db_name}] TO DISK=\'{fallback_bak}\' WITH FORMAT"'
+                else:
+                    cmd_fb = f'sqlcmd -S "{sql_server}" -E -C -Q "BACKUP DATABASE [{db_name}] TO DISK=\'{fallback_bak}\' WITH FORMAT"'
+                
+                result_fb = subprocess.run(cmd_fb, shell=True, capture_output=True, text=True)
+                if result_fb.returncode == 0 and os.path.exists(fallback_bak):
+                    emit_log(f"Failover SQL backup successfully created at: {fallback_bak}", "info", log_cb)
+                    bak_filepath = fallback_bak
+                    backup_succeeded = True
+                else:
+                    err_fb = ((result_fb.stderr or "") + "\n" + (result_fb.stdout or "")).strip()
+                    emit_log(f"SQL Backup failed even on failover location: {err_fb}", "error", log_cb)
+                    return None
+            else:
+                emit_log(f"SQL Backup failed for {db_name}: {err_msg}", "error", log_cb)
+                return None
             
         raw_size_mb = os.path.getsize(bak_filepath) / (1024 * 1024)
-        emit_log(f"Database backup created: {bak_filename} ({raw_size_mb:.2f} MB). Compressing with Level 9 Deflate...", "info", log_cb)
+        emit_log(f"Database backup created: {os.path.basename(bak_filepath)} ({raw_size_mb:.2f} MB). Compressing with Level 9 Deflate...", "info", log_cb)
         
+        # Prefer saving compressed .zip archive in the user-specified destination folder
+        target_zip_filepath = zip_filepath
+        try:
+            test_file = os.path.join(folder, f".test_write_{date_str}")
+            with open(test_file, 'w') as tf:
+                tf.write("1")
+            os.remove(test_file)
+        except Exception:
+            target_zip_filepath = os.path.normpath(os.path.join(os.path.dirname(bak_filepath), zip_filename))
+
         # Apply Level 9 Deflate compression
-        with zipfile.ZipFile(zip_filepath, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as zipf:
+        with zipfile.ZipFile(target_zip_filepath, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as zipf:
             zipf.write(bak_filepath, arcname=bak_filename)
             
         # PHASE 1 STORAGE CLEANUP: Remove raw .bak to reclaim local disk space
-        if os.path.exists(zip_filepath):
-            os.remove(bak_filepath)
-            zip_size_mb = os.path.getsize(zip_filepath) / (1024 * 1024)
+        if os.path.exists(target_zip_filepath):
+            try:
+                os.remove(bak_filepath)
+            except Exception as e:
+                emit_log(f"Warning: could not delete temporary bak file {bak_filepath}: {e}", "warning", log_cb)
+            zip_size_mb = os.path.getsize(target_zip_filepath) / (1024 * 1024)
             ratio = (1 - (zip_size_mb / raw_size_mb)) * 100 if raw_size_mb > 0 else 0
-            emit_log(f"Compressed {zip_filename} ({zip_size_mb:.2f} MB - {ratio:.1f}% space saved). Temporary .bak purged.", "info", log_cb)
+            emit_log(f"Compressed {os.path.basename(target_zip_filepath)} ({zip_size_mb:.2f} MB - {ratio:.1f}% space saved). Temporary .bak purged.", "info", log_cb)
             
-        return zip_filepath
+        return target_zip_filepath
     except Exception as e:
         emit_log(f"Backup/compression error for {db_name}: {e}", "error", log_cb)
         return None

@@ -56,6 +56,7 @@ from backup_core import (
     detect_user_databases,
     cleanup_local_backup_folder,
     format_file_size,
+    grant_sql_folder_permissions,
     emit_log
 )
 
@@ -606,19 +607,24 @@ class BackupAutomationApp(ctk.CTk):
         """Displays Windows folder picker for local backup directory."""
         folder = filedialog.askdirectory(initialdir=self.entry_backup_folder.get())
         if folder:
+            norm_folder = os.path.normpath(folder)
             self.entry_backup_folder.delete(0, "end")
-            self.entry_backup_folder.insert(0, folder)
+            self.entry_backup_folder.insert(0, norm_folder)
+            grant_sql_folder_permissions(norm_folder)
 
     def _save_settings(self):
         """Validates and persists updated settings to config.json."""
         dbs_str = self.entry_databases.get().strip()
         db_list = [d.strip() for d in dbs_str.split(",") if d.strip()]
+        backup_dir = os.path.normpath(self.entry_backup_folder.get().strip())
+        if backup_dir:
+            grant_sql_folder_permissions(backup_dir)
 
         new_config = {
             "SQL_SERVER_NAME": self.entry_sql_server.get().strip(),
             "SQL_USERNAME": self.entry_sql_user.get().strip(),
             "SQL_PASSWORD": self.entry_sql_pass.get().strip(),
-            "BACKUP_FOLDER": self.entry_backup_folder.get().strip(),
+            "BACKUP_FOLDER": backup_dir,
             "BACKUP_EXTENSION": ".zip",
             "TARGET_DATABASES": db_list,
             "GOOGLE_DRIVE_FOLDER_ID": self.entry_drive_id.get().strip(),

@@ -28,7 +28,7 @@ import sys
 import shutil
 import subprocess
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, filedialog
 import customtkinter as ctk
 
 # Configure theme
@@ -55,17 +55,27 @@ class InstallerApp(ctk.CTk):
         
         # Window configuration
         self.title("Setup - Database Cloud Backup System")
-        self.geometry("540, 420")
+        self.geometry("560, 440")
         self.resizable(False, False)
 
-        # Resolve payload directories
+        # Resolve payload directory across multiple package structures
         self.bundle_dir = get_bundle_dir()
-        self.source_app_dir = os.path.join(self.bundle_dir, "DatabaseBackupApp")
-        if not os.path.exists(self.source_app_dir):
-            # Development fallback when running from source tree
-            self.source_app_dir = os.path.join(self.bundle_dir, "dist", "DatabaseBackupApp")
+        candidates = [
+            os.path.join(self.bundle_dir, "AppFiles"),
+            os.path.join(self.bundle_dir, "DatabaseBackupApp"),
+            os.path.join(self.bundle_dir, "dist", "DatabaseBackupApp"),
+            os.path.join(self.bundle_dir, "dist", "AppFiles"),
+            self.bundle_dir
+        ]
+        self.source_app_dir = None
+        for candidate in candidates:
+            if os.path.exists(os.path.join(candidate, "DatabaseBackupApp.exe")):
+                self.source_app_dir = candidate
+                break
+        if not self.source_app_dir:
+            self.source_app_dir = os.path.join(self.bundle_dir, "AppFiles")
 
-        # Destination installation directory in %LOCALAPPDATA%\Programs
+        # Default destination installation directory in %LOCALAPPDATA%\Programs
         self.target_dir = os.path.join(os.environ.get("LOCALAPPDATA", "C:\\"), "Programs", "DatabaseBackupApp")
 
         # Apply branding icon if available
@@ -108,15 +118,30 @@ class InstallerApp(ctk.CTk):
             font=ctk.CTkFont(size=12, weight="bold")
         ).pack(anchor="w", pady=(0, 5))
 
-        # Target directory display box
-        dir_box = ctk.CTkFrame(body, fg_color=("#1e293b", "#0f172a"), corner_radius=6)
-        dir_box.pack(fill="x", pady=(0, 15))
-        ctk.CTkLabel(
-            dir_box,
-            text=self.target_dir,
+        # Target directory input box with Browse button
+        dir_frame = ctk.CTkFrame(body, fg_color="transparent")
+        dir_frame.pack(fill="x", pady=(0, 15))
+
+        self.target_dir_var = tk.StringVar(value=self.target_dir)
+        self.entry_dir = ctk.CTkEntry(
+            dir_frame,
+            textvariable=self.target_dir_var,
             font=ctk.CTkFont(size=11),
-            text_color="#60a5fa"
-        ).pack(anchor="w", padx=10, pady=8)
+            height=34
+        )
+        self.entry_dir.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+        self.btn_browse = ctk.CTkButton(
+            dir_frame,
+            text="Browse...",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            width=80,
+            height=34,
+            fg_color="#374151",
+            hover_color="#4b5563",
+            command=self._browse_directory
+        )
+        self.btn_browse.pack(side="right")
 
         # Installation preference checkboxes
         self.cb_desktop = ctk.CTkCheckBox(body, text="Create Desktop Shortcut", font=ctk.CTkFont(size=12))
@@ -136,7 +161,7 @@ class InstallerApp(ctk.CTk):
         self.cb_launch.select()
 
         # Visual progress bar
-        self.progress = ctk.CTkProgressBar(body, width=490, height=10)
+        self.progress = ctk.CTkProgressBar(body, width=510, height=10)
         self.progress.pack(pady=(15, 5))
         self.progress.set(0)
 
@@ -171,12 +196,31 @@ class InstallerApp(ctk.CTk):
         )
         self.btn_cancel.pack(side="right")
 
+    def _browse_directory(self):
+        """Allows user to select custom installation destination."""
+        chosen = filedialog.askdirectory(
+            title="Select Installation Directory",
+            initialdir=self.target_dir_var.get()
+        )
+        if chosen:
+            chosen = os.path.normpath(chosen)
+            if not chosen.lower().endswith("databasebackupapp"):
+                chosen = os.path.join(chosen, "DatabaseBackupApp")
+            self.target_dir_var.set(chosen)
+
     def _do_install(self):
         """
         Executes file replication, shortcut creation, and Task Scheduler registration.
         """
+        self.target_dir = os.path.normpath(self.target_dir_var.get().strip())
+        if not self.target_dir:
+            messagebox.showerror("Error", "Please specify a valid installation directory.")
+            return
+
         self.btn_install.configure(state="disabled", text="Installing...")
         self.btn_cancel.configure(state="disabled")
+        self.entry_dir.configure(state="disabled")
+        self.btn_browse.configure(state="disabled")
         self.status_lbl.configure(text="Copying application files...")
         self.progress.set(0.3)
         self.update()
@@ -248,6 +292,8 @@ class InstallerApp(ctk.CTk):
             messagebox.showerror("Installation Failed", str(e))
             self.btn_install.configure(state="normal", text="Install Now")
             self.btn_cancel.configure(state="normal")
+            self.entry_dir.configure(state="normal")
+            self.btn_browse.configure(state="normal")
 
     def _finish(self):
         """Closes the setup dialog."""
