@@ -428,9 +428,9 @@ def get_sql_instance_default_backup_path(sql_server, sql_user="", sql_password="
     """
     query = "SET NOCOUNT ON; SELECT CAST(SERVERPROPERTY('InstanceDefaultBackupPath') AS VARCHAR(500))"
     if sql_user and sql_password:
-        cmd = f'sqlcmd -S "{sql_server}" -U "{sql_user}" -P "{sql_password}" -C -h -1 -W -Q "{query}"'
+        cmd = f'sqlcmd -b -l 15 -S "{sql_server}" -U "{sql_user}" -P "{sql_password}" -C -h -1 -W -Q "{query}"'
     else:
-        cmd = f'sqlcmd -S "{sql_server}" -E -C -h -1 -W -Q "{query}"'
+        cmd = f'sqlcmd -b -l 15 -S "{sql_server}" -E -C -h -1 -W -Q "{query}"'
     try:
         res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
         if res.returncode == 0 and res.stdout.strip():
@@ -486,11 +486,11 @@ def generate_and_compress_backup(folder, db_name, sql_server, sql_user="", sql_p
     
     emit_log(f"Initiating SQL backup for database '{db_name}'...", "info", log_cb)
     
-    # Build sqlcmd command line
+    # Build sqlcmd command line with -b (batch abort) and -l 15 (15-sec login timeout for network/RDP/Server resilience)
     if sql_user and sql_password:
-        cmd = f'sqlcmd -S "{sql_server}" -U "{sql_user}" -P "{sql_password}" -C -Q "BACKUP DATABASE [{db_name}] TO DISK=\'{bak_filepath}\' WITH FORMAT"'
+        cmd = f'sqlcmd -b -l 15 -S "{sql_server}" -U "{sql_user}" -P "{sql_password}" -C -Q "BACKUP DATABASE [{db_name}] TO DISK=\'{bak_filepath}\' WITH FORMAT"'
     else:
-        cmd = f'sqlcmd -S "{sql_server}" -E -C -Q "BACKUP DATABASE [{db_name}] TO DISK=\'{bak_filepath}\' WITH FORMAT"'
+        cmd = f'sqlcmd -b -l 15 -S "{sql_server}" -E -C -Q "BACKUP DATABASE [{db_name}] TO DISK=\'{bak_filepath}\' WITH FORMAT"'
 
     try:
         # Execute database backup in isolated subprocess with emergency termination support
@@ -539,9 +539,9 @@ def generate_and_compress_backup(folder, db_name, sql_server, sql_user="", sql_p
                 fallback_bak = os.path.normpath(os.path.join(fallback_folder, bak_filename))
                 
                 if sql_user and sql_password:
-                    cmd_fb = f'sqlcmd -S "{sql_server}" -U "{sql_user}" -P "{sql_password}" -C -Q "BACKUP DATABASE [{db_name}] TO DISK=\'{fallback_bak}\' WITH FORMAT"'
+                    cmd_fb = f'sqlcmd -b -l 15 -S "{sql_server}" -U "{sql_user}" -P "{sql_password}" -C -Q "BACKUP DATABASE [{db_name}] TO DISK=\'{fallback_bak}\' WITH FORMAT"'
                 else:
-                    cmd_fb = f'sqlcmd -S "{sql_server}" -E -C -Q "BACKUP DATABASE [{db_name}] TO DISK=\'{fallback_bak}\' WITH FORMAT"'
+                    cmd_fb = f'sqlcmd -b -l 15 -S "{sql_server}" -E -C -Q "BACKUP DATABASE [{db_name}] TO DISK=\'{fallback_bak}\' WITH FORMAT"'
                 
                 proc_fb = subprocess.Popen(cmd_fb, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 backup_controller.set_active_process(proc_fb)
@@ -1086,12 +1086,12 @@ def detect_user_databases(sql_server, sql_user="", sql_password=""):
     1: master, 2: tempdb, 3: model, 4: msdb
     """
     if sql_user and sql_password:
-        cmd = f'sqlcmd -S "{sql_server}" -U "{sql_user}" -P "{sql_password}" -C -h -1 -W -Q "SET NOCOUNT ON; SELECT name FROM sys.databases WHERE database_id > 4"'
+        cmd = f'sqlcmd -b -l 15 -S "{sql_server}" -U "{sql_user}" -P "{sql_password}" -C -h -1 -W -Q "SET NOCOUNT ON; SELECT name FROM sys.databases WHERE database_id > 4"'
     else:
-        cmd = f'sqlcmd -S "{sql_server}" -E -C -h -1 -W -Q "SET NOCOUNT ON; SELECT name FROM sys.databases WHERE database_id > 4"'
+        cmd = f'sqlcmd -b -l 15 -S "{sql_server}" -E -C -h -1 -W -Q "SET NOCOUNT ON; SELECT name FROM sys.databases WHERE database_id > 4"'
         
     try:
-        res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
         if res.returncode == 0:
             return [line.strip() for line in res.stdout.splitlines() if line.strip() and not line.startswith("---")]
     except Exception:

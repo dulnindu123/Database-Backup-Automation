@@ -518,10 +518,78 @@ class BackupAutomationApp(ctk.CTk):
         )
         self.btn_switch_account.pack(side="left")
 
+        # ── Danger Zone / Application Lifecycle ─────────────────────────
+        danger_frame = ctk.CTkFrame(scroll, corner_radius=10, fg_color=("#1f2937", "#111827"), border_width=1, border_color="#374151")
+        danger_frame.pack(fill="x", padx=20, pady=(25, 20))
+
+        danger_top = ctk.CTkFrame(danger_frame, fg_color="transparent")
+        danger_top.pack(fill="x", padx=15, pady=(12, 6))
+
+        ctk.CTkLabel(
+            danger_top,
+            text="APPLICATION LIFECYCLE & UNINSTALL",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#ef4444"
+        ).pack(side="left")
+
+        ctk.CTkLabel(
+            danger_frame,
+            text="Completely remove Database Cloud Backup, scheduled backup tasks, and desktop shortcuts from this PC.",
+            font=ctk.CTkFont(size=11),
+            text_color="#9ca3af"
+        ).pack(anchor="w", padx=15, pady=(0, 10))
+
+        self.btn_uninstall_app = ctk.CTkButton(
+            danger_frame,
+            text="🗑️  Uninstall Application",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#7f1d1d",
+            hover_color="#991b1b",
+            text_color="#fca5a5",
+            height=34,
+            width=180,
+            command=self._launch_uninstaller
+        )
+        self.btn_uninstall_app.pack(anchor="w", padx=15, pady=(0, 12))
+
     def _create_field_label(self, parent, text, pack_padx=20):
         lbl = ctk.CTkLabel(parent, text=text, font=ctk.CTkFont(size=12, weight="bold"), text_color="#d1d5db")
         lbl.pack(anchor="w", padx=pack_padx, pady=(5, 3))
         return lbl
+
+    def _launch_uninstaller(self):
+        """
+        Launches the robust uninstaller script and terminates the application cleanly.
+        """
+        if not messagebox.askyesno(
+            "Confirm Uninstallation",
+            "Are you sure you want to completely uninstall Database Cloud Backup?\n\n"
+            "This will permanently remove the application files, desktop shortcuts, "
+            "and Windows Task Scheduler jobs."
+        ):
+            return
+
+        uninstall_candidates = [
+            os.path.join(BASE_DIR, "Uninstall.bat"),
+            os.path.join(os.path.dirname(BASE_DIR), "Uninstall.bat"),
+            os.path.join(os.environ.get("LOCALAPPDATA", "C:\\"), "Programs", "DatabaseBackupApp", "Uninstall.bat")
+        ]
+        uninstaller_path = None
+        for cand in uninstall_candidates:
+            if os.path.exists(cand):
+                uninstaller_path = cand
+                break
+
+        if uninstaller_path and os.path.exists(uninstaller_path):
+            subprocess.Popen(f'start "" "{uninstaller_path}" "{BASE_DIR}"', shell=True)
+            self.destroy()
+            sys.exit(0)
+        else:
+            messagebox.showerror(
+                "Uninstaller Not Found",
+                f"Could not locate Uninstall.bat in {BASE_DIR}.\n"
+                "Please run uninstallation via Windows Settings > Installed Apps."
+            )
 
     # =========================================================================
     # TAB 4: DIAGNOSTICS & LIVE LOGS
