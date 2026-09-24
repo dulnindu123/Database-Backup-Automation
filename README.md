@@ -1,54 +1,160 @@
-# 🚀 Enterprise Database Backup Automation
+# 🛡️ Enterprise Database Cloud Backup Automation
 
 <div align="center">
-  <img src="https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python">
-  <img src="https://img.shields.io/badge/Google_Drive-4285F4?style=for-the-badge&logo=googledrive&logoColor=white" alt="Google Drive">
-  <img src="https://img.shields.io/badge/Microsoft_SQL_Server-CC2927?style=for-the-badge&logo=microsoftsqlserver&logoColor=white" alt="SQL Server">
-  <img src="https://img.shields.io/badge/Windows_Task_Scheduler-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Task Scheduler">
+  <img src="./docs/images/app_icon.png" alt="Database Cloud Backup Logo" width="110">
+  <br>
+  <h3>Autonomous, Zero-Touch SQL Server Cloud Disaster Recovery & Telemetry Pipeline</h3>
+  <p>
+    <img src="https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011%20%7C%20Server-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Platform">
+    <img src="https://img.shields.io/badge/Python-3.x%20(Standalone%20EXE)-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python">
+    <img src="https://img.shields.io/badge/Microsoft%20SQL%20Server-2016%20%7C%202019%20%7C%202022-CC2927?style=for-the-badge&logo=microsoftsqlserver&logoColor=white" alt="SQL Server">
+    <img src="https://img.shields.io/badge/Google%20Drive-API%20v3-4285F4?style=for-the-badge&logo=googledrive&logoColor=white" alt="Google Drive">
+    <img src="https://img.shields.io/badge/Google%20Sheets-Telemetry%20Audit-34A853?style=for-the-badge&logo=googlesheets&logoColor=white" alt="Google Sheets">
+    <img src="https://img.shields.io/badge/Session%200-Isolated%20System%20Service-blueviolet?style=for-the-badge&logo=powershell&logoColor=white" alt="Session 0">
+  </p>
 </div>
 
-## 📌 Overview
+---
 
-This project is a fully autonomous, zero-touch database backup solution designed for enterprise Microsoft SQL Server environments. It replaces expensive third-party backup software with a highly optimized, native Python pipeline that compresses databases and securely uploads them to Google Drive.
+## 📌 Executive Overview
 
-Built as a robust, client-side deployment package, it guarantees seamless disaster recovery with integrated monitoring via Google Sheets.
+The **Enterprise Database Cloud Backup Automation System** is an industrial-grade, client-side disaster recovery and compliance solution engineered specifically for Microsoft SQL Server deployments across Windows Server, Remote Desktop Services (RDS/RDP), and standalone business workstations.
 
-## ✨ Key Features
+It replaces fragile third-party tools and expensive commercial software with a high-performance, autonomous native engine. Built on a clean **Model-View-Controller (MVC)** separation, the system pairs a headless, thread-safe core engine (`backup_core.py`) with a modern Windows 11 CustomTkinter desktop interface (`app_gui.py`), an autonomous deployment wizard (`installer_gui.py`), and a self-migrating clean uninstaller (`Uninstall.bat`).
 
-- **Modern Desktop GUI Application:** Built with CustomTkinter for sleek Windows 11 aesthetics, featuring dashboard stats, manual one-click backup button, live real-time diagnostics, and an integrated configuration editor.
-- **Installable Standalone Executable:** Zero-dependency Windows standalone app (`DatabaseBackupApp.exe`) with a one-click installer (`Install_Desktop_App.bat`) that creates Desktop and Start Menu shortcuts. No Python installation required on the client machine!
-- **Dual-Mode Execution:** Functions as an interactive desktop GUI for user control, and automatically runs completely silent in the background when called with `--auto` by Windows Task Scheduler.
-- **Native SQL Extraction:** Interfaces directly with `sqlcmd` to generate high-fidelity `.bak` files.
-- **Maximum Deflation Compression:** Utilizes advanced `.zip` deflation algorithms to compress backups, reducing upload payload size and saving bandwidth.
-- **Automated Cloud Sync:** Seamlessly integrates with the Google Drive API (OAuth 2.0 Production Mode) to securely upload backups to off-site cloud storage.
-- **Real-time Monitoring & Google Sheets Logging:** Logs every successful backup, file size, timestamp, and shareable download link directly into a centralized Google Sheet.
-- **In-App Schedule Management:** Toggle or adjust the weekly Monday 02:00 AM Windows Task Scheduler automation directly from the app interface without touching batch files or command prompt.
-- **Resilient Error Handling:** Exponential backoff retries for network disruptions, storage quota detection, and automatic credential refresh.
+<div align="center">
+  <img src="./docs/images/live_logs_dashboard.png" alt="Live Execution Logs & Dashboard" width="850">
+  <br>
+  <em>Figure 1: Real-Time Execution Diagnostics, Emergency Stop Controls, and Dashboard Interface</em>
+</div>
 
-## 🏗 Architecture
+---
 
-The system operates strictly within a decentralized architecture. Each client server runs the compiled Python executable securely in the background, utilizing a localized `config.json` file for modular authentication.
+## ✨ Key Enterprise Capabilities
 
-1. **Trigger:** Windows Task Scheduler initiates the sequence every Monday at 2:00 AM.
-2. **Extraction:** Python requests a native backup from the localized SQL Server instance.
-3. **Compression:** The massive `.bak` file is zipped and the original is wiped to conserve disk space.
-4. **Transport:** The Google API client authenticates using a lifetime token and uploads the file.
-5. **Telemetry:** The Google Sheets API records the telemetry data for system administrators.
+- **🖥️ Unattended Windows System Service Mode:** Executes in isolated **Session 0** under `NT AUTHORITY\SYSTEM` with `/rl HIGHEST`. Runs at system startup before any user logs in, completely immune to RDP logoffs, locked user sessions, and automated weekend server reboots.
+- **🛑 Thread-Safe Emergency Stop:** Provides an instantaneous `"🛑 STOP BACKUP"` control that terminates active `sqlcmd.exe` child processes, aborts 2MB resumable Google Drive upload streams, and purges all partial data from disk in under 500ms.
+- **🛡️ SQL Server Error 5 & Msg 3201 Auto-Failover:** Autonomously traps and heals Windows NTFS permissions conflicts (`Operating system error 5: Access is denied`). If SQL Server's service account cannot write to a destination folder, it dynamically queries `SERVERPROPERTY('InstanceDefaultBackupPath')`, writes to the native engine folder, compresses to destination, and purges the temporary file.
+- **🗜️ Maximum Deflation Compression:** Utilizes native Level 9 Deflate compression algorithms, reducing database dumps by **~82%** (e.g. 455 MB raw `.bak` compresses to ~80 MB `.zip`), minimizing upload payloads and bandwidth costs.
+- **☁️ Zero-Footprint Two-Phase Purge:** Automatically deletes the raw `.bak` file upon compression, and purges the `.zip` archive upon cloud upload confirmation (`DELETE_LOCAL_AFTER_UPLOAD: true`). Maintains a permanent **0-byte persistent storage footprint** on the client machine.
+- **📊 Real-time Compliance Telemetry:** Streams execution records (timestamp, database name, compressed size, and shareable Google Drive URL) directly into a centralized Google Sheet.
+- **🗑️ Enterprise Clean Uninstallation (Self-Migrating Pattern):** Features a self-migrating uninstaller that copies itself to `%TEMP%`, switches directory to release Windows file locks, kills active processes, deletes scheduled tasks/services, cleans shortcuts, and purges `%LOCALAPPDATA%\Programs\DatabaseBackupApp` with zero leftovers.
+- **📦 Zero-Dependency Standalone Executable:** Shipped as precompiled 64-bit Windows executables (`DatabaseBackupApp.exe` and `Setup_DatabaseBackup.exe`). Requires **zero Python installation or runtime setup** on client servers!
 
-## ⚙️ Configuration
+---
 
-The system uses a highly modular configuration block allowing rapid deployment across multiple different client sites:
+## 🏗 End-to-End Architectural Decomposition
+
+```mermaid
+flowchart TD
+    subgraph Triggers["Trigger Layer"]
+        A1["Interactive User GUI<br/>(Desktop Shortcut)"]
+        A2["Windows Task Scheduler<br/>(Weekly Monday 02:00 AM)"]
+        A3["Session 0 Daemon<br/>(--daemon / --service)"]
+    end
+
+    subgraph Router["Dual-Mode Traffic Router (auto_backup.py)"]
+        R{"CLI Flags?"}
+        A1 --> R
+        A2 --> R
+        A3 --> R
+        R -->|"No Flags"| UI["CustomTkinter Desktop UI<br/>(app_gui.py)"]
+        R -->|"--auto"| Headless["Silent Execution Runner<br/>(auto_backup.py)"]
+        R -->|"--daemon"| Daemon["Continuous Polling Service<br/>(auto_backup.py)"]
+    end
+
+    subgraph Engine["Stateless Core Engine (backup_core.py)"]
+        Core["Orchestrator: run_full_backup()"]
+        UI -.->|"Dispatch on Daemon Thread"| Core
+        Headless --> Core
+        Daemon --> Core
+    end
+
+    subgraph Pipeline["Autonomous Execution Pipeline"]
+        S1["1. OAuth 2.0 Auth & Refresh"] --> S2["2. SQL Extraction & Error 5 Failover"]
+        S2 --> S3["3. Level 9 Deflate Compression"]
+        S3 --> S4["4. Chunked Google Drive Upload"]
+        S4 --> S5["5. Google Sheets Telemetry Audit"]
+        Core --> S1
+    end
+
+    subgraph Purge["Two-Phase Storage Purge"]
+        S3 -.->|"Phase 1"| P1["Delete raw .bak"]
+        S5 -.->|"Phase 2"| P2["Delete .zip archive (0 bytes left)"]
+    end
+```
+
+---
+
+## 🚀 Autonomous Setup Wizard & Deployment
+
+The deployment package features a standalone wizard (`Setup_DatabaseBackup.exe`) that automates client installations:
+
+<div align="center">
+  <img src="./docs/images/setup_wizard.png" alt="Database Cloud Backup Setup Wizard" width="750">
+  <br>
+  <em>Figure 2: Autonomous Installation Wizard with Directory Customization & Service Registration</em>
+</div>
+
+### Quick Deployment (3 Simple Steps)
+1. **Unpack Archive:** Extract `Client_Installation_Package.rar` onto the customer machine.
+2. **Run Installer:** Launch `Setup_DatabaseBackup.exe` (or `1_Quick_Install.bat`).
+3. **Authenticate Google Drive:**
+   - Launch the application from the newly created Desktop shortcut.
+   - Click `"🚀 Start Full Backup Now"` once.
+   - A secure browser window opens. Authenticate with the authorized Google Account.
+   - Credentials are permanently saved to `credentials.json` with an offline refresh token.
+4. **Enable Unattended Automation:**
+   - Go to the **⏰ Auto Schedule** tab.
+   - Select **⚡ Unattended Windows System Service (Recommended for Servers / RDP)**.
+   - Click **Save Schedule Settings**. The server is now 100% autonomously protected.
+
+---
+
+## ⚙️ Configuration Reference (`config.json`)
+
+The application is 100% configuration-driven:
 
 ```json
 {
     "SQL_SERVER_NAME": "localhost\\SQLEXPRESS",
     "SQL_USERNAME": "",
     "SQL_PASSWORD": "",
-    "TARGET_DATABASES": ["ProductionDB", "HR_Data"],
-    "GOOGLE_DRIVE_FOLDER_ID": "Your-Folder-ID",
-    "GOOGLE_SHEET_ID": "Your-Sheet-ID"
+    "BACKUP_FOLDER": "C:\\temp\\backups",
+    "BACKUP_EXTENSION": ".zip",
+    "TARGET_DATABASES": [
+        "ProductionDB",
+        "CRM_Store"
+    ],
+    "GOOGLE_DRIVE_FOLDER_ID": "1LKuo7j4cHvvP0-p0C6PVo6gdkgoVBaQ4",
+    "GOOGLE_SHEET_ID": "1FAnmfTAixeDgwA5f3TvJ9IEtFp1OuFTyw3UpDiOdvwg",
+    "STRICTLY_MONDAYS_ONLY": true,
+    "SCHEDULE_TIME": "02:00",
+    "DELETE_LOCAL_AFTER_UPLOAD": true
 }
 ```
 
-## 👨‍💻 Portfolio Note
-*This repository serves as a showcase of my backend automation, API integration, and deployment architecture skills. Note that API keys and token credentials have been strictly omitted for security purposes.*
+---
+
+## 🗑️ Clean Uninstallation
+
+The application features a clean, uninstallation lifecycle:
+1. **Inside Application GUI:** Go to **Settings** &rarr; click **🗑️ Uninstall Application**.
+2. **From Application Folder:** Run `Uninstall.bat` in `%LOCALAPPDATA%\Programs\DatabaseBackupApp\`.
+3. **Windows Installed Apps:** Go to **Settings &rarr; Apps &rarr; Installed Apps** &rarr; click **Uninstall** on *Database Cloud Backup*.
+
+*The self-migrating batch engine migrates to `%TEMP%`, switches working directory to release Windows locks, terminates processes, purges Windows tasks and services, removes desktop and Start Menu shortcuts, and deletes the entire application directory with zero residue.*
+
+---
+
+## 🔒 Security & Compliance
+
+- **Google OAuth 2.0 PKCE:** Connects via least-privilege scopes (`drive.file` and `spreadsheets`). The application **cannot** read, access, or delete any existing files outside its own folder.
+- **Zero Secrets in Repository:** Real secrets, access tokens, and `.bak` files are strictly excluded via `.gitignore`.
+- **Offline Token Rotation:** Automatically rotates hourly access tokens using persistent offline refresh tokens.
+
+---
+
+<div align="center">
+  <p><strong>Database Cloud Backup Automation</strong> — Engineered for Enterprise Resilience.</p>
+</div>

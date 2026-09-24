@@ -21,22 +21,26 @@
 5. [Threading, Concurrency & UI Responsiveness](#5-threading-concurrency--ui-responsiveness)
 6. [Enterprise Security & Credential Architecture](#6-enterprise-security--credential-architecture)
 7. [Zero Local Storage Footprint (Two-Phase Purge)](#7-zero-local-storage-footprint-two-phase-purge)
-8. [Windows Task Scheduler Integration Model](#8-windows-task-scheduler-integration-model)
-9. [Senior Engineering Review & Defense Cheat Sheet](#9-senior-engineering-review--defense-cheat-sheet)
+8. [Unattended Windows System Service & Session 0 Architecture](#8-unattended-windows-system-service--session-0-architecture)
+9. [Thread-Safe Emergency Stop & Cancellation Architecture](#9-thread-safe-emergency-stop--cancellation-architecture)
+10. [SQL Server Error 5 & Msg 3201 Auto-Failover Engine](#10-sql-server-error-5--msg-3201-auto-failover-engine)
+11. [Enterprise Clean Uninstallation Architecture & Self-Migrating Batch Pattern](#11-enterprise-clean-uninstallation-architecture--self-migrating-batch-pattern)
+12. [Senior Engineering Review & Defense Cheat Sheet](#12-senior-engineering-review--defense-cheat-sheet)
 
 ---
 
 ## 1. System Component Inventory & File Map
 
-In the primary code repository (`BackupAutomation/`), the system consists of three foundational source files, supporting configuration templates, and build tooling:
+In the primary code repository (`BackupAutomation/`), the system consists of foundational source files, supporting configuration templates, build tooling, and uninstallation automation:
 
 ```text
 BackupAutomation/
 │
-├── auto_backup.py             # Dual-mode execution router (GUI on double-click, headless on --auto)
-├── backup_core.py             # Pure, stateless core engine (SQL, Zip, Drive API, Sheets API, Scheduler)
-├── app_gui.py                 # Windows 11 desktop GUI built with CustomTkinter
-├── installer_gui.py           # Autonomous zero-dependency installer wizard
+├── auto_backup.py             # Dual-mode execution router (GUI on double-click, headless on --auto / --daemon)
+├── backup_core.py             # Pure, stateless core engine (SQL failover, Level 9 Zip, Drive/Sheets API, Services)
+├── app_gui.py                 # Windows 11 desktop GUI built with CustomTkinter & Service Controls
+├── installer_gui.py           # Autonomous installer wizard with uninstaller generator & registry registration
+├── Uninstall.bat              # Self-migrating clean uninstaller (process kill, task purge, folder wipe)
 │
 ├── config.json                # Runtime configuration (SQL instance, database list, Drive/Sheet IDs)
 ├── client_secret.json         # Google Cloud Platform OAuth 2.0 Client credentials
@@ -46,8 +50,9 @@ BackupAutomation/
 ├── app_icon.ico               # Windows application icon (16x16 to 256x256)
 ├── app_icon.png               # High-resolution PNG branding asset
 │
-├── build_executable.bat       # Production PyInstaller compilation pipeline
+├── build_executable.bat       # Production PyInstaller compilation pipeline with auto-scratch purge
 ├── DatabaseBackupApp.spec     # PyInstaller spec definition with bundled assets and dependencies
+├── Setup_DatabaseBackup.spec  # PyInstaller spec definition for standalone installer wizard
 └── requirements.txt           # Pinned Python package dependencies
 ```
 
@@ -254,30 +259,74 @@ This module contains the entire operational logic of the system:
 
 Constructed with `customtkinter`, featuring modern typography, dark-mode cards, real-time logging, and fluid responsiveness.
 
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│ 🛡️ Database Cloud Backup Automation — Enterprise Edition                         [—] [□] [✕] │
+├─────────────────────────────────────────────────────────────────────────────────────────────┤
+│   [ 📊 Dashboard ]     [ ⏰ Auto Schedule ]     [ ⚙️ Settings ]     [ 🩺 Diagnostics ]       │
+├─────────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                             │
+│  ┌─────────────────────┐   ┌─────────────────────┐   ┌───────────────────────────────────┐  │
+│  │ 🖥️ SQL Server       │   │ 🗄️ Target DBs       │   │ ☁️ Google Cloud Connection        │  │
+│  │ localhost\SQLEXPRESS│   │ 2 Databases Config. │   │ OAuth 2.0 Ready (15 GB Storage)   │  │
+│  │ Status: ● CONNECTED │   │ [ProductionDB, CRM] │   │ Status: ● AUTHENTICATED           │  │
+│  └─────────────────────┘   └─────────────────────┘   └───────────────────────────────────┘  │
+│                                                                                             │
+│  ┌───────────────────────────────────────────────────────────────────────────────────────┐  │
+│  │ 🚀 [ Start Full Backup Now ]                🛑 [ STOP BACKUP (Emergency Abort) ]      │  │
+│  └───────────────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                             │
+│  Backup Progress: [████████████████████████████████████████████████░░░░░░░░░░] 78%           │
+│  Current Operation: Uploading 'ProductionDB_20260924.zip' to Google Drive (2MB/s)...        │
+│                                                                                             │
+│  ┌─ Real-Time Diagnostics & Execution Log ────────────────────────────────────────────────┐  │
+│  │ [17:06:19] [INFO] STARTING BACKUP EXECUTION CYCLE                                      │  │
+│  │ [17:06:19] [INFO] Connecting to SQL Server: localhost\SQLEXPRESS...                   │  │
+│  │ [17:06:22] [SUCCESS] SQL backup completed for 'ProductionDB' (455 MB).                 │  │
+│  │ [17:06:25] [SUCCESS] Compressed to Level 9 Deflate: ProductionDB_20260924.zip (81 MB) │  │
+│  │ [17:06:26] [INFO] Streaming archive to Google Drive Folder: 1LKuo7j4cHvvP0...          │  │
+│  └────────────────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                             │
+│  [ 📁 Open Backups ]    [ ☁️ Open Drive ]    [ 📊 Open Sheet ]    [ 🧹 Clean Storage (0 MB) ]│
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+<div align="center">
+  <img src="./docs/images/live_logs_dashboard.png" alt="Live Execution Logs & Dashboard" width="750">
+  <br>
+  <em>Figure 1: Live Real-Time Execution Logs & Interactive Dashboard Interface</em>
+</div>
+
 #### Key Architectural Highlights:
 * **Background Worker Threading:** Prevents Windows "Application Not Responding" locks during heavy compression or multi-hundred-megabyte network transfers.
 * **Thread-Safe UI Marshaling:** Background threads communicate with Tkinter via `self.after(0, callback)`, ensuring memory safety and zero GUI deadlocks.
 * **Real-Time Log Streamer:** Custom `_append_log()` captures log events with timestamps and severity badges (`[INFO]`, `[SUCCESS]`, `[WARNING]`, `[ERROR]`) into an autoscrolling text terminal.
+* **Emergency Stop Button (`🛑 STOP BACKUP`):** Bound to `BackupCancellationController`, giving operators instantaneous ability to abort active SQL queries, terminate child processes, close streaming sockets, and purge partial files.
 
 #### 4 Main Tabs:
-1. **Dashboard Tab**: Displays SQL status card, database count card, Google connection card, live log viewer, `"🚀 Start Full Backup Now"` button, and quick-access buttons:
-   - `📁 Open Backups`: Opens local folder in Windows File Explorer.
-   - `☁ Open Drive`: Launches configured Google Drive folder in default web browser.
-   - `📊 Open Sheet`: Launches Google Sheet audit log in default web browser.
-   - `🧹 Clean Storage`: One-click prompt that purges all residual `.bak` and `.zip` files and displays total freed disk space.
-2. **Schedule Tab**: Visual toggle for Windows Task Scheduler weekly automation, showing real-time status and next scheduled run time.
-3. **Settings Tab**: Visual configuration for SQL Server name, user databases, credentials, Google Drive Folder ID, Google Sheet ID, Monday-only switch, and the `Delete local backup file after upload` toggle.
+1. **Dashboard Tab**: Displays SQL status card, database count card, Google connection card, live log viewer, `"🚀 Start Full Backup Now"` and `"🛑 STOP BACKUP"` buttons, and quick-access utility buttons (`📁 Open Backups`, `☁ Open Drive`, `📊 Open Sheet`, `🧹 Clean Storage`).
+2. **Schedule Tab**: Dual execution security context chooser (Standard User Task vs Unattended Windows System Service running under `NT AUTHORITY\SYSTEM` in Session 0), schedule time picker, and startup recovery trigger.
+3. **Settings Tab**: Visual configuration for SQL Server name, user databases, credentials, Google Drive Folder ID, Google Sheet ID, Monday-only switch, and the `Delete local backup file after upload` toggle, plus **Application Lifecycle Management** (`🗑️ Uninstall Application`).
 4. **Diagnostics Tab**: System health monitor showing Python runtime version, available ODBC drivers, Windows OS build, and cloud latency metrics.
 
 ---
 
 ### 4.4 `installer_gui.py` — The Standalone Setup Wizard
 
-An autonomous installer packaged as `Setup_DatabaseBackup.exe`:
-* Checks and requests elevation (UAC) if needed.
-* Installs application binaries to `C:\Program Files\DatabaseBackupApp\`.
-* Creates Start Menu and Desktop shortcuts pointing to `DatabaseBackupApp.exe`.
-* Prompts the administrator for initial Google OAuth authorization so the background scheduler can run immediately upon deployment.
+An autonomous deployment wizard packaged as `Setup_DatabaseBackup.exe` built with CustomTkinter:
+
+<div align="center">
+  <img src="./docs/images/setup_wizard.png" alt="Database Cloud Backup Setup Wizard" width="750">
+  <br>
+  <em>Figure 2: Autonomous Installation Wizard with Directory Customization & Service Registration</em>
+</div>
+
+#### Deployment Capabilities:
+* **Configurable Target Directory:** Defaults to `%LOCALAPPDATA%\Programs\DatabaseBackupApp`, fully customizable by administrators.
+* **Zero Admin Rights Required (Standard User Safe):** Installs into user programs without mandatory UAC elevation prompts, while offering automated elevation if System Service mode is requested.
+* **Windows Shell Integration:** Automatically generates high-resolution desktop and Start Menu shortcuts with embedded application icons.
+* **Built-in Self-Migrating Uninstaller:** Copies `Uninstall.bat` directly into the destination directory and registers the application into Windows *Installed Apps* (`HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall`).
+* **Source Validation & Self-Healing:** Validates installation payload files (`AppFiles/`) and provides clear diagnostic dialogs if deployment assets are moved.
 
 ---
 
@@ -355,6 +404,12 @@ def _run_backup_worker(self):
 * **Our Solution:** Utilizes standard Google OAuth 2.0 user credentials (`InstalledAppFlow`). The user authenticates once via browser. The application acquires an offline `refresh_token`.
 * **Silent Token Rotation:** When access tokens expire after 60 minutes, the application automatically requests a new access token from Google without user intervention.
 
+<div align="center">
+  <img src="./docs/images/google_oauth_branding.png" alt="Google Cloud Console OAuth 2.0 Configuration" width="750">
+  <br>
+  <em>Figure 3: Google Cloud Platform OAuth Consent Screen Configuration & API Credentials</em>
+</div>
+
 ### 2. Least-Privilege Scopes
 The application requests only two tightly restricted scopes:
 * `https://www.googleapis.com/auth/drive.file`: Grants access **only** to files created by this application. It cannot view, read, or delete existing personal files, documents, or photos in the user's Google Drive.
@@ -392,24 +447,175 @@ To eliminate on-premise disk exhaustion on production servers:
 
 ---
 
-## 8. Windows Task Scheduler Integration Model
+## 8. Unattended Windows System Service & Session 0 Architecture
 
-* **Programmatic Command:**
-  ```cmd
-  schtasks /create /tn "DatabaseBackupAutomation_Weekly" /tr "\"C:\Program Files\DatabaseBackupApp\DatabaseBackupApp.exe\" --auto" /sc WEEKLY /d MON /st 02:00 /rl LIMITED /f
-  ```
-* **Security Model (`/rl LIMITED`):** Executes under standard user privileges. Does not require elevated Domain Admin or `SYSTEM` rights, satisfying IT compliance audits.
-* **Silent Headless Run:** When triggered with `--auto`, the application suppresses Tkinter window creation, directs log telemetry to `backup_log.txt`, executes the full backup cycle, and exits cleanly.
+For production enterprise servers and Multi-User Remote Desktop (RDS/RDP) environments, the application provides an **Unattended Windows System Service Mode**.
+
+### 8.1 Architectural Problem on Enterprise Servers
+* Standard user-level scheduled tasks require an interactive user login session.
+* On enterprise servers, automated maintenance restarts or power recycles leave the machine at the Windows lock screen without any logged-in administrator.
+* Furthermore, RDP sessions often disconnect or sign out automatically due to inactive group policy timeouts, which abruptly kills standard desktop tasks.
+
+### 8.2 The Solution: Session 0 Isolated System Service
+The application can be registered as an unattended system service executing under `NT AUTHORITY\SYSTEM` with `/rl HIGHEST`.
+
+```mermaid
+graph TD
+    A["System Boot / Windows Startup"] --> B["Session 0 Service Dispatcher"]
+    B --> C["Database Cloud Backup (System Service)<br/>Runs as NT AUTHORITY\\SYSTEM"]
+    C --> D{"Active User Logged In?"}
+    D -->|"No (Headless Console)"| E["Executes Silently in Session 0"]
+    D -->|"Yes (RDP / Console User)"| E
+    E --> F["Read config.json & token.json from %LOCALAPPDATA%\\Programs"]
+    F --> G["Execute SQL Backup & Failover Engine"]
+    G --> H["Level 9 Deflate Compression"]
+    H --> I["Google Drive Upload & Sheets Audit Sync"]
+    I --> J["Zero-Footprint Purge & Clean Exit (Code 0)"]
+```
+
+### 8.3 Security & Execution Comparison Table
+
+| Capability | Standard User Task | Unattended Windows System Service |
+| :--- | :--- | :--- |
+| **Account Context** | Current Logged-in User | `NT AUTHORITY\SYSTEM` |
+| **Privilege Level** | `/rl LIMITED` (Standard User) | `/rl HIGHEST` (Full System Administrator) |
+| **Session Isolation** | Interactive User Desktop | **Session 0** (Protected Server Isolation) |
+| **Survives RDP Disconnects?** | ❌ Aborted if user logs off | ✅ **100% Immune to RDP Logoffs** |
+| **Executes on Headless Boot?**| ❌ Requires user login | ✅ **Executes at System Startup** |
+| **UAC Elevation Required?** | ❌ None (No Admin Needed) | ✅ One-Time UAC Elevation (Automatic) |
+| **Command-Line Runner** | `DatabaseBackupApp.exe --auto` | `DatabaseBackupApp.exe --auto` / `--daemon` |
+
+### 8.4 Continuous Background Daemon Runner (`--daemon` / `--service`)
+In addition to scheduled weekly triggers, `auto_backup.py` includes a continuous daemon runner (`run_daemon_mode()`):
+* Runs silently in Session 0 with minimal CPU and memory overhead (~35 MB).
+* Awakens periodically (every 30 seconds) to evaluate scheduled day and time conditions.
+* Triggers the full backup and telemetry sync, logging status to `backup_log.txt`.
 
 ---
 
-## 9. Senior Engineering Review & Defense Cheat Sheet
+## 9. Thread-Safe Emergency Stop & Cancellation Architecture
+
+Large database backups (often exceeding several gigabytes) and multi-megabyte Google Drive uploads can take considerable time. If a system operator needs to halt execution immediately (e.g. to perform emergency server maintenance or relieve I/O pressure), the application provides a **thread-safe cancellation coordinator**.
+
+### 9.1 Cancellation Sequence Diagram
+
+```mermaid
+sequenceDiagram
+    participant User as User / Admin (GUI Button)
+    participant Ctrl as BackupCancellationController
+    participant Worker as Background Daemon Worker
+    participant SQL as sqlcmd Subprocess (OS Level)
+    participant Cloud as Google Drive Upload Stream (2MB Chunks)
+    participant Disk as Local Storage Drive
+
+    User->>Ctrl: stop_active_backup() [Button Click]
+    Ctrl->>Ctrl: _cancelled.set()
+    Ctrl->>SQL: proc.terminate() / proc.kill()
+    SQL-->>Worker: Subprocess Terminated Immediately
+    Worker->>Cloud: Check is_cancelled() before next 2MB chunk
+    Worker->>Cloud: Abort active HTTP socket connection
+    Worker->>Disk: Purge partial .bak or .zip files
+    Worker-->>User: UI updates to "● BACKUP ABORTED BY USER"
+```
+
+### 9.2 Technical Implementation Details
+1. **`BackupCancellationController` Singleton**:
+   * Uses a thread-safe `threading.Event()` to broadcast cancellation signals across all running worker threads.
+   * Tracks active OS subprocess handles (`_active_proc`) protected by a `threading.Lock()`.
+2. **Immediate Subprocess Termination**:
+   * Calling `stop_active_backup()` instantly terminates the child `sqlcmd.exe` process, releasing database table locks and file handles immediately.
+3. **Resumable Upload Interruption**:
+   * Google Drive uploads stream in discrete **2 MB chunks**. Before each chunk is transmitted over the network socket, the worker verifies `is_cancelled()`. If cancelled, the network socket is closed immediately.
+4. **Zero Residual Corruption**:
+   * When an abort occurs, the engine purges any incomplete `.bak` or `.zip` files from disk, ensuring that no corrupt or partial archive files remain.
+
+---
+
+## 10. SQL Server Error 5 & Msg 3201 Auto-Failover Engine
+
+A frequent failure mode on locked-down client machines and Windows Servers is **Operating System Error 5 (Access is denied)**:
+> `Cannot open backup device 'C:\Users\...\Desktop\backup.bak'. Operating system error 5 (Access is denied). Msg 3013, Level 16, Msg 3201.`
+
+### 10.1 Root Cause Analysis
+Microsoft SQL Server runs as a dedicated Windows service account (e.g. `NT SERVICE\MSSQLSERVER` or `NT SERVICE\MSSQL$SQLEXPRESS`). By default, Windows restricts service accounts from writing into user profiles (`C:\Users\<User>\Desktop` or `Documents`), even if the user running the GUI has full administrative privileges.
+
+### 10.2 The Autonomous Self-Healing Pipeline
+
+```mermaid
+flowchart TD
+    A["Initiate SQL Backup to Target Folder<br/>(e.g., C:\\temp\\backups or Desktop)"] --> B["Proactive icacls Grant<br/>(*S-1-1-0 Everyone & *S-1-5-32-545 Users)"]
+    B --> C["Execute sqlcmd -b -l 15 -S ... -Q BACKUP DATABASE"]
+    C --> D{"Backup Succeeded?"}
+    D -->|"Yes (Code 0)"| E["Proceed to Level 9 ZIP Compression"]
+    D -->|"No (Error 5 / Msg 3201: Access Denied)"| F["Trap SQL Server Service Account Restriction"]
+    F --> G["Query SERVERPROPERTY('InstanceDefaultBackupPath')"]
+    G --> H["Execute Failover Backup directly to SQL Authorized Path"]
+    H --> I["Compress .bak directly into Target Folder as .zip"]
+    I --> J["Purge temporary .bak from SQL Directory"]
+    J --> E
+```
+
+### 10.3 Resilience Mechanisms
+1. **Proactive Language-Neutral ACL Grants**:
+   Before initiating backups, `grant_sql_folder_permissions()` uses Windows `icacls` to grant modify rights to language-neutral well-known SIDs:
+   * `*S-1-1-0`: Well-known SID for **Everyone**.
+   * `*S-1-5-32-545`: Well-known SID for **Builtin Users**.
+2. **Native Failover Query**:
+   If Error 5 persists, the engine queries the SQL Server engine's internal authorized directory:
+   ```sql
+   SELECT CAST(SERVERPROPERTY('InstanceDefaultBackupPath') AS VARCHAR(500))
+   ```
+   The engine writes the `.bak` there (where SQL Server is guaranteed full write permissions), compresses the archive directly into the user's destination directory, and purges the temporary `.bak`.
+3. **Enterprise Server Flags (`-b -l 15`)**:
+   All `sqlcmd` commands include:
+   * `-b`: Batch abort on error (ensures nonzero exit code on SQL errors).
+   * `-l 15`: 15-second login timeout to prevent indefinite hangs across high-latency VPN/RDP tunnels.
+   * `timeout=15` on `subprocess.run` to guarantee no orphan processes remain.
+
+---
+
+## 11. Enterprise Clean Uninstallation Architecture & Self-Migrating Batch Pattern
+
+To comply with enterprise IT software lifecycle standards, the application features a clean, complete uninstallation architecture with **zero leftovers**.
+
+### 11.1 The File-Locking Challenge in Windows
+When an uninstaller batch script (`Uninstall.bat`) is launched from inside the application directory (`C:\...\Programs\DatabaseBackupApp\Uninstall.bat`), `cmd.exe` maintains an open file handle on the batch file and locks the working directory. Any attempt by `rmdir /s /q` to delete the directory fails with *"Access is denied"*.
+
+### 11.2 The Self-Migrating Batch Pattern
+
+```mermaid
+flowchart TD
+    A["Uninstall Triggered<br/>(App Folder / GUI Button / Windows Apps)"] --> B{"Is running inside %TEMP%?"}
+    B -->|"No (Running in App Folder)"| C["Copy script to %TEMP%\\Uninstall_DatabaseBackupApp.bat"]
+    C --> D["Launch Temp Script & Terminate Original Process<br/>(Releases folder lock!)"]
+    D --> E["cd /d %TEMP% (Safe Execution Context)"]
+    B -->|"Yes"| E
+    E --> F["Terminate Active Processes<br/>DatabaseBackupApp.exe, python.exe, sqlcmd.exe"]
+    F --> G["Delete Windows Tasks & Services<br/>Database Cloud Backup, (System Service), Service"]
+    G --> H["Remove Shortcuts<br/>Desktop, Start Menu, OneDrive redirected Desktop"]
+    H --> I["Delete Windows Registry Entry<br/>HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall"]
+    I --> J["Purge Application Directory (%TARGET_DIR%)<br/>Recursive rmdir + PowerShell fallback"]
+    J --> K["Display Completion Dialog & Del temp script"]
+```
+
+### 11.3 Four Ways to Uninstall
+1. **Inside Application Folder**: Run `Uninstall.bat` directly inside `%LocalAppData%\Programs\DatabaseBackupApp\`.
+2. **Inside Application GUI**: Go to **Settings** tab &rarr; **Application Lifecycle** &rarr; click **🗑️ Uninstall Application**.
+3. **Windows Settings**: Go to **Settings &rarr; Apps &rarr; Installed Apps** &rarr; click **Uninstall** on *Database Cloud Backup*.
+4. **From Package Root**: Run `Uninstall.bat` in the deployment directory.
+
+---
+
+## 12. Senior Engineering Review & Defense Cheat Sheet
 
 | Reviewer Question | Comprehensive Technical Answer |
 | :--- | :--- |
 | **"Why is your engine separated from the GUI?"** | "Model-View separation. `backup_core.py` is 100% headless, stateless, and thread-safe. It can be called by the CustomTkinter GUI, by a CLI batch runner, or by Windows Task Scheduler with zero duplicated code." |
 | **"How do you prevent the desktop UI from freezing during 500 MB uploads?"** | "All heavy I/O operations are dispatched onto Python daemon worker threads (`threading.Thread(target=..., daemon=True)`). Log streaming and progress bar updates are safely marshaled back to the Tkinter event loop using `self.after()`." |
+| **"How do you guarantee clean uninstallation without file locks?"** | "We implement the Self-Migrating Batch Pattern: when launched, `Uninstall.bat` copies itself to `%TEMP%`, launches the temp instance with working directory switched to `%TEMP%`, and terminates the original process. This releases all Windows directory and file locks, allowing `rmdir` to cleanly purge the entire application folder." |
+| **"How does the software handle SQL Server Error 5 (Access Denied)?"** | "The software uses a two-tier strategy: first, proactive NTFS ACL grants using language-neutral SIDs (`*S-1-1-0` and `*S-1-5-32-545`). Second, automatic runtime trapping: if Error 5 occurs, it queries SQL Server's native `SERVERPROPERTY('InstanceDefaultBackupPath')`, redirects the `.bak` there, compresses it to the destination, and deletes the temporary `.bak`." |
+| **"How does the system ensure reliability on Windows Server and RDP?"** | "We provide an Unattended Windows System Service mode running under `NT AUTHORITY\SYSTEM` in Session 0. It executes before any user logs in, survives server reboots via startup triggers, and is completely immune to disconnected RDP sessions. All `sqlcmd` invocations include `-b` and `-l 15` timeout flags." |
 | **"How do you manage client hard drive capacity?"** | "We implement an automated two-phase purge: the raw `.bak` is deleted immediately upon Level 9 ZIP creation, and the `.zip` archive is automatically deleted once Google Drive confirms the upload and Google Sheets logs the audit record (`DELETE_LOCAL_AFTER_UPLOAD: true`). This maintains a zero-byte persistent footprint." |
 | **"Why did you include `-C` in the `sqlcmd` invocation?"** | "Microsoft ODBC Driver 18 introduced mandatory SSL/TLS encryption by default. `-C` ('Trust Server Certificate') allows the connection to trust self-signed local database certificates without failing." |
-| **"Why didn't you use a Google Cloud Service Account?"** | "Google Cloud Service Accounts possess 0 bytes of personal Google Drive storage and reject file uploads with `403 storageQuotaExceeded` unless assigned costly Google Workspace domain-wide delegation. OAuth 2.0 with offline refresh tokens provides seamless long-term execution with zero licensing costs." |
-| **"What happens if an internet outage occurs during the upload?"** | "The upload loop retries up to 3 times with a 10-second backoff. If all attempts fail, the local `.zip` file is intentionally preserved on disk and an error is logged so the client backup is never lost." |
+| **"What happens if an operator needs to cancel an active backup?"** | "The `BackupCancellationController` instantly signals worker threads, terminates the running `sqlcmd.exe` child process, aborts the 2MB chunked Google Drive upload stream, and purges all partial files from disk so zero corrupt data remains." |
+
