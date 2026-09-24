@@ -33,10 +33,19 @@ if %ERRORLEVEL% NEQ 0 (
 )
 
 echo.
-echo [3/3] Copying runtime configuration templates...
+echo [3/4] Copying runtime configuration templates...
 if not exist "dist\DatabaseBackupApp\config.json" copy "config.json" "dist\DatabaseBackupApp\"
 if not exist "dist\DatabaseBackupApp\client_secret.json" copy "client_secret.json" "dist\DatabaseBackupApp\"
 if exist "token.json" copy "token.json" "dist\DatabaseBackupApp\"
+
+echo.
+echo [4/4] Purging temporary build scratch files...
+if exist "build" rmdir /s /q "build" >nul 2>&1
+if exist "__pycache__" rmdir /s /q "__pycache__" >nul 2>&1
+del /f /q *.rartemp 2>nul
+del /f /q ..\*.rartemp 2>nul
+del /f /q ..\__rar_*.rartemp 2>nul
+echo       Temporary scratch files purged. Final output kept in dist\
 
 echo.
 echo ============================================================
