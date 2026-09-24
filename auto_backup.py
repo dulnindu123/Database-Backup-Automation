@@ -126,6 +126,46 @@ def run_manual_cli():
     sys.exit(0 if success else 1)
 
 
+def run_daemon_mode():
+    """
+    Continuous background daemon mode for Windows Service / Unattended Boot execution.
+    Runs silently in Session 0, sleeps and awakens periodically.
+    When the scheduled time arrives, it triggers the automated backup.
+    """
+    import time
+    emit_log("=" * 60)
+    emit_log("BACKGROUND SYSTEM SERVICE DAEMON INITIALIZED (SESSION 0)")
+    emit_log("=" * 60)
+    last_run_day = None
+    while True:
+        try:
+            config = load_config()
+            sched_time = config.get("SCHEDULE_TIME", "02:00")
+            strictly_mondays = config.get("STRICTLY_MONDAYS_ONLY", True)
+            
+            now = datetime.now()
+            today_weekday = now.weekday()
+            cur_time_str = now.strftime("%H:%M")
+            cur_day_key = now.strftime("%Y-%m-%d")
+            
+            day_matches = (not strictly_mondays) or (today_weekday == 0)
+            time_matches = (cur_time_str == sched_time)
+            
+            if day_matches and time_matches and (last_run_day != cur_day_key):
+                emit_log(f"Service trigger activated at {now}. Executing scheduled backup cycle...")
+                creds = authenticate(interactive=False)
+                if creds:
+                    run_full_backup(config=config)
+                    last_run_day = cur_day_key
+                else:
+                    emit_log("Service daemon failed: Google credentials missing or invalid.", "critical")
+                    
+            time.sleep(30)
+        except Exception as e:
+            emit_log(f"Service daemon error: {e}", "error")
+            time.sleep(60)
+
+
 def main():
     """
     Primary application entrypoint.
@@ -135,7 +175,11 @@ def main():
     if "--auto" in sys.argv or "-a" in sys.argv:
         run_automated_mode()
         
-    # Route 2: Command-line terminal execution
+    # Route 2: Continuous background service daemon
+    elif "--daemon" in sys.argv or "--service" in sys.argv:
+        run_daemon_mode()
+
+    # Route 3: Command-line terminal execution
     elif "--manual-cli" in sys.argv or "--cli" in sys.argv:
         run_manual_cli()
         

@@ -362,8 +362,10 @@ taskkill /F /IM python.exe /FI "WINDOWTITLE eq Enterprise Database Backup*" >nul
 taskkill /F /IM sqlcmd.exe /FI "WINDOWTITLE eq Enterprise Database Backup*" >nul 2>&1
 timeout /t 1 /nobreak >nul
 
-echo [2/5] Removing Windows Task Scheduler tasks...
+echo [2/5] Removing Windows Task Scheduler tasks and services...
 schtasks /delete /tn "Database Cloud Backup" /f >nul 2>&1
+schtasks /delete /tn "Database Cloud Backup (System Service)" /f >nul 2>&1
+schtasks /delete /tn "Database Cloud Backup Service" /f >nul 2>&1
 
 echo [3/5] Removing Desktop and Start Menu shortcuts...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^

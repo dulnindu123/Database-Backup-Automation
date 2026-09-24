@@ -62,8 +62,10 @@ SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets"
 ]
 
-# Standard Windows Task Scheduler entry identifier
+# Standard Windows Task Scheduler & Service entry identifiers
 TASK_SCHEDULER_NAME = "Database Cloud Backup"
+SYSTEM_SERVICE_TASK_NAME = "Database Cloud Backup (System Service)"
+DAEMON_SERVICE_TASK_NAME = "Database Cloud Backup Service"
 
 
 # =============================================================================
@@ -963,35 +965,89 @@ def cleanup_local_backup_folder(folder=None, log_cb=None):
 # 7. WINDOWS TASK SCHEDULER ORCHESTRATION
 # =============================================================================
 
-def get_scheduler_status(task_name=TASK_SCHEDULER_NAME):
-    """
-    Queries Windows Task Scheduler via schtasks /query.
-    Parses CSV output to determine if the task exists, its operational status, 
-    and the next scheduled run timestamp.
-    """
+def is_admin():
+    """Checks if the current process has Windows Administrator privileges."""
     try:
-        cmd = f'schtasks /query /tn "{task_name}" /fo CSV /nh'
-        res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-        if res.returncode == 0 and task_name in res.stdout:
+        import ctypes
+        return ctypes.windll.shell32.IsUserAnAdmin() != 0
+    except Exception:
+        return False
+
+
+def run_command_elevated(cmd_string):
+    """
+    Executes a shell command with elevated Windows Administrator privileges
+    via PowerShell Start-Process -Verb RunAs. Returns True if successful.
+    """
+    encoded_cmd = cmd_string.replace('"', '\\"')
+    ps_cmd = (
+        f'Start-Process cmd.exe -ArgumentList \'/c "{encoded_cmd}"\' '
+        f'-Verb RunAs -WindowStyle Hidden -Wait'
+    )
+    try:
+        res = subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd], capture_output=True, text=True, timeout=30)
+        return res.returncode == 0
+    except Exception:
+        return False
+
+
+def get_scheduler_status():
+    """
+    Queries Windows Task Scheduler to determine active automation state.
+    Checks both Unattended System Service (Session 0) and Standard User Task.
+    Returns: (is_active, status_message, mode)
+    where mode is 'SYSTEM_SERVICE', 'USER_TASK', or 'NONE'.
+    """
+    # 1. Check Unattended Windows System Service
+    try:
+        cmd = f'schtasks /query /tn "{SYSTEM_SERVICE_TASK_NAME}" /fo CSV /nh'
+        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)
+        if res.returncode == 0 and SYSTEM_SERVICE_TASK_NAME in res.stdout:
             status_line = res.stdout.strip().split("\n")[0]
             parts = [p.strip('"\r') for p in status_line.split('","')]
             status = parts[2] if len(parts) > 2 else "Scheduled"
             next_run = parts[1] if len(parts) > 1 else "Unknown"
-            return True, f"Active ({status}) - Next Run: {next_run}"
-        return False, "Not Scheduled"
-    except Exception as e:
-        return False, f"Error: {e}"
+            return True, f"Active (System Service - Session 0) - Next Run: {next_run}", "SYSTEM_SERVICE"
+    except Exception:
+        pass
+
+    # 2. Check Standard User Scheduled Task
+    try:
+        cmd = f'schtasks /query /tn "{TASK_SCHEDULER_NAME}" /fo CSV /nh'
+        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)
+        if res.returncode == 0 and TASK_SCHEDULER_NAME in res.stdout:
+            status_line = res.stdout.strip().split("\n")[0]
+            parts = [p.strip('"\r') for p in status_line.split('","')]
+            status = parts[2] if len(parts) > 2 else "Scheduled"
+            next_run = parts[1] if len(parts) > 1 else "Unknown"
+            return True, f"Active (Standard User Task) - Next Run: {next_run}", "USER_TASK"
+    except Exception:
+        pass
+
+    # 3. Check Background Daemon Task (if present)
+    try:
+        cmd = f'schtasks /query /tn "{DAEMON_SERVICE_TASK_NAME}" /fo CSV /nh'
+        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)
+        if res.returncode == 0 and DAEMON_SERVICE_TASK_NAME in res.stdout:
+            return True, "Active (Continuous Background Daemon Service)", "SYSTEM_SERVICE"
+    except Exception:
+        pass
+
+    return False, "Not Scheduled", "NONE"
 
 
-def enable_scheduler(executable_path=None, day="MON", time_str="02:00", task_name=TASK_SCHEDULER_NAME):
+def enable_scheduler(executable_path=None, day="MON", time_str="02:00", as_system_service=True, on_boot=False):
     """
-    Registers a recurring weekly task in Windows Task Scheduler using schtasks /create.
+    Registers the backup cycle in Windows Task Scheduler using schtasks /create.
     
-    Configuration:
-    - Runs weekly on the specified day (default: MON).
-    - Runs at the specified 24h time (default: 02:00 AM).
-    - Appends the --auto CLI flag so the application runs silently in headless mode.
-    - Uses /rl LIMITED (standard user privileges) to adhere to least-privilege security.
+    Modes:
+    1. Unattended Windows System Service (as_system_service=True, Default):
+       - Configured under 'NT AUTHORITY\\SYSTEM' with /rl HIGHEST.
+       - Runs in Session 0 independent of user login or RDP disconnects.
+       - If on_boot=True, also registers a boot/startup recovery trigger.
+    2. Standard User Task (as_system_service=False):
+       - Runs under current user account (/rl LIMITED).
+       - Requires zero admin rights.
     """
     if not executable_path:
         if getattr(sys, 'frozen', False):
@@ -1003,35 +1059,70 @@ def enable_scheduler(executable_path=None, day="MON", time_str="02:00", task_nam
         cmd_run = f'{executable_path} --auto'
     else:
         cmd_run = f'\\"{executable_path}\\" --auto'
+
+    if as_system_service:
+        # First remove any user-level task to avoid conflicting double-executions
+        subprocess.run(f'schtasks /delete /tn "{TASK_SCHEDULER_NAME}" /f', shell=True, capture_output=True)
         
-    cmd = f'schtasks /create /tn "{task_name}" /tr "{cmd_run}" /sc weekly /d {day} /st {time_str} /f'
-    try:
+        target_task = SYSTEM_SERVICE_TASK_NAME
+        cmd = f'schtasks /create /tn "{target_task}" /tr "{cmd_run}" /sc weekly /d {day} /st {time_str} /ru "NT AUTHORITY\\SYSTEM" /rl HIGHEST /f'
+        
+        if not is_admin():
+            ok = run_command_elevated(cmd)
+            if ok:
+                emit_log(f"Unattended System Service '{target_task}' configured via elevated prompt.")
+                if on_boot:
+                    boot_cmd = f'schtasks /create /tn "{DAEMON_SERVICE_TASK_NAME}" /tr "{cmd_run}" /sc ONSTART /ru "NT AUTHORITY\\SYSTEM" /rl HIGHEST /f'
+                    run_command_elevated(boot_cmd)
+                return True, f"Windows System Service Active: Every {day} at {time_str} (Unattended Session 0)."
+            else:
+                return False, "Administrator elevation was cancelled or denied."
+        else:
+            res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            if res.returncode == 0:
+                emit_log(f"Unattended System Service '{target_task}' created successfully.")
+                if on_boot:
+                    boot_cmd = f'schtasks /create /tn "{DAEMON_SERVICE_TASK_NAME}" /tr "{cmd_run}" /sc ONSTART /ru "NT AUTHORITY\\SYSTEM" /rl HIGHEST /f'
+                    subprocess.run(boot_cmd, shell=True, capture_output=True)
+                return True, f"Windows System Service Active: Every {day} at {time_str} (Unattended Session 0)."
+            else:
+                err = res.stderr or res.stdout
+                return False, f"Scheduler error: {err}"
+    else:
+        # First remove any system-level task to avoid double-runs
+        subprocess.run(f'schtasks /delete /tn "{SYSTEM_SERVICE_TASK_NAME}" /f', shell=True, capture_output=True)
+        subprocess.run(f'schtasks /delete /tn "{DAEMON_SERVICE_TASK_NAME}" /f', shell=True, capture_output=True)
+        
+        target_task = TASK_SCHEDULER_NAME
+        cmd = f'schtasks /create /tn "{target_task}" /tr "{cmd_run}" /sc weekly /d {day} /st {time_str} /f'
         res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
         if res.returncode == 0:
-            emit_log(f"Scheduled task '{task_name}' created successfully (Every {day} at {time_str}).")
+            emit_log(f"Standard user task '{target_task}' created successfully (Every {day} at {time_str}).")
             return True, f"Scheduled successfully: Every {day} at {time_str}."
         else:
             err = res.stderr or res.stdout
             emit_log(f"Failed to create scheduled task: {err}", "error")
             return False, f"Scheduler error: {err}"
-    except Exception as e:
-        return False, str(e)
 
 
-def disable_scheduler(task_name=TASK_SCHEDULER_NAME):
+def disable_scheduler():
     """
-    Unregisters and removes the task from Windows Task Scheduler via schtasks /delete.
+    Unregisters and cleans up all scheduled tasks (User, System Service, and Daemon Boot task).
     """
-    cmd = f'schtasks /delete /tn "{task_name}" /f'
-    try:
+    tasks_to_remove = [TASK_SCHEDULER_NAME, SYSTEM_SERVICE_TASK_NAME, DAEMON_SERVICE_TASK_NAME]
+    removed_any = False
+    
+    for tn in tasks_to_remove:
+        cmd = f'schtasks /delete /tn "{tn}" /f'
         res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
         if res.returncode == 0:
-            emit_log(f"Scheduled task '{task_name}' removed.")
-            return True, "Task Scheduler schedule removed."
-        else:
-            return False, res.stderr or res.stdout
-    except Exception as e:
-        return False, str(e)
+            removed_any = True
+        elif not is_admin():
+            if run_command_elevated(cmd):
+                removed_any = True
+                
+    emit_log("Windows automation schedules removed.")
+    return True, "Automated schedules removed."
 
 
 # =============================================================================

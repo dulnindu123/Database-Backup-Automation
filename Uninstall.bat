@@ -96,9 +96,11 @@ timeout /t 1 /nobreak >nul
 echo       Active processes terminated.
 
 echo.
-echo [2/5] Removing Windows Task Scheduler automation...
+echo [2/5] Removing Windows Task Scheduler automation and services...
 schtasks /delete /tn "Database Cloud Backup" /f >nul 2>&1
-echo       Scheduled task removed.
+schtasks /delete /tn "Database Cloud Backup (System Service)" /f >nul 2>&1
+schtasks /delete /tn "Database Cloud Backup Service" /f >nul 2>&1
+echo       Scheduled tasks and services removed.
 
 echo.
 echo [3/5] Removing Shortcuts (Desktop, Start Menu, OneDrive)...

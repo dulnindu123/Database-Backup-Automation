@@ -318,35 +318,35 @@ class BackupAutomationApp(ctk.CTk):
         ).pack(side="left", padx=5)
 
     # =========================================================================
-    # TAB 2: SCHEDULE
+    # TAB 2: SCHEDULE & WINDOWS SERVICE AUTOMATION
     # =========================================================================
     def _build_schedule_tab(self):
-        """Builds controls to inspect, enable, and disable Windows Task Scheduler."""
+        """Builds controls to configure Unattended Windows System Service or User Schedule."""
         tab = self.tab_schedule
 
-        container = ctk.CTkFrame(tab, corner_radius=10, fg_color=("#374151", "#1f2937"))
-        container.pack(fill="both", expand=True, padx=10, pady=10)
+        scroll = ctk.CTkScrollableFrame(tab, corner_radius=10, fg_color=("#374151", "#1f2937"))
+        scroll.pack(fill="both", expand=True, padx=10, pady=10)
 
         ctk.CTkLabel(
-            container,
-            text="Windows Task Scheduler Automation",
+            scroll,
+            text="Unattended Automation & Windows Service Engine",
             font=ctk.CTkFont(size=18, weight="bold")
-        ).pack(anchor="w", padx=25, pady=(20, 5))
+        ).pack(anchor="w", padx=20, pady=(15, 5))
 
         ctk.CTkLabel(
-            container,
-            text="Set up the backup system to run completely in the background without requiring user intervention.",
+            scroll,
+            text="Configure automated backups to execute in the background with zero human intervention.",
             font=ctk.CTkFont(size=12),
             text_color="#9ca3af"
-        ).pack(anchor="w", padx=25, pady=(0, 20))
+        ).pack(anchor="w", padx=20, pady=(0, 15))
 
         # Status row box
-        status_box = ctk.CTkFrame(container, fg_color=("#1e293b", "#0f172a"), corner_radius=8)
-        status_box.pack(fill="x", padx=25, pady=10)
+        status_box = ctk.CTkFrame(scroll, fg_color=("#1e293b", "#0f172a"), corner_radius=8)
+        status_box.pack(fill="x", padx=20, pady=(0, 15))
 
         ctk.CTkLabel(
             status_box,
-            text="Current Task Status:",
+            text="Current Engine Status:",
             font=ctk.CTkFont(size=13, weight="bold")
         ).pack(side="left", padx=15, pady=12)
 
@@ -358,20 +358,78 @@ class BackupAutomationApp(ctk.CTk):
         )
         self.sched_status_badge.pack(side="left", padx=5)
 
-        # Scheduling options
-        opts_frame = ctk.CTkFrame(container, fg_color="transparent")
-        opts_frame.pack(fill="x", padx=25, pady=15)
+        # ── Mode Selection Card ───────────────────────────────────────
+        mode_card = ctk.CTkFrame(scroll, corner_radius=8, fg_color=("#1e293b", "#111827"), border_width=1, border_color="#374151")
+        mode_card.pack(fill="x", padx=20, pady=(0, 15))
+
+        ctk.CTkLabel(
+            mode_card,
+            text="EXECUTION SECURITY CONTEXT (SERVICE LEVEL)",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#60a5fa"
+        ).pack(anchor="w", padx=15, pady=(12, 6))
+
+        self.sched_mode_var = tk.StringVar(value="SYSTEM")
+
+        # Option A: System Service
+        self.radio_system = ctk.CTkRadioButton(
+            mode_card,
+            text="Unattended Windows System Service (Recommended for Windows Server & RDP)",
+            variable=self.sched_mode_var,
+            value="SYSTEM",
+            font=ctk.CTkFont(size=13, weight="bold")
+        )
+        self.radio_system.pack(anchor="w", padx=15, pady=(5, 2))
+
+        ctk.CTkLabel(
+            mode_card,
+            text="• Runs under NT AUTHORITY\\SYSTEM in Session 0 with highest privileges.\n"
+                 "• Operates 100% unattended before any user logs in, survives reboots, and is never disrupted by RDP logoffs.",
+            font=ctk.CTkFont(size=11),
+            text_color="#9ca3af",
+            justify="left"
+        ).pack(anchor="w", padx=40, pady=(0, 10))
+
+        # Option B: Standard User Task
+        self.radio_user = ctk.CTkRadioButton(
+            mode_card,
+            text="Standard User Task (Interactive Desktop Only)",
+            variable=self.sched_mode_var,
+            value="USER",
+            font=ctk.CTkFont(size=13, weight="bold")
+        )
+        self.radio_user.pack(anchor="w", padx=15, pady=(5, 2))
+
+        ctk.CTkLabel(
+            mode_card,
+            text="• Runs under your current Windows user account (/rl LIMITED).\n"
+                 "• Requires no administrator rights, but only executes when you are actively logged into Windows.",
+            font=ctk.CTkFont(size=11),
+            text_color="#9ca3af",
+            justify="left"
+        ).pack(anchor="w", padx=40, pady=(0, 12))
+
+        # ── Trigger & Time Settings ───────────────────────────────────
+        trigger_card = ctk.CTkFrame(scroll, corner_radius=8, fg_color=("#1e293b", "#111827"), border_width=1, border_color="#374151")
+        trigger_card.pack(fill="x", padx=20, pady=(0, 15))
+
+        ctk.CTkLabel(
+            trigger_card,
+            text="SCHEDULE PARAMETERS & RECOVERY TRIGGERS",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#34d399"
+        ).pack(anchor="w", padx=15, pady=(12, 6))
 
         self.monday_only_switch = ctk.CTkSwitch(
-            opts_frame,
+            trigger_card,
             text="Strictly Mondays Only (Recommended for weekly disaster recovery cycles)",
             font=ctk.CTkFont(size=13)
         )
-        self.monday_only_switch.pack(anchor="w", pady=10)
+        self.monday_only_switch.pack(anchor="w", padx=15, pady=(5, 8))
         self.monday_only_switch.select()
 
-        time_row = ctk.CTkFrame(opts_frame, fg_color="transparent")
-        time_row.pack(anchor="w", pady=10)
+        time_row = ctk.CTkFrame(trigger_card, fg_color="transparent")
+        time_row.pack(anchor="w", padx=15, pady=(0, 8))
 
         ctk.CTkLabel(time_row, text="Execution Time (24h format):", font=ctk.CTkFont(size=13)).pack(side="left", padx=(0, 15))
         self.entry_sched_time = ctk.CTkEntry(time_row, width=120)
@@ -379,28 +437,39 @@ class BackupAutomationApp(ctk.CTk):
         self.entry_sched_time.pack(side="left")
         ctk.CTkLabel(time_row, text="(e.g. 02:00 for 2:00 AM)", font=ctk.CTkFont(size=11), text_color="#9ca3af").pack(side="left", padx=10)
 
-        # Scheduler control buttons
-        btn_row = ctk.CTkFrame(container, fg_color="transparent")
-        btn_row.pack(fill="x", padx=25, pady=20)
+        self.chk_boot_trigger = ctk.CTkCheckBox(
+            trigger_card,
+            text="Register Startup Recovery Trigger (Automatically execute at system boot if missed)",
+            font=ctk.CTkFont(size=12),
+            text_color="#d1d5db"
+        )
+        self.chk_boot_trigger.pack(anchor="w", padx=15, pady=(0, 12))
+        self.chk_boot_trigger.select()
+
+        # ── Action Buttons Row ─────────────────────────────────────────
+        btn_row = ctk.CTkFrame(scroll, fg_color="transparent")
+        btn_row.pack(fill="x", padx=20, pady=(5, 15))
 
         self.btn_enable_sched = ctk.CTkButton(
             btn_row,
-            text="✔ Enable Weekly Monday Schedule",
+            text="✔ Apply & Enable Automation",
             font=ctk.CTkFont(size=13, weight="bold"),
             fg_color="#10b981",
             hover_color="#059669",
-            height=40,
+            height=42,
+            width=220,
             command=self._enable_schedule
         )
         self.btn_enable_sched.pack(side="left", padx=(0, 10))
 
         self.btn_disable_sched = ctk.CTkButton(
             btn_row,
-            text="✖ Disable Schedule",
+            text="✖ Disable Automation",
             font=ctk.CTkFont(size=13, weight="bold"),
             fg_color="#ef4444",
             hover_color="#dc2626",
-            height=40,
+            height=42,
+            width=180,
             command=self._disable_schedule
         )
         self.btn_disable_sched.pack(side="left", padx=10)
@@ -411,7 +480,8 @@ class BackupAutomationApp(ctk.CTk):
             font=ctk.CTkFont(size=13),
             fg_color="#4b5563",
             hover_color="#6b7280",
-            height=40,
+            height=42,
+            width=140,
             command=self._refresh_schedule_status
         ).pack(side="left", padx=10)
 
@@ -747,37 +817,47 @@ class BackupAutomationApp(ctk.CTk):
             messagebox.showerror("Error", f"Failed to save configuration:\n{msg}")
 
     # =========================================================================
-    # TASK SCHEDULER ACTIONS
+    # TASK SCHEDULER & WINDOWS SERVICE CONTROLLERS
     # =========================================================================
     def _refresh_schedule_status(self):
         """Queries Windows Task Scheduler and updates the UI status badge."""
-        active, status_desc = get_scheduler_status()
+        active, status_desc, mode = get_scheduler_status()
         if active:
-            self.sched_status_badge.configure(text=f"● {status_desc}", text_color="#10b981")
-            self.card_sched_sub.configure(text="Task Scheduler: ACTIVE", text_color="#10b981")
+            if mode == "SYSTEM_SERVICE":
+                self.sched_status_badge.configure(text=f"● {status_desc}", text_color="#10b981")
+                self.sched_mode_var.set("SYSTEM")
+            else:
+                self.sched_status_badge.configure(text=f"● {status_desc}", text_color="#60a5fa")
+                self.sched_mode_var.set("USER")
+            self.card_sched_sub.configure(text="Automation: ACTIVE", text_color="#10b981")
         else:
-            self.sched_status_badge.configure(text="○ Not Scheduled", text_color="#ef4444")
-            self.card_sched_sub.configure(text="Task Scheduler: INACTIVE", text_color="#ef4444")
+            self.sched_status_badge.configure(text="○ Not Scheduled", text_color="#9ca3af")
+            self.card_sched_sub.configure(text="Automation: INACTIVE", text_color="#9ca3af")
 
     def _enable_schedule(self):
-        """Enables the recurring weekly task in Windows Task Scheduler."""
+        """Enables the recurring schedule as either a Windows System Service or User Task."""
         time_str = self.entry_sched_time.get().strip() or "02:00"
-        self.append_log(f"Configuring Windows Task Scheduler for Mondays at {time_str}...")
-        ok, msg = enable_scheduler(time_str=time_str)
+        as_system = (self.sched_mode_var.get() == "SYSTEM")
+        on_boot = bool(self.chk_boot_trigger.get())
+        
+        mode_label = "Unattended System Service (Session 0)" if as_system else "Standard User Task"
+        self.append_log(f"Configuring Windows automation ({mode_label}) for Mondays at {time_str}...")
+        
+        ok, msg = enable_scheduler(time_str=time_str, as_system_service=as_system, on_boot=on_boot)
         if ok:
-            messagebox.showinfo("Schedule Enabled", f"Task scheduled successfully!\n\nBackups will run automatically every Monday at {time_str}.")
+            messagebox.showinfo("Automation Configured", f"{msg}\n\nSchedule: Every Monday at {time_str}\nMode: {mode_label}")
         else:
-            messagebox.showerror("Error", f"Failed to configure Task Scheduler:\n{msg}")
+            messagebox.showerror("Configuration Error", f"Failed to configure automation:\n{msg}")
         self._refresh_schedule_status()
 
     def _disable_schedule(self):
-        """Removes the recurring task from Windows Task Scheduler."""
-        if messagebox.askyesno("Confirm", "Are you sure you want to disable automatic scheduled backups?"):
+        """Removes all recurring automation tasks from Windows."""
+        if messagebox.askyesno("Confirm", "Are you sure you want to disable all automatic backup schedules and services?"):
             ok, msg = disable_scheduler()
             if ok:
-                messagebox.showinfo("Schedule Disabled", "The automatic backup task was removed.")
+                messagebox.showinfo("Automation Disabled", "All automatic backup schedules and service triggers were removed.")
             else:
-                messagebox.showerror("Error", f"Failed to disable schedule:\n{msg}")
+                messagebox.showerror("Error", f"Failed to disable automation:\n{msg}")
             self._refresh_schedule_status()
 
     # =========================================================================
