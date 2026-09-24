@@ -57,6 +57,8 @@ from backup_core import (
     cleanup_local_backup_folder,
     format_file_size,
     grant_sql_folder_permissions,
+    stop_active_backup,
+    is_backup_cancelled,
     emit_log
 )
 
@@ -88,9 +90,10 @@ class BackupAutomationApp(ctk.CTk):
             except Exception:
                 pass
 
-        # Load active configuration and initialize busy state flag
+        # Load active configuration and initialize execution flags
         self.config_data = load_config()
         self.is_running = False
+        self.was_cancelled = False
 
         # Build UI components
         self._build_layout()
@@ -137,6 +140,20 @@ class BackupAutomationApp(ctk.CTk):
             pady=6
         )
         self.header_badge.pack(side="right", padx=25, pady=20)
+
+        # Global Emergency Stop button (in header, visible across all tabs during backup)
+        self.btn_header_stop = ctk.CTkButton(
+            self.header_frame,
+            text="⏹  STOP BACKUP",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#dc2626",
+            hover_color="#b91c1c",
+            text_color="#ffffff",
+            height=34,
+            width=135,
+            corner_radius=17,
+            command=self._stop_backup
+        )
 
         # ── Main TabView ──────────────────────────────────────────────
         self.tabview = ctk.CTkTabview(self, corner_radius=10)
@@ -208,18 +225,36 @@ class BackupAutomationApp(ctk.CTk):
             text_color="#9ca3af"
         ).pack(pady=(0, 20))
 
+        # Action button dual container
+        btn_action_box = ctk.CTkFrame(action_card, fg_color="transparent")
+        btn_action_box.pack(pady=10)
+
         self.btn_run_backup = ctk.CTkButton(
-            action_card,
+            btn_action_box,
             text="⚡  RUN FULL BACKUP NOW",
-            font=ctk.CTkFont(size=16, weight="bold"),
+            font=ctk.CTkFont(size=15, weight="bold"),
             fg_color="#2563eb",
             hover_color="#1d4ed8",
-            height=50,
-            width=320,
-            corner_radius=25,
+            height=48,
+            width=260,
+            corner_radius=24,
             command=self._start_backup_thread
         )
-        self.btn_run_backup.pack(pady=10)
+        self.btn_run_backup.pack(side="left", padx=6)
+
+        self.btn_stop_backup = ctk.CTkButton(
+            btn_action_box,
+            text="⏹  STOP BACKUP",
+            font=ctk.CTkFont(size=15, weight="bold"),
+            fg_color="#dc2626",
+            hover_color="#b91c1c",
+            height=48,
+            width=170,
+            corner_radius=24,
+            state="disabled",
+            command=self._stop_backup
+        )
+        self.btn_stop_backup.pack(side="left", padx=6)
 
         # Dynamic progress bar
         self.progress_bar = ctk.CTkProgressBar(action_card, width=450, height=12, corner_radius=6)
@@ -795,7 +830,11 @@ class BackupAutomationApp(ctk.CTk):
             return
 
         self.is_running = True
+        self.was_cancelled = False
         self.btn_run_backup.configure(state="disabled", text="⏳  BACKUP IN PROGRESS...")
+        self.btn_stop_backup.configure(state="normal", text="⏹  STOP BACKUP")
+        self.btn_header_stop.configure(state="normal", text="⏹  STOP BACKUP")
+        self.btn_header_stop.pack(side="right", padx=(0, 15), pady=20)
         self.header_badge.configure(text="● BACKUP RUNNING", text_color="#fbbf24", fg_color="#78350f")
         self.progress_bar.set(0.05)
         self.status_text_label.configure(text="Initializing backup workflow...")
@@ -804,6 +843,20 @@ class BackupAutomationApp(ctk.CTk):
         self.tabview.set("  Live Logs  ")
 
         threading.Thread(target=self._execute_backup_worker, daemon=True).start()
+
+    def _stop_backup(self):
+        """Emergency stop handler invoked from Header or Dashboard."""
+        if not self.is_running:
+            return
+
+        if messagebox.askyesno("Emergency Stop", "Are you sure you want to immediately stop the backup and upload process?"):
+            self.was_cancelled = True
+            self.append_log(">>> USER TRIGGERED EMERGENCY STOP <<<", "warning")
+            self.status_text_label.configure(text="Stopping backup operations...")
+            self.header_badge.configure(text="● STOPPING...", text_color="#f87171", fg_color="#7f1d1d")
+            self.btn_stop_backup.configure(state="disabled", text="Stopping...")
+            self.btn_header_stop.configure(state="disabled", text="Stopping...")
+            stop_active_backup()
 
     def _execute_backup_worker(self):
         """
@@ -823,19 +876,32 @@ class BackupAutomationApp(ctk.CTk):
                 progress_cb=update_progress,
                 status_cb=update_status
             )
-            if success:
+            if self.was_cancelled or is_backup_cancelled():
+                self.after(0, lambda: messagebox.showinfo("Backup Stopped", "The backup and cloud sync process was safely stopped.\n\nAll temporary files have been cleaned up."))
+            elif success:
                 self.after(0, lambda: messagebox.showinfo("Backup Finished", summary))
             else:
                 self.after(0, lambda: messagebox.showwarning("Completed with Warnings", summary))
         except Exception as e:
-            self.append_log(f"Fatal execution error: {e}", "critical")
-            self.after(0, lambda: messagebox.showerror("Fatal Error", f"Workflow failed:\n{e}"))
+            if self.was_cancelled or is_backup_cancelled():
+                self.append_log("Backup process terminated cleanly.", "info")
+            else:
+                self.append_log(f"Fatal execution error: {e}", "critical")
+                self.after(0, lambda: messagebox.showerror("Fatal Error", f"Workflow failed:\n{e}"))
         finally:
             def _reset_ui():
                 self.is_running = False
                 self.btn_run_backup.configure(state="normal", text="⚡  RUN FULL BACKUP NOW")
-                self.header_badge.configure(text="● SYSTEM READY", text_color="#10b981", fg_color="#064e3b")
-                self.status_text_label.configure(text="Ready to execute backup")
+                self.btn_stop_backup.configure(state="disabled", text="⏹  STOP BACKUP")
+                self.btn_header_stop.pack_forget()
+                if self.was_cancelled or is_backup_cancelled():
+                    self.header_badge.configure(text="● STOPPED", text_color="#ef4444", fg_color="#450a0a")
+                    self.status_text_label.configure(text="Backup stopped by user")
+                    self.progress_bar.set(0)
+                else:
+                    self.header_badge.configure(text="● SYSTEM READY", text_color="#10b981", fg_color="#064e3b")
+                    self.status_text_label.configure(text="Ready to execute backup")
+                self.was_cancelled = False
             self.after(0, _reset_ui)
 
 

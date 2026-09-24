@@ -25,6 +25,7 @@ import json
 import logging
 import zipfile
 import subprocess
+import threading
 from datetime import datetime
 
 # Google APIs & Client Libraries
@@ -63,6 +64,73 @@ SCOPES = [
 
 # Standard Windows Task Scheduler entry identifier
 TASK_SCHEDULER_NAME = "Database Cloud Backup"
+
+
+# =============================================================================
+# EMERGENCY CANCELLATION & PROCESS COORDINATOR
+# =============================================================================
+
+class BackupCancellationController:
+    """
+    Thread-safe execution coordinator managing emergency stop requests.
+    Tracks running subprocesses (such as sqlcmd) and signals background
+    threads to immediately abort compression or Google Cloud uploads.
+    """
+    def __init__(self):
+        self._cancelled = threading.Event()
+        self._active_proc = None
+        self._lock = threading.Lock()
+
+    def request_stop(self):
+        """Signals active workers to abort and forcefully terminates child processes."""
+        self._cancelled.set()
+        with self._lock:
+            if self._active_proc and self._active_proc.poll() is None:
+                try:
+                    self._active_proc.terminate()
+                except Exception:
+                    try:
+                        self._active_proc.kill()
+                    except Exception:
+                        pass
+
+    def reset(self):
+        """Resets the cancellation flag for new execution runs."""
+        self._cancelled.clear()
+        with self._lock:
+            self._active_proc = None
+
+    def is_cancelled(self):
+        """Returns True if an emergency stop was requested."""
+        return self._cancelled.is_set()
+
+    def set_active_process(self, proc):
+        """Registers a running subprocess for instant emergency termination."""
+        with self._lock:
+            self._active_proc = proc
+
+    def clear_active_process(self):
+        """Deregisters the subprocess once execution finishes."""
+        with self._lock:
+            self._active_proc = None
+
+
+# Global execution controller singleton
+backup_controller = BackupCancellationController()
+
+
+def stop_active_backup():
+    """
+    Globally requests an immediate emergency stop of any running backup,
+    compression, or cloud upload process.
+    """
+    backup_controller.request_stop()
+    emit_log(">>> EMERGENCY STOP SIGNAL BROADCAST <<<", "warning")
+
+
+def is_backup_cancelled():
+    """Returns True if the active backup run has been cancelled."""
+    return backup_controller.is_cancelled()
 
 
 def get_base_dir():
@@ -376,11 +444,11 @@ def get_sql_instance_default_backup_path(sql_server, sql_user="", sql_password="
     return None
 
 
-def generate_and_compress_backup(folder, db_name, sql_server, sql_user="", sql_password="", log_cb=None):
+def generate_and_compress_backup(folder, db_name, sql_server, sql_user="", sql_password="", log_cb=None, status_cb=None, cancel_check=None):
     """
     Executes native Microsoft SQL Server database backup and Level 9 Deflate compression.
     
-    Resilience & Failover Features:
+    Resilience, Failover & Emergency Cancellation Features:
     1. Normalizes all folder and file paths to standard Windows backslashes.
     2. Proactively configures NTFS permissions via icacls on the destination directory.
     3. Traps SQL Server Error 5 (Operating system error 5: Access is denied) and Msg 3201:
@@ -389,7 +457,15 @@ def generate_and_compress_backup(folder, db_name, sql_server, sql_user="", sql_p
        InstanceDefaultBackupPath, runs the backup to that authorized location,
        compresses the archive directly into the user's requested destination, and purges
        the temporary .bak from the SQL Server directory.
+    4. Emergency Abort & Cleanup:
+       Monitors backup_controller and cancel_check. If aborted, terminates the running
+       sqlcmd child process immediately, halts compression, and deletes any partial
+       .bak or .zip files so zero corrupted residual files remain.
     """
+    if (cancel_check and cancel_check()) or backup_controller.is_cancelled():
+        emit_log(f"Backup execution aborted before processing '{db_name}'.", "warning", log_cb)
+        return None
+
     folder = os.path.normpath(folder)
     if not os.path.exists(folder):
         try:
@@ -417,12 +493,27 @@ def generate_and_compress_backup(folder, db_name, sql_server, sql_user="", sql_p
         cmd = f'sqlcmd -S "{sql_server}" -E -C -Q "BACKUP DATABASE [{db_name}] TO DISK=\'{bak_filepath}\' WITH FORMAT"'
 
     try:
-        # Execute database backup in isolated subprocess
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-        backup_succeeded = (result.returncode == 0 and os.path.exists(bak_filepath))
+        # Execute database backup in isolated subprocess with emergency termination support
+        proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        backup_controller.set_active_process(proc)
+        try:
+            stdout, stderr = proc.communicate()
+        finally:
+            backup_controller.clear_active_process()
+
+        if (cancel_check and cancel_check()) or backup_controller.is_cancelled():
+            emit_log(f"SQL Backup for {db_name} aborted by user. Purging temporary files...", "warning", log_cb)
+            if os.path.exists(bak_filepath):
+                try:
+                    os.remove(bak_filepath)
+                except Exception:
+                    pass
+            return None
+
+        backup_succeeded = (proc.returncode == 0 and os.path.exists(bak_filepath))
 
         if not backup_succeeded:
-            err_msg = ((result.stderr or "") + "\n" + (result.stdout or "")).strip()
+            err_msg = ((stderr or "") + "\n" + (stdout or "")).strip()
             
             # Detect SQL Server Error 5 / Msg 3201 (Access is denied to backup device)
             is_access_denied = (
@@ -452,21 +543,46 @@ def generate_and_compress_backup(folder, db_name, sql_server, sql_user="", sql_p
                 else:
                     cmd_fb = f'sqlcmd -S "{sql_server}" -E -C -Q "BACKUP DATABASE [{db_name}] TO DISK=\'{fallback_bak}\' WITH FORMAT"'
                 
-                result_fb = subprocess.run(cmd_fb, shell=True, capture_output=True, text=True)
-                if result_fb.returncode == 0 and os.path.exists(fallback_bak):
+                proc_fb = subprocess.Popen(cmd_fb, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                backup_controller.set_active_process(proc_fb)
+                try:
+                    stdout_fb, stderr_fb = proc_fb.communicate()
+                finally:
+                    backup_controller.clear_active_process()
+
+                if (cancel_check and cancel_check()) or backup_controller.is_cancelled():
+                    emit_log(f"SQL Failover Backup for {db_name} aborted by user. Purging temporary files...", "warning", log_cb)
+                    if os.path.exists(fallback_bak):
+                        try:
+                            os.remove(fallback_bak)
+                        except Exception:
+                            pass
+                    return None
+
+                if proc_fb.returncode == 0 and os.path.exists(fallback_bak):
                     emit_log(f"Failover SQL backup successfully created at: {fallback_bak}", "info", log_cb)
                     bak_filepath = fallback_bak
                     backup_succeeded = True
                 else:
-                    err_fb = ((result_fb.stderr or "") + "\n" + (result_fb.stdout or "")).strip()
+                    err_fb = ((stderr_fb or "") + "\n" + (stdout_fb or "")).strip()
                     emit_log(f"SQL Backup failed even on failover location: {err_fb}", "error", log_cb)
                     return None
             else:
                 emit_log(f"SQL Backup failed for {db_name}: {err_msg}", "error", log_cb)
                 return None
+
+        if (cancel_check and cancel_check()) or backup_controller.is_cancelled():
+            if os.path.exists(bak_filepath):
+                try:
+                    os.remove(bak_filepath)
+                except Exception:
+                    pass
+            return None
             
         raw_size_mb = os.path.getsize(bak_filepath) / (1024 * 1024)
         emit_log(f"Database backup created: {os.path.basename(bak_filepath)} ({raw_size_mb:.2f} MB). Compressing with Level 9 Deflate...", "info", log_cb)
+        if status_cb:
+            status_cb(f"Compressing {db_name} with Level 9 Deflate...")
         
         # Prefer saving compressed .zip archive in the user-specified destination folder
         target_zip_filepath = zip_filepath
@@ -482,6 +598,20 @@ def generate_and_compress_backup(folder, db_name, sql_server, sql_user="", sql_p
         with zipfile.ZipFile(target_zip_filepath, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as zipf:
             zipf.write(bak_filepath, arcname=bak_filename)
             
+        if (cancel_check and cancel_check()) or backup_controller.is_cancelled():
+            emit_log(f"Compression for {db_name} interrupted by emergency stop. Purging files...", "warning", log_cb)
+            if os.path.exists(target_zip_filepath):
+                try:
+                    os.remove(target_zip_filepath)
+                except Exception:
+                    pass
+            if os.path.exists(bak_filepath):
+                try:
+                    os.remove(bak_filepath)
+                except Exception:
+                    pass
+            return None
+
         # PHASE 1 STORAGE CLEANUP: Remove raw .bak to reclaim local disk space
         if os.path.exists(target_zip_filepath):
             try:
@@ -502,13 +632,14 @@ def generate_and_compress_backup(folder, db_name, sql_server, sql_user="", sql_p
 # 5. CLOUD STORAGE UPLOAD & TELEMETRY
 # =============================================================================
 
-def upload_to_google_drive(creds, file_path, folder_id, retries=3, log_cb=None):
+def upload_to_google_drive(creds, file_path, folder_id, retries=3, log_cb=None, status_cb=None, cancel_check=None):
     """
     Streams a local backup archive to the configured Google Drive folder.
     
     Features:
-    - Uses resumable chunked upload (MediaFileUpload with resumable=True).
-    - Implements exponential retry backoff (up to 3 attempts with 10s delay).
+    - Uses resumable chunked upload (MediaFileUpload with chunksize=2MB and resumable=True).
+    - Emergency stop awareness: monitors backup_controller and cancel_check to instantly abort upload.
+    - Implements exponential retry backoff with non-blocking cancel checks.
     - Traps Google Drive quota exhaustion errors (HTTP 403 storageQuotaExceeded).
     - Sets public reader permissions so download links can be accessed by authorized reviewers.
     - Resolves and returns the canonical webViewLink URL.
@@ -521,19 +652,34 @@ def upload_to_google_drive(creds, file_path, folder_id, retries=3, log_cb=None):
         return None
         
     for attempt in range(1, retries + 1):
+        if (cancel_check and cancel_check()) or backup_controller.is_cancelled():
+            emit_log(f"Upload of {file_name} aborted before attempt {attempt}.", "warning", log_cb)
+            return None
+
         try:
             emit_log(f"Uploading {file_name} to Google Drive (Attempt {attempt}/{retries})...", "info", log_cb)
             file_metadata = {
                 'name': file_name,
                 'parents': [folder_id]
             }
-            media = MediaFileUpload(file_path, resumable=True)
-            uploaded_file = drive_service.files().create(
+            # Stream in 2MB chunks for fine-grained progress and instantaneous emergency abort
+            media = MediaFileUpload(file_path, chunksize=2 * 1024 * 1024, resumable=True)
+            request = drive_service.files().create(
                 body=file_metadata,
                 media_body=media,
                 fields='id, webViewLink'
-            ).execute()
+            )
             
+            uploaded_file = None
+            while uploaded_file is None:
+                if (cancel_check and cancel_check()) or backup_controller.is_cancelled():
+                    emit_log(f"Upload of {file_name} aborted by user during transfer.", "warning", log_cb)
+                    return None
+                status, uploaded_file = request.next_chunk()
+                if status and status_cb:
+                    pct = int(status.progress() * 100)
+                    status_cb(f"Uploading {file_name} ({pct}%)...")
+
             file_id = uploaded_file.get('id')
             link = uploaded_file.get('webViewLink') or f"https://drive.google.com/file/d/{file_id}/view?usp=sharing"
             if link:
@@ -542,7 +688,7 @@ def upload_to_google_drive(creds, file_path, folder_id, retries=3, log_cb=None):
                 try:
                     permission = {'type': 'anyone', 'role': 'reader'}
                     drive_service.permissions().create(fileId=file_id, body=permission).execute()
-                    emit_log(f"Permissions configured: Shareable link is active.", "info", log_cb)
+                    emit_log("Permissions configured: Shareable link is active.", "info", log_cb)
                 except Exception as perm_err:
                     emit_log(f"Public permission notice: {perm_err}", "warning", log_cb)
                 return link
@@ -553,11 +699,16 @@ def upload_to_google_drive(creds, file_path, folder_id, retries=3, log_cb=None):
                 return None
             emit_log(f"Google Drive API error: {err}", "error", log_cb)
         except Exception as e:
+            if (cancel_check and cancel_check()) or backup_controller.is_cancelled():
+                return None
             emit_log(f"Network error during upload: {e}", "error", log_cb)
             
         if attempt < retries:
             emit_log("Retrying upload in 10 seconds...", "info", log_cb)
-            time.sleep(10)
+            for _ in range(20):
+                if (cancel_check and cancel_check()) or backup_controller.is_cancelled():
+                    return None
+                time.sleep(0.5)
             
     emit_log(f"Upload failed after {retries} attempts for {file_name}.", "critical", log_cb)
     return None
@@ -617,15 +768,15 @@ def update_google_sheet(creds, sheet_id, backup_filename, file_size_str, downloa
 # 6. MASTER WORKFLOW ORCHESTRATION & STORAGE CLEANUP
 # =============================================================================
 
-def run_full_backup(config=None, log_cb=None, progress_cb=None, status_cb=None):
+def run_full_backup(config=None, log_cb=None, progress_cb=None, status_cb=None, cancel_check=None):
     """
     Master end-to-end backup orchestrator.
     
     Coordinates the entire backup pipeline for all databases defined in TARGET_DATABASES:
-    1. Authenticates Google OAuth 2.0.
-    2. Iterates sequentially across target databases.
+    1. Resets cancellation controller and authenticates Google OAuth 2.0.
+    2. Iterates sequentially across target databases with active cancellation guards.
     3. Triggers native SQL extraction and Level 9 Deflate compression.
-    4. Streams archive to Google Drive.
+    4. Streams archive to Google Drive with 2MB chunked progress & emergency abort.
     5. Appends compliance telemetry to Google Sheets.
     6. PHASE 2 STORAGE CLEANUP: Immediately deletes the local .zip file from the 
        storage drive (if DELETE_LOCAL_AFTER_UPLOAD is true), ensuring zero disk bloat.
@@ -634,6 +785,9 @@ def run_full_backup(config=None, log_cb=None, progress_cb=None, status_cb=None):
     """
     if not config:
         config = load_config()
+
+    # Reset any previous emergency stop signal
+    backup_controller.reset()
         
     emit_log("=" * 60, "info", log_cb)
     emit_log("STARTING DATABASE BACKUP EXECUTION CYCLE", "info", log_cb)
@@ -643,6 +797,12 @@ def run_full_backup(config=None, log_cb=None, progress_cb=None, status_cb=None):
         status_cb("Authenticating with Google Cloud...")
     if progress_cb:
         progress_cb(0.1)
+
+    if (cancel_check and cancel_check()) or backup_controller.is_cancelled():
+        emit_log("Backup cycle cancelled by user before authentication.", "warning", log_cb)
+        if status_cb:
+            status_cb("Backup Cancelled")
+        return False, "Backup operation was cancelled by user."
         
     creds = authenticate(interactive=True, log_cb=log_cb)
     if not creds:
@@ -650,6 +810,12 @@ def run_full_backup(config=None, log_cb=None, progress_cb=None, status_cb=None):
         if status_cb:
             status_cb("Authentication Failed")
         return False, "Google Authentication Failed"
+
+    if (cancel_check and cancel_check()) or backup_controller.is_cancelled():
+        emit_log("Backup cycle cancelled by user after authentication.", "warning", log_cb)
+        if status_cb:
+            status_cb("Backup Cancelled")
+        return False, "Backup operation was cancelled by user."
         
     databases = config.get("TARGET_DATABASES", [])
     if not databases:
@@ -660,6 +826,12 @@ def run_full_backup(config=None, log_cb=None, progress_cb=None, status_cb=None):
     success_count = 0
     
     for idx, db_name in enumerate(databases):
+        if (cancel_check and cancel_check()) or backup_controller.is_cancelled():
+            emit_log("EMERGENCY STOP: Halting backup queue before next database.", "warning", log_cb)
+            if status_cb:
+                status_cb("Backup Cancelled by User")
+            return False, "Backup operation was cancelled by user."
+
         step_progress = 0.15 + (idx / total_dbs) * 0.8
         if progress_cb:
             progress_cb(step_progress)
@@ -675,8 +847,21 @@ def run_full_backup(config=None, log_cb=None, progress_cb=None, status_cb=None):
             sql_server=config.get("SQL_SERVER_NAME", "localhost\\SQLEXPRESS"),
             sql_user=config.get("SQL_USERNAME", ""),
             sql_password=config.get("SQL_PASSWORD", ""),
-            log_cb=log_cb
+            log_cb=log_cb,
+            status_cb=status_cb,
+            cancel_check=cancel_check
         )
+
+        if (cancel_check and cancel_check()) or backup_controller.is_cancelled():
+            emit_log(f"EMERGENCY STOP: Cancelled after processing {db_name}.", "warning", log_cb)
+            if backup_zip and os.path.exists(backup_zip):
+                try:
+                    os.remove(backup_zip)
+                except Exception:
+                    pass
+            if status_cb:
+                status_cb("Backup Cancelled by User")
+            return False, "Backup operation was cancelled by user."
         
         if backup_zip and os.path.exists(backup_zip):
             file_name = os.path.basename(backup_zip)
@@ -690,8 +875,16 @@ def run_full_backup(config=None, log_cb=None, progress_cb=None, status_cb=None):
                 creds=creds,
                 file_path=backup_zip,
                 folder_id=config.get("GOOGLE_DRIVE_FOLDER_ID"),
-                log_cb=log_cb
+                log_cb=log_cb,
+                status_cb=status_cb,
+                cancel_check=cancel_check
             )
+
+            if (cancel_check and cancel_check()) or backup_controller.is_cancelled():
+                emit_log(f"EMERGENCY STOP: Upload stopped for {db_name}.", "warning", log_cb)
+                if status_cb:
+                    status_cb("Backup Cancelled by User")
+                return False, "Backup operation was cancelled by user."
             
             # Step 3: Log telemetry to Google Sheets
             if link:
