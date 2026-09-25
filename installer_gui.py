@@ -233,9 +233,33 @@ class InstallerApp(ctk.CTk):
 
             os.makedirs(self.target_dir, exist_ok=True)
 
+            # Check if this is an upgrade/update of an existing installation
+            is_upgrade = os.path.exists(os.path.join(self.target_dir, "DatabaseBackupApp.exe"))
+            temp_safety_dir = os.path.join(os.environ.get("TEMP", ""), "DB_Backup_Upgrade_Safety")
+
+            # Terminate active process to prevent Windows in-use file locks
+            if is_upgrade:
+                self.status_lbl.configure(text="Terminating active processes for update...")
+                subprocess.run("taskkill /F /IM DatabaseBackupApp.exe >nul 2>&1", shell=True)
+                # Safeguard customer configuration, credentials, tokens, and logs
+                os.makedirs(temp_safety_dir, exist_ok=True)
+                for save_file in ["config.json", "credentials.json", "token.json", "backup_log.txt"]:
+                    src_f = os.path.join(self.target_dir, save_file)
+                    if os.path.exists(src_f):
+                        shutil.copy2(src_f, os.path.join(temp_safety_dir, save_file))
+
             # Step 1: Copy application payload via Robocopy
+            self.status_lbl.configure(text="Copying application binaries and libraries...")
             cmd = f'robocopy "{self.source_app_dir}" "{self.target_dir}" /E /IS /IT'
             subprocess.run(cmd, shell=True)
+
+            # Restore customer settings if this was an upgrade
+            if is_upgrade and os.path.exists(temp_safety_dir):
+                for save_file in ["config.json", "credentials.json", "token.json", "backup_log.txt"]:
+                    backed_f = os.path.join(temp_safety_dir, save_file)
+                    if os.path.exists(backed_f):
+                        shutil.copy2(backed_f, os.path.join(self.target_dir, save_file))
+                shutil.rmtree(temp_safety_dir, ignore_errors=True)
 
             self.progress.set(0.7)
             self.status_lbl.configure(text="Creating desktop and start menu shortcuts...")
@@ -273,7 +297,28 @@ class InstallerApp(ctk.CTk):
                 self.status_lbl.configure(text="Configuring Windows Task Scheduler...")
                 self.progress.set(0.85)
                 self.update()
-                sched_cmd = f'schtasks /create /tn "Database Cloud Backup" /tr "\\"{target_exe}\\" --auto" /sc weekly /d MON /st 02:00 /f'
+                
+                # Check if custom schedule settings exist in config.json
+                cfg_path = os.path.join(self.target_dir, "config.json")
+                sched_time = "02:00"
+                sched_days = ["MON"]
+                if os.path.exists(cfg_path):
+                    try:
+                        with open(cfg_path, 'r', encoding='utf-8') as f:
+                            c_data = json.load(f)
+                            sched_time = c_data.get("SCHEDULE_TIME", "02:00")
+                            c_days = c_data.get("SCHEDULE_DAYS")
+                            if c_days:
+                                sched_days = c_days if isinstance(c_days, list) else [c_days]
+                    except Exception:
+                        pass
+                
+                is_daily = ("DAILY" in sched_days or len(sched_days) == 7)
+                if is_daily:
+                    sched_cmd = f'schtasks /create /tn "Database Cloud Backup" /tr "\\"{target_exe}\\" --auto" /sc daily /st {sched_time} /f'
+                else:
+                    days_csv = ",".join([d.strip().upper() for d in sched_days])
+                    sched_cmd = f'schtasks /create /tn "Database Cloud Backup" /tr "\\"{target_exe}\\" --auto" /sc weekly /d {days_csv} /st {sched_time} /f'
                 subprocess.run(sched_cmd, shell=True)
 
             # Step 5: Install self-migrating Uninstaller & register with Windows Installed Apps
@@ -284,9 +329,15 @@ class InstallerApp(ctk.CTk):
 
             # Step 6: Finalize installation
             self.progress.set(1.0)
-            self.status_lbl.configure(text="Installation Complete!", text_color="#10b981")
+            status_text = "Update Complete!" if is_upgrade else "Installation Complete!"
+            self.status_lbl.configure(text=status_text, text_color="#10b981")
             self.btn_install.configure(text="Finished", state="normal", command=self._finish)
-            messagebox.showinfo("Success", "Database Cloud Backup was installed successfully!\n\nA shortcut has been created on your Desktop.")
+            
+            if is_upgrade:
+                msg = "Database Cloud Backup was updated successfully!\n\nAll existing databases, settings, and Google account credentials have been preserved."
+            else:
+                msg = "Database Cloud Backup was installed successfully!\n\nA shortcut has been created on your Desktop."
+            messagebox.showinfo("Success", msg)
 
             # Launch application if requested
             if self.cb_launch.get():
@@ -308,49 +359,39 @@ class InstallerApp(ctk.CTk):
 
 def create_uninstaller_script(target_dir, target_ico=""):
     """
-    Creates a robust, self-migrating uninstaller script in target_dir and
+    Creates a robust uninstaller script in target_dir and
     registers the application in Windows Settings > Installed Apps (Add or Remove Programs).
     """
     uninstall_bat_content = r'''@echo off
 setlocal EnableDelayedExpansion
-
 title Database Cloud Backup - Clean Uninstaller
 
-set "APP_DIR=%~1"
-if "%APP_DIR%"=="" set "APP_DIR=%~dp0"
-if "%APP_DIR:~-1%"=="\" set "APP_DIR=%APP_DIR:~0,-1%"
+:: 1. Identify Target Installation Directory
+set "TARGET_DIR=%~dp0"
+if "!TARGET_DIR:~-1!"=="\" set "TARGET_DIR=!TARGET_DIR:~0,-1!"
 
-:: Migrate execution to %TEMP% so Windows releases all file locks on APP_DIR
-if /i not "%~dp0"=="%TEMP%\" (
-    copy /y "%~f0" "%TEMP%\Uninstall_DatabaseBackupApp.bat" >nul 2>&1
-    start "" "%TEMP%\Uninstall_DatabaseBackupApp.bat" "%APP_DIR%" %2
-    exit /b 0
-)
-
-:: Ensure working directory is %TEMP%, completely releasing APP_DIR
-cd /d "%TEMP%"
-
-if /i not "%~2"=="/quiet" if /i not "%~2"=="/silent" (
+:: 2. Interactive Confirmation (only if not silent)
+if /i not "%~1"=="/silent" if /i not "%~1"=="/quiet" (
     cls
     echo ============================================================
-    echo   UNINSTALL DATABASE CLOUD BACKUP
+    echo   DATABASE CLOUD BACKUP - UNINSTALLER
     echo ============================================================
     echo.
-    echo Target Directory: "%APP_DIR%"
+    echo Target Installation Directory:
+    echo   !TARGET_DIR!
     echo.
     echo This will cleanly remove:
-    echo  - Running application processes
-    echo  - Windows Task Scheduler automated backup jobs
-    echo  - Desktop and Start Menu shortcuts
-    echo  - Windows Installed Apps registry entries
-    echo  - Application binaries and configurations
+    echo   - Running application processes
+    echo   - Windows Task Scheduler automated backup jobs
+    echo   - Desktop and Start Menu shortcuts
+    echo   - Windows Installed Apps registry entries
+    echo   - Application binaries and configurations
     echo.
     set /p CONFIRM="Are you sure you want to completely uninstall? (Y/N): "
     if /i not "!CONFIRM!"=="Y" (
         echo.
         echo Uninstallation cancelled by user.
-        timeout /t 2 >nul
-        (goto) 2>nul & del "%~f0"
+        ping 127.0.0.1 -n 3 >nul
         exit /b 0
     )
 )
@@ -360,38 +401,26 @@ echo [1/5] Terminating active application processes...
 taskkill /F /IM DatabaseBackupApp.exe >nul 2>&1
 taskkill /F /IM python.exe /FI "WINDOWTITLE eq Enterprise Database Backup*" >nul 2>&1
 taskkill /F /IM sqlcmd.exe /FI "WINDOWTITLE eq Enterprise Database Backup*" >nul 2>&1
-timeout /t 1 /nobreak >nul
+ping 127.0.0.1 -n 2 >nul
 
-echo [2/5] Removing Windows Task Scheduler tasks and services...
+echo [2/5] Removing Windows Task Scheduler tasks...
 schtasks /delete /tn "Database Cloud Backup" /f >nul 2>&1
 schtasks /delete /tn "Database Cloud Backup (System Service)" /f >nul 2>&1
-schtasks /delete /tn "Database Cloud Backup Service" /f >nul 2>&1
+schtasks /delete /tn "EnterpriseDatabaseBackup" /f >nul 2>&1
 
 echo [3/5] Removing Desktop and Start Menu shortcuts...
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "Remove-Item -Path (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Database Cloud Backup.lnk') -Force -ErrorAction SilentlyContinue; " ^
-  "Remove-Item -Path (Join-Path ([Environment]::GetFolderPath('Programs')) 'Database Cloud Backup.lnk') -Force -ErrorAction SilentlyContinue; " ^
-  "Remove-Item -Path (Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) 'Database Cloud Backup.lnk') -Force -ErrorAction SilentlyContinue; " ^
-  "Remove-Item -Path (Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'Database Cloud Backup.lnk') -Force -ErrorAction SilentlyContinue;" >nul 2>&1
-del /f /q "%USERPROFILE%\Desktop\Database Cloud Backup.lnk" >nul 2>&1
-del /f /q "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Database Cloud Backup.lnk" >nul 2>&1
+del /f /q "%USERPROFILE%\Desktop\*Database*Backup*.lnk" >nul 2>&1
+del /f /q "%PUBLIC%\Desktop\*Database*Backup*.lnk" >nul 2>&1
+del /f /q "%APPDATA%\Microsoft\Windows\Start Menu\Programs\*Database*Backup*.lnk" >nul 2>&1
+del /f /q "%ALLUSERSPROFILE%\Microsoft\Windows\Start Menu\Programs\*Database*Backup*.lnk" >nul 2>&1
 
 echo [4/5] Removing Windows Registry registration...
 reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\DatabaseBackupApp" /f >nul 2>&1
+reg delete "HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\DatabaseBackupApp" /f >nul 2>&1
 
 echo [5/5] Purging application directory...
-if exist "%APP_DIR%" (
-    timeout /t 1 /nobreak >nul
-    rmdir /s /q "%APP_DIR%" >nul 2>&1
-    if exist "%APP_DIR%" (
-        timeout /t 1 /nobreak >nul
-        powershell -NoProfile -ExecutionPolicy Bypass -Command "Remove-Item -LiteralPath '%APP_DIR%' -Recurse -Force -ErrorAction SilentlyContinue" >nul 2>&1
-    )
-    if exist "%APP_DIR%" (
-        timeout /t 1 /nobreak >nul
-        rmdir /s /q "%APP_DIR%" >nul 2>&1
-    )
-)
+cd /d "%TEMP%"
+start "" /b powershell -NoProfile -WindowStyle Hidden -Command "Start-Sleep -Seconds 1; Remove-Item -LiteralPath '!TARGET_DIR!' -Recurse -Force -ErrorAction SilentlyContinue"
 
 echo.
 echo ============================================================
@@ -400,10 +429,10 @@ echo ============================================================
 echo Database Cloud Backup was completely and cleanly removed.
 echo.
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('Database Cloud Backup has been completely and cleanly uninstalled from this computer.', 'Uninstallation Complete', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)" >nul 2>&1
+if /i not "%~1"=="/silent" if /i not "%~1"=="/quiet" (
+    powershell -NoProfile -Command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('Database Cloud Backup has been completely and cleanly uninstalled from this computer.', 'Uninstallation Complete', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)" >nul 2>&1
+)
 
-(goto) 2>nul & del "%~f0"
 exit /b 0
 '''
     try:
@@ -421,7 +450,7 @@ exit /b 0
             f'reg add "{reg_key}" /v "Publisher" /d "Dulnindu Saranga" /t REG_SZ /f',
             f'reg add "{reg_key}" /v "InstallLocation" /d "{target_dir}" /t REG_SZ /f',
             f'reg add "{reg_key}" /v "DisplayIcon" /d "{target_ico}" /t REG_SZ /f',
-            f'reg add "{reg_key}" /v "UninstallString" /d "cmd.exe /c \\"{uninstall_path}\\"" /t REG_SZ /f',
+            f'reg add "{reg_key}" /v "UninstallString" /d "\\"{uninstall_path}\\"" /t REG_SZ /f',
             f'reg add "{reg_key}" /v "NoModify" /d 1 /t REG_DWORD /f',
             f'reg add "{reg_key}" /v "NoRepair" /d 1 /t REG_DWORD /f'
         ]

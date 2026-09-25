@@ -216,6 +216,7 @@ def load_config():
         "GOOGLE_DRIVE_FOLDER_ID": "1LKuo7j4cHvvP0-p0C6PVo6gdkgoVBaQ4",
         "GOOGLE_SHEET_ID": "1FAnmfTAixeDgwA5f3TvJ9IEtFp1OuFTyw3UpDiOdvwg",
         "STRICTLY_MONDAYS_ONLY": True,
+        "SCHEDULE_DAYS": ["MON"],
         "SCHEDULE_TIME": "02:00",
         "DELETE_LOCAL_AFTER_UPLOAD": True
     }
@@ -634,12 +635,16 @@ def generate_and_compress_backup(folder, db_name, sql_server, sql_user="", sql_p
 # 5. CLOUD STORAGE UPLOAD & TELEMETRY
 # =============================================================================
 
-def upload_to_google_drive(creds, file_path, folder_id, retries=3, log_cb=None, status_cb=None, cancel_check=None):
+def upload_to_google_drive(creds, file_path, folder_id, retries=3, log_cb=None, status_cb=None, progress_cb=None, telemetry_cb=None, cancel_check=None):
     """
     Streams a local backup archive to the configured Google Drive folder.
     
     Features:
     - Uses resumable chunked upload (MediaFileUpload with chunksize=2MB and resumable=True).
+    - Real-time Telemetry: calculates live upload speed (MB/s, KB/s), percentage (0-100%),
+      bytes transferred, and estimated time remaining (ETA).
+    - Dispatches live telemetry to status_cb, progress_cb, and telemetry_cb for rich GUI rendering.
+    - Periodic logging: Emits live speed & progress updates to log_cb every ~4 seconds.
     - Emergency stop awareness: monitors backup_controller and cancel_check to instantly abort upload.
     - Implements exponential retry backoff with non-blocking cancel checks.
     - Traps Google Drive quota exhaustion errors (HTTP 403 storageQuotaExceeded).
@@ -647,6 +652,11 @@ def upload_to_google_drive(creds, file_path, folder_id, retries=3, log_cb=None, 
     - Resolves and returns the canonical webViewLink URL.
     """
     file_name = os.path.basename(file_path)
+    try:
+        total_file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
+    except Exception:
+        total_file_size = 0
+
     try:
         drive_service = build('drive', 'v3', credentials=creds)
     except Exception as e:
@@ -659,12 +669,12 @@ def upload_to_google_drive(creds, file_path, folder_id, retries=3, log_cb=None, 
             return None
 
         try:
-            emit_log(f"Uploading {file_name} to Google Drive (Attempt {attempt}/{retries})...", "info", log_cb)
+            emit_log(f"Uploading {file_name} to Google Drive ({format_file_size(total_file_size)}, Attempt {attempt}/{retries})...", "info", log_cb)
             file_metadata = {
                 'name': file_name,
                 'parents': [folder_id]
             }
-            # Stream in 2MB chunks for fine-grained progress and instantaneous emergency abort
+            # Stream in 2MB chunks for fine-grained progress, live speed calculation, and instantaneous emergency abort
             media = MediaFileUpload(file_path, chunksize=2 * 1024 * 1024, resumable=True)
             request = drive_service.files().create(
                 body=file_metadata,
@@ -673,19 +683,100 @@ def upload_to_google_drive(creds, file_path, folder_id, retries=3, log_cb=None, 
             )
             
             uploaded_file = None
+            upload_start_time = time.time()
+            last_logged_time = upload_start_time
+            last_logged_pct = 0.0
+
             while uploaded_file is None:
                 if (cancel_check and cancel_check()) or backup_controller.is_cancelled():
                     emit_log(f"Upload of {file_name} aborted by user during transfer.", "warning", log_cb)
                     return None
+                    
                 status, uploaded_file = request.next_chunk()
-                if status and status_cb:
-                    pct = int(status.progress() * 100)
-                    status_cb(f"Uploading {file_name} ({pct}%)...")
+                now = time.time()
+                elapsed = max(0.001, now - upload_start_time)
+
+                if status:
+                    bytes_done = status.resumable_progress
+                    total_bytes = status.total_size or total_file_size or 1
+                    fraction = min(1.0, max(0.0, float(status.progress() if status.progress() is not None else (bytes_done / total_bytes))))
+                    pct = fraction * 100.0
+                    
+                    # Compute transfer speed and ETA
+                    speed_bps = (bytes_done / elapsed) if (elapsed > 0.1 and bytes_done > 0) else 0.0
+                    if speed_bps > 0:
+                        speed_str = f"{format_file_size(speed_bps)}/s"
+                        remaining_bytes = max(0, total_bytes - bytes_done)
+                        eta_seconds = int(remaining_bytes / speed_bps)
+                        if eta_seconds < 60:
+                            eta_str = f"{eta_seconds}s"
+                        elif eta_seconds < 3600:
+                            eta_str = f"{eta_seconds // 60}m {eta_seconds % 60:02d}s"
+                        else:
+                            eta_str = f"{eta_seconds // 3600}h {(eta_seconds % 3600) // 60}m"
+                    else:
+                        speed_str = "Calculating..."
+                        eta_str = "--"
+
+                    uploaded_str = format_file_size(bytes_done)
+                    total_str = format_file_size(total_bytes)
+                    
+                    status_text = f"Uploading {file_name}: {pct:.1f}% ({uploaded_str} / {total_str}) • {speed_str} • ETA: {eta_str}"
+                    if status_cb:
+                        status_cb(status_text)
+                    if progress_cb:
+                        progress_cb(fraction)
+                    if telemetry_cb:
+                        try:
+                            telemetry_cb({
+                                "file_name": file_name,
+                                "bytes_done": bytes_done,
+                                "total_bytes": total_bytes,
+                                "percent": pct,
+                                "fraction": fraction,
+                                "speed_bps": speed_bps,
+                                "speed_str": speed_str,
+                                "eta_str": eta_str,
+                                "elapsed": elapsed
+                            })
+                        except Exception:
+                            pass
+
+                    # Periodic log emission (every ~4 seconds or every 25% advancement)
+                    if (now - last_logged_time >= 4.0) or (pct - last_logged_pct >= 25.0):
+                        emit_log(f"Upload progress: {pct:.1f}% ({uploaded_str} / {total_str}) | Speed: {speed_str} | ETA: {eta_str}", "info", log_cb)
+                        last_logged_time = now
+                        last_logged_pct = pct
+
+            total_elapsed = max(0.001, time.time() - upload_start_time)
+            final_size = total_file_size or (os.path.getsize(file_path) if os.path.exists(file_path) else 0)
+            avg_speed_bps = (final_size / total_elapsed) if total_elapsed > 0 else 0.0
+            avg_speed_str = f"{format_file_size(avg_speed_bps)}/s"
+
+            if progress_cb:
+                progress_cb(1.0)
+            if status_cb:
+                status_cb(f"Uploaded {file_name} (100%) in {total_elapsed:.1f}s @ {avg_speed_str}")
+            if telemetry_cb:
+                try:
+                    telemetry_cb({
+                        "file_name": file_name,
+                        "bytes_done": final_size,
+                        "total_bytes": final_size,
+                        "percent": 100.0,
+                        "fraction": 1.0,
+                        "speed_bps": avg_speed_bps,
+                        "speed_str": avg_speed_str,
+                        "eta_str": "0s",
+                        "elapsed": total_elapsed
+                    })
+                except Exception:
+                    pass
 
             file_id = uploaded_file.get('id')
             link = uploaded_file.get('webViewLink') or f"https://drive.google.com/file/d/{file_id}/view?usp=sharing"
             if link:
-                emit_log(f"Upload complete for {file_name}! Link: {link}", "info", log_cb)
+                emit_log(f"Upload complete for {file_name}! (Transferred in {total_elapsed:.1f}s @ {avg_speed_str}) Link: {link}", "info", log_cb)
                 # Attempt to set public read permission
                 try:
                     permission = {'type': 'anyone', 'role': 'reader'}
@@ -770,7 +861,7 @@ def update_google_sheet(creds, sheet_id, backup_filename, file_size_str, downloa
 # 6. MASTER WORKFLOW ORCHESTRATION & STORAGE CLEANUP
 # =============================================================================
 
-def run_full_backup(config=None, log_cb=None, progress_cb=None, status_cb=None, cancel_check=None):
+def run_full_backup(config=None, log_cb=None, progress_cb=None, status_cb=None, cancel_check=None, telemetry_cb=None):
     """
     Master end-to-end backup orchestrator.
     
@@ -778,7 +869,7 @@ def run_full_backup(config=None, log_cb=None, progress_cb=None, status_cb=None, 
     1. Resets cancellation controller and authenticates Google OAuth 2.0.
     2. Iterates sequentially across target databases with active cancellation guards.
     3. Triggers native SQL extraction and Level 9 Deflate compression.
-    4. Streams archive to Google Drive with 2MB chunked progress & emergency abort.
+    4. Streams archive to Google Drive with 2MB chunked progress, real-time speed, & emergency abort.
     5. Appends compliance telemetry to Google Sheets.
     6. PHASE 2 STORAGE CLEANUP: Immediately deletes the local .zip file from the 
        storage drive (if DELETE_LOCAL_AFTER_UPLOAD is true), ensuring zero disk bloat.
@@ -834,9 +925,10 @@ def run_full_backup(config=None, log_cb=None, progress_cb=None, status_cb=None, 
                 status_cb("Backup Cancelled by User")
             return False, "Backup operation was cancelled by user."
 
-        step_progress = 0.15 + (idx / total_dbs) * 0.8
+        db_weight = 0.80 / max(1, total_dbs)
+        db_base = 0.15 + (idx / max(1, total_dbs)) * 0.80
         if progress_cb:
-            progress_cb(step_progress)
+            progress_cb(db_base)
         if status_cb:
             status_cb(f"Processing database {idx + 1}/{total_dbs}: {db_name}")
             
@@ -870,15 +962,25 @@ def run_full_backup(config=None, log_cb=None, progress_cb=None, status_cb=None, 
             file_size_bytes = os.path.getsize(backup_zip)
             file_size_str = format_file_size(file_size_bytes)
             
-            # Step 2: Stream archive to Google Drive
+            # Step 2: Stream archive to Google Drive with smooth real-time progress bridge
             if status_cb:
                 status_cb(f"Uploading {file_name} ({file_size_str}) to Google Drive...")
+
+            def _upload_progress_bridge(upload_fraction):
+                if progress_cb:
+                    # Compression takes 30% of this DB's phase, upload takes 70%
+                    overall = db_base + (0.30 * db_weight) + (upload_fraction * 0.70 * db_weight)
+                    progress_cb(min(0.98, max(0.0, overall)))
+
             link = upload_to_google_drive(
                 creds=creds,
                 file_path=backup_zip,
                 folder_id=config.get("GOOGLE_DRIVE_FOLDER_ID"),
+                retries=3,
                 log_cb=log_cb,
                 status_cb=status_cb,
+                progress_cb=_upload_progress_bridge,
+                telemetry_cb=telemetry_cb,
                 cancel_check=cancel_check
             )
 
@@ -1036,9 +1138,15 @@ def get_scheduler_status():
     return False, "Not Scheduled", "NONE"
 
 
-def enable_scheduler(executable_path=None, day="MON", time_str="02:00", as_system_service=True, on_boot=False):
+def enable_scheduler(executable_path=None, days="MON", time_str="02:00", as_system_service=True, on_boot=False):
     """
     Registers the backup cycle in Windows Task Scheduler using schtasks /create.
+    
+    Supports:
+    - Any single day (e.g. 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN')
+    - Multiple days (e.g. ['MON', 'WED', 'FRI'] or 'MON,WED,FRI')
+    - Daily execution (['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'] or 'DAILY')
+    - Any time in 24-hour format (e.g. '02:00', '14:30', '23:00')
     
     Modes:
     1. Unattended Windows System Service (as_system_service=True, Default):
@@ -1060,12 +1168,48 @@ def enable_scheduler(executable_path=None, day="MON", time_str="02:00", as_syste
     else:
         cmd_run = f'\\"{executable_path}\\" --auto'
 
+    # Normalize days input
+    if isinstance(days, str):
+        if "," in days:
+            days_list = [d.strip().upper() for d in days.split(",") if d.strip()]
+        else:
+            days_list = [days.strip().upper()]
+    elif isinstance(days, (list, tuple, set)):
+        days_list = [str(d).strip().upper() for d in days if str(d).strip()]
+    else:
+        days_list = ["MON"]
+
+    all_days = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
+    is_daily = ("DAILY" in days_list or "ALL" in days_list or "*" in days_list or set(days_list) == set(all_days))
+
+    day_names_map = {
+        "MON": "Monday", "TUE": "Tuesday", "WED": "Wednesday",
+        "THU": "Thursday", "FRI": "Friday", "SAT": "Saturday", "SUN": "Sunday"
+    }
+
+    if is_daily:
+        schedule_args = f'/sc daily /st {time_str}'
+        friendly_schedule = f"Every Day at {time_str}"
+    else:
+        ordered_days = [d for d in all_days if d in days_list]
+        if not ordered_days:
+            ordered_days = ["MON"]
+        days_csv = ",".join(ordered_days)
+        schedule_args = f'/sc weekly /d {days_csv} /st {time_str}'
+        friendly_days = [day_names_map.get(d, d) for d in ordered_days]
+        if len(friendly_days) == 1:
+            friendly_schedule = f"Every {friendly_days[0]} at {time_str}"
+        elif len(friendly_days) == 2:
+            friendly_schedule = f"Every {friendly_days[0]} and {friendly_days[1]} at {time_str}"
+        else:
+            friendly_schedule = f"Every {', '.join(friendly_days[:-1])}, and {friendly_days[-1]} at {time_str}"
+
     if as_system_service:
         # First remove any user-level task to avoid conflicting double-executions
         subprocess.run(f'schtasks /delete /tn "{TASK_SCHEDULER_NAME}" /f', shell=True, capture_output=True)
         
         target_task = SYSTEM_SERVICE_TASK_NAME
-        cmd = f'schtasks /create /tn "{target_task}" /tr "{cmd_run}" /sc weekly /d {day} /st {time_str} /ru "NT AUTHORITY\\SYSTEM" /rl HIGHEST /f'
+        cmd = f'schtasks /create /tn "{target_task}" /tr "{cmd_run}" {schedule_args} /ru "NT AUTHORITY\\SYSTEM" /rl HIGHEST /f'
         
         if not is_admin():
             ok = run_command_elevated(cmd)
@@ -1074,7 +1218,7 @@ def enable_scheduler(executable_path=None, day="MON", time_str="02:00", as_syste
                 if on_boot:
                     boot_cmd = f'schtasks /create /tn "{DAEMON_SERVICE_TASK_NAME}" /tr "{cmd_run}" /sc ONSTART /ru "NT AUTHORITY\\SYSTEM" /rl HIGHEST /f'
                     run_command_elevated(boot_cmd)
-                return True, f"Windows System Service Active: Every {day} at {time_str} (Unattended Session 0)."
+                return True, f"Windows System Service Active: {friendly_schedule} (Unattended Session 0)."
             else:
                 return False, "Administrator elevation was cancelled or denied."
         else:
@@ -1084,7 +1228,7 @@ def enable_scheduler(executable_path=None, day="MON", time_str="02:00", as_syste
                 if on_boot:
                     boot_cmd = f'schtasks /create /tn "{DAEMON_SERVICE_TASK_NAME}" /tr "{cmd_run}" /sc ONSTART /ru "NT AUTHORITY\\SYSTEM" /rl HIGHEST /f'
                     subprocess.run(boot_cmd, shell=True, capture_output=True)
-                return True, f"Windows System Service Active: Every {day} at {time_str} (Unattended Session 0)."
+                return True, f"Windows System Service Active: {friendly_schedule} (Unattended Session 0)."
             else:
                 err = res.stderr or res.stdout
                 return False, f"Scheduler error: {err}"
@@ -1094,11 +1238,11 @@ def enable_scheduler(executable_path=None, day="MON", time_str="02:00", as_syste
         subprocess.run(f'schtasks /delete /tn "{DAEMON_SERVICE_TASK_NAME}" /f', shell=True, capture_output=True)
         
         target_task = TASK_SCHEDULER_NAME
-        cmd = f'schtasks /create /tn "{target_task}" /tr "{cmd_run}" /sc weekly /d {day} /st {time_str} /f'
+        cmd = f'schtasks /create /tn "{target_task}" /tr "{cmd_run}" {schedule_args} /f'
         res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
         if res.returncode == 0:
-            emit_log(f"Standard user task '{target_task}' created successfully (Every {day} at {time_str}).")
-            return True, f"Scheduled successfully: Every {day} at {time_str}."
+            emit_log(f"Standard user task '{target_task}' created successfully ({friendly_schedule}).")
+            return True, f"Scheduled successfully: {friendly_schedule}."
         else:
             err = res.stderr or res.stdout
             emit_log(f"Failed to create scheduled task: {err}", "error")

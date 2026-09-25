@@ -19,3 +19,6 @@ TestBackups/
 build/
 dist/
 *.spec
+
+# Scratch & Temporary Testing
+scratch/

@@ -27,6 +27,7 @@ Key Architectural & Design Decisions:
 
 import os
 import sys
+import re
 import json
 import webbrowser
 import threading
@@ -256,18 +257,31 @@ class BackupAutomationApp(ctk.CTk):
         )
         self.btn_stop_backup.pack(side="left", padx=6)
 
-        # Dynamic progress bar
-        self.progress_bar = ctk.CTkProgressBar(action_card, width=450, height=12, corner_radius=6)
-        self.progress_bar.pack(pady=(15, 8))
+        # Dynamic master progress bar
+        self.progress_bar = ctk.CTkProgressBar(action_card, width=520, height=14, corner_radius=7)
+        self.progress_bar.pack(pady=(15, 6))
         self.progress_bar.set(0)
 
+        # Status text label (Action / Phase title)
         self.status_text_label = ctk.CTkLabel(
             action_card,
             text="Ready to execute backup",
             font=ctk.CTkFont(size=13, weight="bold"),
             text_color="#60a5fa"
         )
-        self.status_text_label.pack(pady=(0, 15))
+        self.status_text_label.pack(pady=(0, 4))
+
+        # Real-time Cloud Telemetry Pill Box (Upload Speed, ETA, Bytes Done / Total)
+        self.telemetry_card = ctk.CTkFrame(action_card, fg_color=("#1e293b", "#0f172a"), corner_radius=8, border_width=1, border_color="#334155")
+        self.telemetry_card.pack(fill="x", padx=40, pady=(2, 14))
+
+        self.telemetry_label = ctk.CTkLabel(
+            self.telemetry_card,
+            text="⚡ Upload Speed: Idle   •   ⏳ ETA: --   •   ☁ Target: Google Drive",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color="#94a3b8"
+        )
+        self.telemetry_label.pack(padx=12, pady=6)
 
         # Quick access action buttons
         links_frame = ctk.CTkFrame(action_card, fg_color="transparent")
@@ -418,25 +432,103 @@ class BackupAutomationApp(ctk.CTk):
             text="SCHEDULE PARAMETERS & RECOVERY TRIGGERS",
             font=ctk.CTkFont(size=11, weight="bold"),
             text_color="#34d399"
-        ).pack(anchor="w", padx=15, pady=(12, 6))
+        ).pack(anchor="w", padx=15, pady=(12, 4))
 
-        self.monday_only_switch = ctk.CTkSwitch(
-            trigger_card,
-            text="Strictly Mondays Only (Recommended for weekly disaster recovery cycles)",
-            font=ctk.CTkFont(size=13)
+        # 1. Recurrence Frequency Preset Buttons
+        freq_row = ctk.CTkFrame(trigger_card, fg_color="transparent")
+        freq_row.pack(fill="x", padx=15, pady=(4, 8))
+
+        ctk.CTkLabel(freq_row, text="Frequency:", font=ctk.CTkFont(size=12, weight="bold"), text_color="#cbd5e1").pack(side="left", padx=(0, 10))
+
+        self.sched_preset_seg = ctk.CTkSegmentedButton(
+            freq_row,
+            values=["Weekly (Mondays)", "Daily (Every Day)", "Weekdays (Mon-Fri)", "Custom Days"],
+            command=self._on_schedule_preset_changed,
+            font=ctk.CTkFont(size=12)
         )
-        self.monday_only_switch.pack(anchor="w", padx=15, pady=(5, 8))
-        self.monday_only_switch.select()
+        self.sched_preset_seg.pack(side="left", fill="x", expand=True)
 
-        time_row = ctk.CTkFrame(trigger_card, fg_color="transparent")
-        time_row.pack(anchor="w", padx=15, pady=(0, 8))
+        # 2. Interactive Day Selection Pills / Checkboxes
+        days_frame = ctk.CTkFrame(trigger_card, fg_color="#0f172a", corner_radius=6, border_width=1, border_color="#334155")
+        days_frame.pack(fill="x", padx=15, pady=(0, 10))
 
-        ctk.CTkLabel(time_row, text="Execution Time (24h format):", font=ctk.CTkFont(size=13)).pack(side="left", padx=(0, 15))
-        self.entry_sched_time = ctk.CTkEntry(time_row, width=120)
+        ctk.CTkLabel(days_frame, text="Active Days:", font=ctk.CTkFont(size=12, weight="bold"), text_color="#94a3b8").pack(side="left", padx=(12, 10), pady=8)
+
+        self.day_vars = {}
+        self.day_checkboxes = {}
+        days_info = [
+            ("MON", "Mon"),
+            ("TUE", "Tue"),
+            ("WED", "Wed"),
+            ("THU", "Thu"),
+            ("FRI", "Fri"),
+            ("SAT", "Sat"),
+            ("SUN", "Sun"),
+        ]
+
+        for code, label in days_info:
+            var = ctk.BooleanVar(value=(code == "MON"))
+            self.day_vars[code] = var
+            chk = ctk.CTkCheckBox(
+                days_frame,
+                text=label,
+                variable=var,
+                command=self._on_day_checkbox_clicked,
+                font=ctk.CTkFont(size=12, weight="bold"),
+                checkbox_width=20,
+                checkbox_height=20,
+                corner_radius=4,
+                fg_color="#10b981",
+                hover_color="#059669"
+            )
+            chk.pack(side="left", padx=(0, 10), pady=8)
+            self.day_checkboxes[code] = chk
+
+        # 3. Execution Time Row with Real-Time 12-Hour Helper & Quick Presets
+        time_card = ctk.CTkFrame(trigger_card, fg_color="transparent")
+        time_card.pack(fill="x", padx=15, pady=(0, 8))
+
+        time_input_row = ctk.CTkFrame(time_card, fg_color="transparent")
+        time_input_row.pack(fill="x", pady=(0, 6))
+
+        ctk.CTkLabel(time_input_row, text="Execution Time (24h format):", font=ctk.CTkFont(size=13)).pack(side="left", padx=(0, 12))
+        
+        self.entry_sched_time = ctk.CTkEntry(time_input_row, width=100, font=ctk.CTkFont(size=13, weight="bold"))
         self.entry_sched_time.insert(0, self.config_data.get("SCHEDULE_TIME", "02:00"))
         self.entry_sched_time.pack(side="left")
-        ctk.CTkLabel(time_row, text="(e.g. 02:00 for 2:00 AM)", font=ctk.CTkFont(size=11), text_color="#9ca3af").pack(side="left", padx=10)
+        self.entry_sched_time.bind("<KeyRelease>", lambda e: self._update_schedule_summary())
 
+        self.lbl_time_12h = ctk.CTkLabel(time_input_row, text="(2:00 AM)", font=ctk.CTkFont(size=12, weight="bold"), text_color="#38bdf8")
+        self.lbl_time_12h.pack(side="left", padx=(10, 15))
+
+        # Quick Time Preset Pills
+        ctk.CTkLabel(time_input_row, text="Quick Presets:", font=ctk.CTkFont(size=11), text_color="#94a3b8").pack(side="left", padx=(5, 6))
+        
+        for p_label, p_val in [("02:00 AM", "02:00"), ("06:00 AM", "06:00"), ("12:00 PM", "12:00"), ("06:00 PM", "18:00"), ("11:00 PM", "23:00")]:
+            ctk.CTkButton(
+                time_input_row,
+                text=p_label,
+                width=68,
+                height=24,
+                font=ctk.CTkFont(size=10, weight="bold"),
+                fg_color="#334155",
+                hover_color="#475569",
+                command=lambda v=p_val: self._set_quick_time(v)
+            ).pack(side="left", padx=2)
+
+        # 4. Schedule Live Plan Banner
+        self.lbl_sched_summary = ctk.CTkLabel(
+            trigger_card,
+            text="📅 Plan: Every Monday at 02:00 AM",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#a7f3d0",
+            fg_color="#064e3b",
+            corner_radius=6,
+            height=28
+        )
+        self.lbl_sched_summary.pack(fill="x", padx=15, pady=(0, 10))
+
+        # 5. Startup Trigger
         self.chk_boot_trigger = ctk.CTkCheckBox(
             trigger_card,
             text="Register Startup Recovery Trigger (Automatically execute at system boot if missed)",
@@ -746,10 +838,23 @@ class BackupAutomationApp(ctk.CTk):
         self.entry_sheet_id.delete(0, "end")
         self.entry_sheet_id.insert(0, c.get("GOOGLE_SHEET_ID", ""))
 
-        if c.get("STRICTLY_MONDAYS_ONLY", True):
-            self.monday_only_switch.select()
+        sched_days = c.get("SCHEDULE_DAYS")
+        if not sched_days:
+            if c.get("STRICTLY_MONDAYS_ONLY", True):
+                sched_days = ["MON"]
+            else:
+                sched_days = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
+
+        if isinstance(sched_days, str):
+            sched_days = [d.strip().upper() for d in sched_days.split(",") if d.strip()]
         else:
-            self.monday_only_switch.deselect()
+            sched_days = [str(d).strip().upper() for d in sched_days if str(d).strip()]
+
+        for code in ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]:
+            if code in self.day_vars:
+                self.day_vars[code].set(code in sched_days or "DAILY" in sched_days or "ALL" in sched_days)
+
+        self._on_day_checkbox_clicked()
 
         if c.get("DELETE_LOCAL_AFTER_UPLOAD", True):
             self.chk_delete_local.select()
@@ -792,6 +897,11 @@ class BackupAutomationApp(ctk.CTk):
         backup_dir = os.path.normpath(self.entry_backup_folder.get().strip())
         if backup_dir:
             grant_sql_folder_permissions(backup_dir)
+        selected_days = [d for d in ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"] if self.day_vars[d].get()]
+        if not selected_days:
+            selected_days = ["MON"]
+
+        time_val = self.entry_sched_time.get().strip() or "02:00"
 
         new_config = {
             "SQL_SERVER_NAME": self.entry_sql_server.get().strip(),
@@ -802,8 +912,9 @@ class BackupAutomationApp(ctk.CTk):
             "TARGET_DATABASES": db_list,
             "GOOGLE_DRIVE_FOLDER_ID": self.entry_drive_id.get().strip(),
             "GOOGLE_SHEET_ID": self.entry_sheet_id.get().strip(),
-            "STRICTLY_MONDAYS_ONLY": bool(self.monday_only_switch.get()),
-            "SCHEDULE_TIME": self.entry_sched_time.get().strip() or "02:00",
+            "STRICTLY_MONDAYS_ONLY": (selected_days == ["MON"]),
+            "SCHEDULE_DAYS": selected_days,
+            "SCHEDULE_TIME": time_val,
             "DELETE_LOCAL_AFTER_UPLOAD": bool(self.chk_delete_local.get())
         }
 
@@ -815,6 +926,84 @@ class BackupAutomationApp(ctk.CTk):
             messagebox.showinfo("Saved", "Configuration saved successfully!")
         else:
             messagebox.showerror("Error", f"Failed to save configuration:\n{msg}")
+
+    # =========================================================================
+    # SCHEDULE PRESET & DAY SELECTOR HELPERS
+    # =========================================================================
+    def _set_quick_time(self, time_val):
+        """Sets the time entry from a quick preset button."""
+        self.entry_sched_time.delete(0, "end")
+        self.entry_sched_time.insert(0, time_val)
+        self._update_schedule_summary()
+
+    def _on_schedule_preset_changed(self, value):
+        """Updates day checkboxes based on frequency preset button."""
+        if value == "Weekly (Mondays)":
+            for code in ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]:
+                self.day_vars[code].set(code == "MON")
+        elif value == "Daily (Every Day)":
+            for code in ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]:
+                self.day_vars[code].set(True)
+        elif value == "Weekdays (Mon-Fri)":
+            for code in ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]:
+                self.day_vars[code].set(code in ["MON", "TUE", "WED", "THU", "FRI"])
+        self._update_schedule_summary()
+
+    def _on_day_checkbox_clicked(self):
+        """Evaluates active day checkboxes and synchronizes the preset segmented button."""
+        active = [code for code in ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"] if self.day_vars[code].get()]
+        if len(active) == 7:
+            self.sched_preset_seg.set("Daily (Every Day)")
+        elif active == ["MON", "TUE", "WED", "THU", "FRI"]:
+            self.sched_preset_seg.set("Weekdays (Mon-Fri)")
+        elif active == ["MON"]:
+            self.sched_preset_seg.set("Weekly (Mondays)")
+        else:
+            self.sched_preset_seg.set("Custom Days")
+        self._update_schedule_summary()
+
+    def _update_schedule_summary(self):
+        """Updates live 12-hour format badge and schedule summary description."""
+        time_str = self.entry_sched_time.get().strip() or "02:00"
+        time_12h = time_str
+        
+        # Parse 24h into 12h
+        m = re.match(r"^([01]?[0-9]|2[0-3]):([0-5][0-9])$", time_str)
+        if m:
+            hh = int(m.group(1))
+            mm = m.group(2)
+            suffix = "AM" if hh < 12 else "PM"
+            hh12 = hh if (1 <= hh <= 12) else (hh - 12 if hh > 12 else 12)
+            time_12h = f"{hh12}:{mm} {suffix}"
+            self.lbl_time_12h.configure(text=f"({time_12h})", text_color="#38bdf8")
+        else:
+            self.lbl_time_12h.configure(text="(Invalid 24h Time)", text_color="#ef4444")
+
+        active = [code for code in ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"] if self.day_vars[code].get()]
+        day_names_map = {
+            "MON": "Monday", "TUE": "Tuesday", "WED": "Wednesday",
+            "THU": "Thursday", "FRI": "Friday", "SAT": "Saturday", "SUN": "Sunday"
+        }
+        
+        if len(active) == 7:
+            desc = f"📅 Plan: Every Day at {time_12h} (24h: {time_str})"
+            bg_col = "#064e3b"
+            txt_col = "#a7f3d0"
+        elif active == ["MON", "TUE", "WED", "THU", "FRI"]:
+            desc = f"📅 Plan: Weekdays (Mon through Fri) at {time_12h} (24h: {time_str})"
+            bg_col = "#064e3b"
+            txt_col = "#a7f3d0"
+        elif len(active) > 0:
+            names = [day_names_map[d] for d in active]
+            desc = f"📅 Plan: Every {', '.join(names)} at {time_12h} (24h: {time_str})"
+            bg_col = "#064e3b"
+            txt_col = "#a7f3d0"
+        else:
+            desc = "⚠️ Plan: No days selected - Please select at least one day!"
+            bg_col = "#7f1d1d"
+            txt_col = "#fca5a5"
+
+        self.lbl_sched_summary.configure(text=desc, fg_color=bg_col, text_color=txt_col)
 
     # =========================================================================
     # TASK SCHEDULER & WINDOWS SERVICE CONTROLLERS
@@ -836,16 +1025,31 @@ class BackupAutomationApp(ctk.CTk):
 
     def _enable_schedule(self):
         """Enables the recurring schedule as either a Windows System Service or User Task."""
+        selected_days = [d for d in ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"] if self.day_vars[d].get()]
+        if not selected_days:
+            messagebox.showwarning("Day Required", "Please select at least one day of the week to run the automated backup.")
+            return
+
         time_str = self.entry_sched_time.get().strip() or "02:00"
+        if not re.match(r"^([01]?[0-9]|2[0-3]):[0-5][0-9]$", time_str):
+            messagebox.showwarning("Invalid Time Format", "Please enter a valid 24-hour time format (e.g. 02:00, 14:30, 23:00).")
+            return
+
         as_system = (self.sched_mode_var.get() == "SYSTEM")
         on_boot = bool(self.chk_boot_trigger.get())
         
+        # Save to configuration
+        self.config_data["SCHEDULE_DAYS"] = selected_days
+        self.config_data["SCHEDULE_TIME"] = time_str
+        self.config_data["STRICTLY_MONDAYS_ONLY"] = (selected_days == ["MON"])
+        save_config(self.config_data)
+
         mode_label = "Unattended System Service (Session 0)" if as_system else "Standard User Task"
-        self.append_log(f"Configuring Windows automation ({mode_label}) for Mondays at {time_str}...")
+        self.append_log(f"Configuring Windows automation ({mode_label}) for days {', '.join(selected_days)} at {time_str}...")
         
-        ok, msg = enable_scheduler(time_str=time_str, as_system_service=as_system, on_boot=on_boot)
+        ok, msg = enable_scheduler(days=selected_days, time_str=time_str, as_system_service=as_system, on_boot=on_boot)
         if ok:
-            messagebox.showinfo("Automation Configured", f"{msg}\n\nSchedule: Every Monday at {time_str}\nMode: {mode_label}")
+            messagebox.showinfo("Automation Configured", f"{msg}\n\nMode: {mode_label}\nConfiguration saved to config.json.")
         else:
             messagebox.showerror("Configuration Error", f"Failed to configure automation:\n{msg}")
         self._refresh_schedule_status()
@@ -986,6 +1190,7 @@ class BackupAutomationApp(ctk.CTk):
         self.header_badge.configure(text="● BACKUP RUNNING", text_color="#fbbf24", fg_color="#78350f")
         self.progress_bar.set(0.05)
         self.status_text_label.configure(text="Initializing backup workflow...")
+        self.telemetry_label.configure(text="⚡ Initializing connection...   •   ⏳ Preparing Google Drive stream", text_color="#fbbf24")
         
         # Switch to live logs tab so the user sees real-time progress immediately
         self.tabview.set("  Live Logs  ")
@@ -1001,6 +1206,7 @@ class BackupAutomationApp(ctk.CTk):
             self.was_cancelled = True
             self.append_log(">>> USER TRIGGERED EMERGENCY STOP <<<", "warning")
             self.status_text_label.configure(text="Stopping backup operations...")
+            self.telemetry_label.configure(text="⚡ Halting network streams...   •   Emergency Stop", text_color="#f87171")
             self.header_badge.configure(text="● STOPPING...", text_color="#f87171", fg_color="#7f1d1d")
             self.btn_stop_backup.configure(state="disabled", text="Stopping...")
             self.btn_header_stop.configure(state="disabled", text="Stopping...")
@@ -1017,12 +1223,26 @@ class BackupAutomationApp(ctk.CTk):
         def update_status(text):
             self.after(0, lambda: self.status_text_label.configure(text=text))
 
+        def update_telemetry(t):
+            def _apply():
+                speed = t.get("speed_str", "--")
+                eta = t.get("eta_str", "--")
+                uploaded = format_file_size(t.get("bytes_done", 0))
+                total = format_file_size(t.get("total_bytes", 0))
+                pct = t.get("percent", 0.0)
+                self.telemetry_label.configure(
+                    text=f"⚡ Upload Speed: {speed}   •   ⏳ ETA: {eta}   •   📦 {uploaded} / {total} ({pct:.1f}%)",
+                    text_color="#38bdf8"
+                )
+            self.after(0, _apply)
+
         try:
             success, summary = run_full_backup(
                 config=self.config_data,
                 log_cb=self.append_log,
                 progress_cb=update_progress,
-                status_cb=update_status
+                status_cb=update_status,
+                telemetry_cb=update_telemetry
             )
             if self.was_cancelled or is_backup_cancelled():
                 self.after(0, lambda: messagebox.showinfo("Backup Stopped", "The backup and cloud sync process was safely stopped.\n\nAll temporary files have been cleaned up."))
@@ -1045,10 +1265,12 @@ class BackupAutomationApp(ctk.CTk):
                 if self.was_cancelled or is_backup_cancelled():
                     self.header_badge.configure(text="● STOPPED", text_color="#ef4444", fg_color="#450a0a")
                     self.status_text_label.configure(text="Backup stopped by user")
+                    self.telemetry_label.configure(text="⚡ Upload Speed: Stopped   •   ⏳ ETA: --   •   ☁ Google Drive", text_color="#f87171")
                     self.progress_bar.set(0)
                 else:
                     self.header_badge.configure(text="● SYSTEM READY", text_color="#10b981", fg_color="#064e3b")
                     self.status_text_label.configure(text="Ready to execute backup")
+                    self.telemetry_label.configure(text="⚡ Upload Speed: Idle   •   ⏳ ETA: --   •   ☁ Target: Google Drive", text_color="#94a3b8")
                 self.was_cancelled = False
             self.after(0, _reset_ui)
 

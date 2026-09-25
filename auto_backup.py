@@ -78,16 +78,32 @@ def run_automated_mode():
     emit_log("=" * 60)
 
     config = load_config()
-    strictly_mondays = config.get("STRICTLY_MONDAYS_ONLY", True)
+    schedule_days = config.get("SCHEDULE_DAYS")
+    if not schedule_days:
+        strictly_mondays = config.get("STRICTLY_MONDAYS_ONLY", True)
+        schedule_days = ["MON"] if strictly_mondays else ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
     
-    # In Python's datetime module: 0 = Monday, 1 = Tuesday, ..., 6 = Sunday.
-    today_weekday = datetime.today().weekday()
-    if strictly_mondays and today_weekday != 0:
-        day_name = datetime.today().strftime('%A')
-        emit_log(f"Today is {day_name}. Backup configured for Mondays only. Exiting safely with exit code 0.")
+    if isinstance(schedule_days, str):
+        schedule_days = [d.strip().upper() for d in schedule_days.split(",") if d.strip()]
+    else:
+        schedule_days = [str(d).strip().upper() for d in schedule_days if str(d).strip()]
+        
+    today_code = datetime.today().strftime('%a').upper()  # 'MON', 'TUE', 'WED', etc.
+    today_name = datetime.today().strftime('%A')
+    
+    is_allowed = (
+        "DAILY" in schedule_days or 
+        "ALL" in schedule_days or 
+        "*" in schedule_days or 
+        len(schedule_days) == 7 or 
+        today_code in schedule_days
+    )
+    
+    if not is_allowed:
+        emit_log(f"Today is {today_name}. Automated backup is configured for {', '.join(schedule_days)}. Exiting safely with exit code 0.")
         sys.exit(0)
 
-    emit_log("Monday check passed (or restriction disabled). Running automated backup...")
+    emit_log(f"Schedule day check passed (Today is {today_name}). Running automated backup...")
     
     # Authenticate non-interactively (uses cached refresh token from credentials.json).
     # interactive=False prevents the engine from trying to launch a web browser on an unattended server.
@@ -121,7 +137,10 @@ def run_manual_cli():
         print("Error: Could not authenticate with Google.")
         sys.exit(1)
         
-    success, summary = run_full_backup(config=config)
+    def cli_status(msg):
+        print(f"  [STATUS] {msg}")
+
+    success, summary = run_full_backup(config=config, status_cb=cli_status)
     print(f"\nResult: {summary}")
     sys.exit(0 if success else 1)
 
@@ -141,14 +160,28 @@ def run_daemon_mode():
         try:
             config = load_config()
             sched_time = config.get("SCHEDULE_TIME", "02:00")
-            strictly_mondays = config.get("STRICTLY_MONDAYS_ONLY", True)
-            
+            schedule_days = config.get("SCHEDULE_DAYS")
+            if not schedule_days:
+                strictly_mondays = config.get("STRICTLY_MONDAYS_ONLY", True)
+                schedule_days = ["MON"] if strictly_mondays else ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
+                
+            if isinstance(schedule_days, str):
+                schedule_days = [d.strip().upper() for d in schedule_days.split(",") if d.strip()]
+            else:
+                schedule_days = [str(d).strip().upper() for d in schedule_days if str(d).strip()]
+
             now = datetime.now()
-            today_weekday = now.weekday()
+            today_code = now.strftime('%a').upper()
             cur_time_str = now.strftime("%H:%M")
             cur_day_key = now.strftime("%Y-%m-%d")
             
-            day_matches = (not strictly_mondays) or (today_weekday == 0)
+            day_matches = (
+                "DAILY" in schedule_days or 
+                "ALL" in schedule_days or 
+                "*" in schedule_days or 
+                len(schedule_days) == 7 or 
+                today_code in schedule_days
+            )
             time_matches = (cur_time_str == sched_time)
             
             if day_matches and time_matches and (last_run_day != cur_day_key):
