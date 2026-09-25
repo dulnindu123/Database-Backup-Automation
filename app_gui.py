@@ -60,7 +60,8 @@ from backup_core import (
     grant_sql_folder_permissions,
     stop_active_backup,
     is_backup_cancelled,
-    emit_log
+    emit_log,
+    open_path_native
 )
 
 # -----------------------------------------------------------------------------
@@ -83,11 +84,18 @@ class BackupAutomationApp(ctk.CTk):
         self.geometry("960, 680")
         self.minsize(860, 600)
         
-        # Load window icon
-        icon_path = os.path.join(BASE_DIR, "app_icon.ico")
-        if os.path.exists(icon_path):
+        # Load window icon with cross-platform fallback (ICO for Windows, PNG for macOS/Linux)
+        icon_path_ico = os.path.join(BASE_DIR, "app_icon.ico")
+        icon_path_png = os.path.join(BASE_DIR, "app_icon.png")
+        if sys.platform.startswith("win") and os.path.exists(icon_path_ico):
             try:
-                self.iconbitmap(icon_path)
+                self.iconbitmap(icon_path_ico)
+            except Exception:
+                pass
+        elif os.path.exists(icon_path_png):
+            try:
+                img = tk.PhotoImage(file=icon_path_png)
+                self.wm_iconphoto(True, img)
             except Exception:
                 pass
 
@@ -1068,7 +1076,7 @@ class BackupAutomationApp(ctk.CTk):
     # EXTERNAL TOOLS & STORAGE MAINTENANCE
     # =========================================================================
     def _open_local_backup_folder(self):
-        """Opens local backup directory in Windows File Explorer."""
+        """Opens local backup directory in native OS file manager."""
         folder = self.config_data.get("BACKUP_FOLDER", "C:\\temp\\backups")
         if not os.path.exists(folder):
             try:
@@ -1076,7 +1084,8 @@ class BackupAutomationApp(ctk.CTk):
             except Exception:
                 pass
         if os.path.exists(folder):
-            os.startfile(folder)
+            if not open_path_native(folder):
+                messagebox.showwarning("Notice", f"Could not launch file manager for: {folder}")
         else:
             messagebox.showwarning("Warning", f"Folder not found: {folder}")
 
@@ -1111,9 +1120,10 @@ class BackupAutomationApp(ctk.CTk):
             messagebox.showinfo("Notice", "Google Sheet ID not configured.")
 
     def _open_log_file(self):
-        """Opens backup_log.txt in default text editor."""
+        """Opens backup_log.txt in native OS text editor."""
         if os.path.exists(LOG_FILE):
-            os.startfile(LOG_FILE)
+            if not open_path_native(LOG_FILE):
+                messagebox.showwarning("Notice", f"Could not open log file: {LOG_FILE}")
         else:
             messagebox.showinfo("Log", "No log file found yet.")
 

@@ -5,12 +5,12 @@
   <br>
   <h3>Autonomous, Zero-Touch SQL Server Cloud Disaster Recovery & Telemetry Pipeline</h3>
   <p>
-    <img src="https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011%20%7C%20Server-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Platform">
-    <img src="https://img.shields.io/badge/Python-3.x%20(Standalone%20EXE)-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python">
-    <img src="https://img.shields.io/badge/Microsoft%20SQL%20Server-2016%20%7C%202019%20%7C%202022-CC2927?style=for-the-badge&logo=microsoftsqlserver&logoColor=white" alt="SQL Server">
-    <img src="https://img.shields.io/badge/Google%20Drive-API%20v3-4285F4?style=for-the-badge&logo=googledrive&logoColor=white" alt="Google Drive">
+    <img src="https://img.shields.io/badge/Platform-Windows%20Vista%20--%2011%20%7C%20Server%202008%20--%202025%20%7C%20macOS-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Platform">
+    <img src="https://img.shields.io/badge/Python-3.x%20(Standalone%20EXE%20%2B%20macOS)-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python">
+    <img src="https://img.shields.io/badge/SQL%20Server-2000%20--%202022%20(All%20SSMS)-CC2927?style=for-the-badge&logo=microsoftsqlserver&logoColor=white" alt="SQL Server">
+    <img src="https://img.shields.io/badge/Google%20Drive-Resumable%20API%20v3-4285F4?style=for-the-badge&logo=googledrive&logoColor=white" alt="Google Drive">
     <img src="https://img.shields.io/badge/Google%20Sheets-Telemetry%20Audit-34A853?style=for-the-badge&logo=googlesheets&logoColor=white" alt="Google Sheets">
-    <img src="https://img.shields.io/badge/Session%200-Isolated%20System%20Service-blueviolet?style=for-the-badge&logo=powershell&logoColor=white" alt="Session 0">
+    <img src="https://img.shields.io/badge/Automation-Session%200%20Service%20%7C%20macOS%20LaunchAgent-blueviolet?style=for-the-badge&logo=powershell&logoColor=white" alt="Session 0">
   </p>
 </div>
 

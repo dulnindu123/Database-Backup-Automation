@@ -26,7 +26,16 @@ import logging
 import zipfile
 import subprocess
 import threading
+import socket
+import shutil
+import platform
 from datetime import datetime
+
+# Global socket timeout to prevent WinError 10060 (WSAETIMEDOUT) on fluctuating client connections
+try:
+    socket.setdefaulttimeout(180)
+except Exception:
+    pass
 
 # Google APIs & Client Libraries
 import gspread
@@ -158,18 +167,22 @@ if not os.path.exists(TOKEN_FILE) and os.path.exists(os.path.join(BASE_DIR, "cre
     TOKEN_FILE = os.path.join(BASE_DIR, "credentials.json")
 CLIENT_SECRET_FILE = os.path.join(BASE_DIR, "client_secret.json")
 
-# Initialize root file logging
-logging.basicConfig(
-    filename=LOG_FILE,
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+# Initialize dedicated application logger with UTF-8 FileHandler
+logger = logging.getLogger("DatabaseBackup")
+logger.setLevel(logging.INFO)
+logger.propagate = False
+try:
+    _fh = logging.FileHandler(LOG_FILE, mode='a', encoding='utf-8')
+    _fh.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+    logger.addHandler(_fh)
+except Exception:
+    pass
 
 
 def emit_log(message, level="info", log_cb=None):
     """
     Dual-dispatch logging utility.
-    1. Persists the log record to the local backup_log.txt file on disk.
+    1. Persists the log record to the local backup_log.txt file on disk with instant flush.
     2. Prints the message to standard output for CLI sessions.
     3. Safely invokes the UI log callback (log_cb) if supplied by app_gui.py.
     """
@@ -178,14 +191,21 @@ def emit_log(message, level="info", log_cb=None):
     
     # Write to local file log based on severity
     if level == "critical":
-        logging.critical(message)
+        logger.critical(message)
     elif level == "error":
-        logging.error(message)
+        logger.error(message)
     elif level == "warning":
-        logging.warning(message)
+        logger.warning(message)
     else:
-        logging.info(message)
+        logger.info(message)
         
+    # Flush file handlers immediately to ensure real-time disk persistence
+    for h in logger.handlers:
+        try:
+            h.flush()
+        except Exception:
+            pass
+
     print(formatted)
     
     # Forward to desktop GUI real-time terminal widget
@@ -398,52 +418,222 @@ def test_google_connection(creds, drive_folder_id, sheet_id, log_cb=None):
 # 4. DATABASE EXTRACTION & HIGH-RATIO COMPRESSION
 # =============================================================================
 
+def open_path_native(target_path):
+    """
+    Cross-platform helper to open a folder or file in the default OS file manager or application.
+    Supports Windows (os.startfile), macOS ('open'), and Linux ('xdg-open').
+    """
+    if not os.path.exists(target_path):
+        return False
+    try:
+        sys_plat = platform.system().lower()
+        if "windows" in sys_plat:
+            os.startfile(target_path)
+        elif "darwin" in sys_plat:
+            subprocess.Popen(["open", target_path])
+        else:
+            subprocess.Popen(["xdg-open", target_path])
+        return True
+    except Exception:
+        return False
+
+
 def grant_sql_folder_permissions(folder_path):
     """
-    Grants NTFS write/modify permissions on the target directory for the SQL Server
-    service account and standard user accounts using Windows icacls.
-    Uses well-known language-independent SIDs:
-    - *S-1-1-0: Everyone
-    - *S-1-5-32-545: Builtin Users
+    Grants filesystem write/modify permissions on the target directory.
+    - On Windows: Uses icacls with language-independent SIDs (*S-1-1-0 Everyone, *S-1-5-32-545 Users).
+    - On macOS / Linux: Ensures directory exists and applies readable/writable permissions.
     """
     try:
         norm_path = os.path.normpath(folder_path)
         if not os.path.exists(norm_path):
             os.makedirs(norm_path, exist_ok=True)
-        # Grant Everyone Modify (OI)(CI)M permissions
-        subprocess.run(
-            f'icacls "{norm_path}" /grant *S-1-1-0:(OI)(CI)M /T /C /Q',
-            shell=True, capture_output=True, text=True, timeout=10
-        )
-        # Grant Users Modify (OI)(CI)M permissions
-        subprocess.run(
-            f'icacls "{norm_path}" /grant *S-1-5-32-545:(OI)(CI)M /T /C /Q',
-            shell=True, capture_output=True, text=True, timeout=10
-        )
+            
+        if platform.system().lower() == "windows":
+            # Grant Everyone Modify (OI)(CI)M permissions
+            subprocess.run(
+                f'icacls "{norm_path}" /grant *S-1-1-0:(OI)(CI)M /T /C /Q',
+                shell=True, capture_output=True, text=True, timeout=10
+            )
+            # Grant Users Modify (OI)(CI)M permissions
+            subprocess.run(
+                f'icacls "{norm_path}" /grant *S-1-5-32-545:(OI)(CI)M /T /C /Q',
+                shell=True, capture_output=True, text=True, timeout=10
+            )
+        else:
+            try:
+                os.chmod(norm_path, 0o775)
+            except Exception:
+                pass
     except Exception:
         pass
+
+
+def find_sql_cli_executable():
+    """
+    Locates the most appropriate SQL command-line client on the host system.
+    Supports modern ODBC 18/17/13/11 sqlcmd, SQL Server 2005-2022 sqlcmd,
+    and legacy SQL Server 2000-2005 osql.exe across both 64-bit and 32-bit paths.
+    
+    Returns:
+        (cli_type, cli_path) where cli_type is 'sqlcmd' or 'osql'.
+    """
+    # 1. Check if sqlcmd is directly available on system PATH
+    found = shutil.which("sqlcmd")
+    if found:
+        return "sqlcmd", found
+
+    # 2. Check well-known SQL Server installation paths
+    program_dirs = []
+    for env_var in ["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"]:
+        p = os.environ.get(env_var)
+        if p and p not in program_dirs and os.path.exists(p):
+            program_dirs.append(p)
+
+    candidate_sqlcmd_subpaths = [
+        r"Microsoft SQL Server\Client SDK\ODBC\180\Tools\Binn\sqlcmd.exe",
+        r"Microsoft SQL Server\Client SDK\ODBC\170\Tools\Binn\sqlcmd.exe",
+        r"Microsoft SQL Server\Client SDK\ODBC\130\Tools\Binn\sqlcmd.exe",
+        r"Microsoft SQL Server\Client SDK\ODBC\110\Tools\Binn\sqlcmd.exe",
+        r"Microsoft SQL Server\160\Tools\Binn\sqlcmd.exe",
+        r"Microsoft SQL Server\150\Tools\Binn\sqlcmd.exe",
+        r"Microsoft SQL Server\140\Tools\Binn\sqlcmd.exe",
+        r"Microsoft SQL Server\130\Tools\Binn\sqlcmd.exe",
+        r"Microsoft SQL Server\120\Tools\Binn\sqlcmd.exe",
+        r"Microsoft SQL Server\110\Tools\Binn\sqlcmd.exe",
+        r"Microsoft SQL Server\100\Tools\Binn\sqlcmd.exe",
+        r"Microsoft SQL Server\90\Tools\Binn\sqlcmd.exe",
+    ]
+
+    for pdir in program_dirs:
+        for subpath in candidate_sqlcmd_subpaths:
+            full_path = os.path.join(pdir, subpath)
+            if os.path.isfile(full_path):
+                return "sqlcmd", full_path
+
+    # 3. Fallback to osql.exe for older legacy systems (SQL Server 2000 / 2005)
+    found_osql = shutil.which("osql")
+    if found_osql:
+        return "osql", found_osql
+
+    candidate_osql_subpaths = [
+        r"Microsoft SQL Server\80\Tools\Binn\osql.exe",
+        r"Microsoft SQL Server\90\Tools\Binn\osql.exe",
+        r"Microsoft SQL Server\100\Tools\Binn\osql.exe",
+    ]
+    for pdir in program_dirs:
+        for subpath in candidate_osql_subpaths:
+            full_path = os.path.join(pdir, subpath)
+            if os.path.isfile(full_path):
+                return "osql", full_path
+
+    # Fallback to standard command name
+    return "sqlcmd", "sqlcmd"
+
+
+def execute_sql_query_adaptive(sql_server, query, sql_user="", sql_password="", timeout=15):
+    """
+    Executes a SQL query against SQL Server adaptively handling modern (-C) and legacy flags.
+    Automatically retries without '-C' if the installed sqlcmd does not recognize the flag.
+    Falls back to osql if sqlcmd is unavailable.
+    
+    Returns:
+        (returncode, stdout, stderr)
+    """
+    cli_type, cli_path = find_sql_cli_executable()
+    escaped_query = query.replace('"', '""')
+    
+    if cli_type == "sqlcmd":
+        # First attempt: Try with -C (Trust Server Certificate, required for modern ODBC 18)
+        if sql_user and sql_password:
+            cmd = f'"{cli_path}" -b -l {timeout} -S "{sql_server}" -U "{sql_user}" -P "{sql_password}" -C -h -1 -W -Q "{escaped_query}"'
+        else:
+            cmd = f'"{cli_path}" -b -l {timeout} -S "{sql_server}" -E -C -h -1 -W -Q "{escaped_query}"'
+            
+        try:
+            res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout + 5)
+            # Check if -C was rejected as an unknown/invalid option (common on older SQL Server / SSMS versions)
+            err_lower = (res.stderr or "").lower() + (res.stdout or "").lower()
+            if "-c" in err_lower and ("unknown option" in err_lower or "invalid option" in err_lower or "unrecognized" in err_lower):
+                # Fallback attempt without -C
+                if sql_user and sql_password:
+                    cmd_no_c = f'"{cli_path}" -b -l {timeout} -S "{sql_server}" -U "{sql_user}" -P "{sql_password}" -h -1 -W -Q "{escaped_query}"'
+                else:
+                    cmd_no_c = f'"{cli_path}" -b -l {timeout} -S "{sql_server}" -E -h -1 -W -Q "{escaped_query}"'
+                res = subprocess.run(cmd_no_c, shell=True, capture_output=True, text=True, timeout=timeout + 5)
+            return res.returncode, res.stdout, res.stderr
+        except Exception as e:
+            return -1, "", str(e)
+            
+    else:  # osql.exe fallback
+        if sql_user and sql_password:
+            cmd = f'"{cli_path}" -b -l {timeout} -S "{sql_server}" -U "{sql_user}" -P "{sql_password}" -n -h -1 -w 8000 -Q "{escaped_query}"'
+        else:
+            cmd = f'"{cli_path}" -b -l {timeout} -S "{sql_server}" -E -n -h -1 -w 8000 -Q "{escaped_query}"'
+        try:
+            res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout + 5)
+            return res.returncode, res.stdout, res.stderr
+        except Exception as e:
+            return -1, "", str(e)
+
+
+def execute_sql_backup_command(sql_server, db_name, bak_filepath, sql_user="", sql_password="", cancel_check=None):
+    """
+    Executes BACKUP DATABASE command adaptively handling modern and legacy SQL Server / SSMS versions.
+    Integrates with backup_controller for instant emergency abort.
+    """
+    cli_type, cli_path = find_sql_cli_executable()
+    backup_sql = f"BACKUP DATABASE [{db_name}] TO DISK='{bak_filepath}' WITH FORMAT"
+    
+    def _run_cmd(cmd_str):
+        proc = subprocess.Popen(cmd_str, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        backup_controller.set_active_process(proc)
+        try:
+            stdout, stderr = proc.communicate()
+            return proc.returncode, stdout, stderr
+        finally:
+            backup_controller.clear_active_process()
+
+    if cli_type == "sqlcmd":
+        # Try with -C first
+        if sql_user and sql_password:
+            cmd = f'"{cli_path}" -b -l 15 -S "{sql_server}" -U "{sql_user}" -P "{sql_password}" -C -Q "{backup_sql}"'
+        else:
+            cmd = f'"{cli_path}" -b -l 15 -S "{sql_server}" -E -C -Q "{backup_sql}"'
+            
+        code, out, err = _run_cmd(cmd)
+        combined_err = ((err or "") + "\n" + (out or "")).lower()
+        if "-c" in combined_err and ("unknown option" in combined_err or "invalid option" in combined_err or "unrecognized" in combined_err):
+            # Retry without -C
+            if sql_user and sql_password:
+                cmd_no_c = f'"{cli_path}" -b -l 15 -S "{sql_server}" -U "{sql_user}" -P "{sql_password}" -Q "{backup_sql}"'
+            else:
+                cmd_no_c = f'"{cli_path}" -b -l 15 -S "{sql_server}" -E -Q "{backup_sql}"'
+            code, out, err = _run_cmd(cmd_no_c)
+        return code, out, err
+    else:
+        # osql.exe fallback
+        if sql_user and sql_password:
+            cmd = f'"{cli_path}" -b -l 15 -S "{sql_server}" -U "{sql_user}" -P "{sql_password}" -n -Q "{backup_sql}"'
+        else:
+            cmd = f'"{cli_path}" -b -l 15 -S "{sql_server}" -E -n -Q "{backup_sql}"'
+        return _run_cmd(cmd)
 
 
 def get_sql_instance_default_backup_path(sql_server, sql_user="", sql_password=""):
     """
     Queries SQL Server instance for its default backup directory,
     which is guaranteed to have write permissions for the SQL Server engine service.
+    Works adaptively across modern and legacy SQL Server / SSMS installations.
     """
     query = "SET NOCOUNT ON; SELECT CAST(SERVERPROPERTY('InstanceDefaultBackupPath') AS VARCHAR(500))"
-    if sql_user and sql_password:
-        cmd = f'sqlcmd -b -l 15 -S "{sql_server}" -U "{sql_user}" -P "{sql_password}" -C -h -1 -W -Q "{query}"'
-    else:
-        cmd = f'sqlcmd -b -l 15 -S "{sql_server}" -E -C -h -1 -W -Q "{query}"'
-    try:
-        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
-        if res.returncode == 0 and res.stdout.strip():
-            lines = [line.strip() for line in res.stdout.strip().splitlines() if line.strip() and not line.strip().startswith("-")]
-            if lines:
-                candidate = os.path.normpath(lines[0])
-                if os.path.isdir(candidate):
-                    return candidate
-    except Exception:
-        pass
+    retcode, stdout, _ = execute_sql_query_adaptive(sql_server, query, sql_user, sql_password, timeout=15)
+    if retcode == 0 and stdout.strip():
+        lines = [line.strip() for line in stdout.strip().splitlines() if line.strip() and not line.strip().startswith("-")]
+        if lines:
+            candidate = os.path.normpath(lines[0])
+            if os.path.isdir(candidate):
+                return candidate
     return None
 
 
@@ -452,17 +642,19 @@ def generate_and_compress_backup(folder, db_name, sql_server, sql_user="", sql_p
     Executes native Microsoft SQL Server database backup and Level 9 Deflate compression.
     
     Resilience, Failover & Emergency Cancellation Features:
-    1. Normalizes all folder and file paths to standard Windows backslashes.
-    2. Proactively configures NTFS permissions via icacls on the destination directory.
+    1. Normalizes all folder and file paths to standard OS path separators.
+    2. Proactively configures filesystem permissions on the destination directory.
     3. Traps SQL Server Error 5 (Operating system error 5: Access is denied) and Msg 3201:
        If the SQL Server service account lacks rights to write to user-space folders
        (e.g., Desktop or Documents), it automatically queries SQL Server's internal 
        InstanceDefaultBackupPath, runs the backup to that authorized location,
        compresses the archive directly into the user's requested destination, and purges
        the temporary .bak from the SQL Server directory.
-    4. Emergency Abort & Cleanup:
+    4. Adaptive SQL Driver Detection: Works seamlessly with modern ODBC 18 sqlcmd (-C),
+       legacy sqlcmd (without -C), and legacy osql.exe for older SQL Server / SSMS setups.
+    5. Emergency Abort & Cleanup:
        Monitors backup_controller and cancel_check. If aborted, terminates the running
-       sqlcmd child process immediately, halts compression, and deletes any partial
+       SQL child process immediately, halts compression, and deletes any partial
        .bak or .zip files so zero corrupted residual files remain.
     """
     if (cancel_check and cancel_check()) or backup_controller.is_cancelled():
@@ -488,21 +680,17 @@ def generate_and_compress_backup(folder, db_name, sql_server, sql_user="", sql_p
     zip_filepath = os.path.normpath(os.path.join(folder, zip_filename))
     
     emit_log(f"Initiating SQL backup for database '{db_name}'...", "info", log_cb)
-    
-    # Build sqlcmd command line with -b (batch abort) and -l 15 (15-sec login timeout for network/RDP/Server resilience)
-    if sql_user and sql_password:
-        cmd = f'sqlcmd -b -l 15 -S "{sql_server}" -U "{sql_user}" -P "{sql_password}" -C -Q "BACKUP DATABASE [{db_name}] TO DISK=\'{bak_filepath}\' WITH FORMAT"'
-    else:
-        cmd = f'sqlcmd -b -l 15 -S "{sql_server}" -E -C -Q "BACKUP DATABASE [{db_name}] TO DISK=\'{bak_filepath}\' WITH FORMAT"'
 
     try:
-        # Execute database backup in isolated subprocess with emergency termination support
-        proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        backup_controller.set_active_process(proc)
-        try:
-            stdout, stderr = proc.communicate()
-        finally:
-            backup_controller.clear_active_process()
+        # Execute database backup adaptively with emergency termination support
+        returncode, stdout, stderr = execute_sql_backup_command(
+            sql_server=sql_server,
+            db_name=db_name,
+            bak_filepath=bak_filepath,
+            sql_user=sql_user,
+            sql_password=sql_password,
+            cancel_check=cancel_check
+        )
 
         if (cancel_check and cancel_check()) or backup_controller.is_cancelled():
             emit_log(f"SQL Backup for {db_name} aborted by user. Purging temporary files...", "warning", log_cb)
@@ -513,7 +701,7 @@ def generate_and_compress_backup(folder, db_name, sql_server, sql_user="", sql_p
                     pass
             return None
 
-        backup_succeeded = (proc.returncode == 0 and os.path.exists(bak_filepath))
+        backup_succeeded = (returncode == 0 and os.path.exists(bak_filepath))
 
         if not backup_succeeded:
             err_msg = ((stderr or "") + "\n" + (stdout or "")).strip()
@@ -534,24 +722,21 @@ def generate_and_compress_backup(folder, db_name, sql_server, sql_user="", sql_p
                 fallback_folder = get_sql_instance_default_backup_path(sql_server, sql_user, sql_password)
                 if not fallback_folder:
                     # Priority 2: Standard public temp backup folder
-                    fallback_folder = os.path.normpath("C:\\temp\\backups")
+                    fallback_folder = os.path.normpath("C:\\temp\\backups") if platform.system().lower() == "windows" else "/tmp/backups"
                     os.makedirs(fallback_folder, exist_ok=True)
                     grant_sql_folder_permissions(fallback_folder)
                     
                 emit_log(f"Failing over to SQL-authorized directory: {fallback_folder}", "info", log_cb)
                 fallback_bak = os.path.normpath(os.path.join(fallback_folder, bak_filename))
                 
-                if sql_user and sql_password:
-                    cmd_fb = f'sqlcmd -b -l 15 -S "{sql_server}" -U "{sql_user}" -P "{sql_password}" -C -Q "BACKUP DATABASE [{db_name}] TO DISK=\'{fallback_bak}\' WITH FORMAT"'
-                else:
-                    cmd_fb = f'sqlcmd -b -l 15 -S "{sql_server}" -E -C -Q "BACKUP DATABASE [{db_name}] TO DISK=\'{fallback_bak}\' WITH FORMAT"'
-                
-                proc_fb = subprocess.Popen(cmd_fb, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-                backup_controller.set_active_process(proc_fb)
-                try:
-                    stdout_fb, stderr_fb = proc_fb.communicate()
-                finally:
-                    backup_controller.clear_active_process()
+                rc_fb, out_fb, err_fb = execute_sql_backup_command(
+                    sql_server=sql_server,
+                    db_name=db_name,
+                    bak_filepath=fallback_bak,
+                    sql_user=sql_user,
+                    sql_password=sql_password,
+                    cancel_check=cancel_check
+                )
 
                 if (cancel_check and cancel_check()) or backup_controller.is_cancelled():
                     emit_log(f"SQL Failover Backup for {db_name} aborted by user. Purging temporary files...", "warning", log_cb)
@@ -562,13 +747,13 @@ def generate_and_compress_backup(folder, db_name, sql_server, sql_user="", sql_p
                             pass
                     return None
 
-                if proc_fb.returncode == 0 and os.path.exists(fallback_bak):
+                if rc_fb == 0 and os.path.exists(fallback_bak):
                     emit_log(f"Failover SQL backup successfully created at: {fallback_bak}", "info", log_cb)
                     bak_filepath = fallback_bak
                     backup_succeeded = True
                 else:
-                    err_fb = ((stderr_fb or "") + "\n" + (stdout_fb or "")).strip()
-                    emit_log(f"SQL Backup failed even on failover location: {err_fb}", "error", log_cb)
+                    err_details = ((err_fb or "") + "\n" + (out_fb or "")).strip()
+                    emit_log(f"SQL Backup failed even on failover location: {err_details}", "error", log_cb)
                     return None
             else:
                 emit_log(f"SQL Backup failed for {db_name}: {err_msg}", "error", log_cb)
@@ -639,17 +824,15 @@ def upload_to_google_drive(creds, file_path, folder_id, retries=3, log_cb=None, 
     """
     Streams a local backup archive to the configured Google Drive folder.
     
-    Features:
-    - Uses resumable chunked upload (MediaFileUpload with chunksize=2MB and resumable=True).
-    - Real-time Telemetry: calculates live upload speed (MB/s, KB/s), percentage (0-100%),
-      bytes transferred, and estimated time remaining (ETA).
-    - Dispatches live telemetry to status_cb, progress_cb, and telemetry_cb for rich GUI rendering.
-    - Periodic logging: Emits live speed & progress updates to log_cb every ~4 seconds.
+    Enterprise Network Resilience & In-Chunk Auto-Resume:
+    - Uses resumable chunked upload with 1MB chunksize for maximum reliability on slow/erratic broadband.
+    - If a connection drops (WinError 10060, WSAETIMEDOUT, ConnectionResetError, BrokenPipeError, or HTTP 5xx),
+      the inner chunk retry loop retries request.next_chunk() up to 10 times with exponential backoff.
+    - Google's MediaFileUpload queries the active resumable URI and RESUMES from the exact byte where it paused,
+      guaranteeing zero byte loss and never restarting a 500MB+ file from 0%.
+    - Real-time Telemetry: Live speed, percentage, transferred bytes, and ETA.
     - Emergency stop awareness: monitors backup_controller and cancel_check to instantly abort upload.
-    - Implements exponential retry backoff with non-blocking cancel checks.
     - Traps Google Drive quota exhaustion errors (HTTP 403 storageQuotaExceeded).
-    - Sets public reader permissions so download links can be accessed by authorized reviewers.
-    - Resolves and returns the canonical webViewLink URL.
     """
     file_name = os.path.basename(file_path)
     try:
@@ -669,13 +852,13 @@ def upload_to_google_drive(creds, file_path, folder_id, retries=3, log_cb=None, 
             return None
 
         try:
-            emit_log(f"Uploading {file_name} to Google Drive ({format_file_size(total_file_size)}, Attempt {attempt}/{retries})...", "info", log_cb)
+            emit_log(f"Uploading {file_name} to Google Drive ({format_file_size(total_file_size)}, Session {attempt}/{retries})...", "info", log_cb)
             file_metadata = {
                 'name': file_name,
                 'parents': [folder_id]
             }
-            # Stream in 2MB chunks for fine-grained progress, live speed calculation, and instantaneous emergency abort
-            media = MediaFileUpload(file_path, chunksize=2 * 1024 * 1024, resumable=True)
+            # Stream in 1MB chunks: optimal balance for slow connections (100-200 KB/s) to avoid socket timeout limits
+            media = MediaFileUpload(file_path, chunksize=1 * 1024 * 1024, resumable=True)
             request = drive_service.files().create(
                 body=file_metadata,
                 media_body=media,
@@ -686,18 +869,65 @@ def upload_to_google_drive(creds, file_path, folder_id, retries=3, log_cb=None, 
             upload_start_time = time.time()
             last_logged_time = upload_start_time
             last_logged_pct = 0.0
+            last_bytes_done = 0
 
             while uploaded_file is None:
                 if (cancel_check and cancel_check()) or backup_controller.is_cancelled():
                     emit_log(f"Upload of {file_name} aborted by user during transfer.", "warning", log_cb)
                     return None
-                    
-                status, uploaded_file = request.next_chunk()
+
+                # In-chunk retry loop with exponential backoff on transient network interruptions
+                chunk_status = None
+                max_chunk_retries = 10
+                for chunk_attempt in range(1, max_chunk_retries + 1):
+                    if (cancel_check and cancel_check()) or backup_controller.is_cancelled():
+                        emit_log(f"Upload of {file_name} cancelled during transfer.", "warning", log_cb)
+                        return None
+                    try:
+                        chunk_status, uploaded_file = request.next_chunk()
+                        break  # Chunk transferred successfully!
+                    except Exception as chunk_err:
+                        if (cancel_check and cancel_check()) or backup_controller.is_cancelled():
+                            return None
+                        
+                        is_quota_err = isinstance(chunk_err, HttpError) and chunk_err.resp.status in [400, 403] and 'quota' in str(chunk_err).lower()
+                        if is_quota_err:
+                            emit_log(f"CRITICAL: Google Drive storage quota full! {chunk_err}", "critical", log_cb)
+                            return None
+
+                        # Check for recoverable network / timeout / socket glitches
+                        resumed_byte = last_bytes_done
+                        if chunk_status:
+                            resumed_byte = chunk_status.resumable_progress
+                        
+                        chunk_delay = min(60, 2 ** min(chunk_attempt, 6))
+                        err_str = f"{type(chunk_err).__name__}: {chunk_err}"
+                        emit_log(
+                            f"Transient network glitch during upload ({err_str}). "
+                            f"Auto-resuming chunk from byte {format_file_size(resumed_byte)} in {chunk_delay}s "
+                            f"(Chunk Retry {chunk_attempt}/{max_chunk_retries})...",
+                            "warning",
+                            log_cb
+                        )
+                        if status_cb:
+                            status_cb(f"Connection paused. Resuming from {format_file_size(resumed_byte)} in {chunk_delay}s...")
+                        
+                        # Sleep in 0.5s increments with emergency stop checks
+                        for _ in range(int(chunk_delay * 2)):
+                            if (cancel_check and cancel_check()) or backup_controller.is_cancelled():
+                                return None
+                            time.sleep(0.5)
+                else:
+                    # All 10 in-chunk retries exhausted for this session
+                    raise IOError(f"Network connection lost after {max_chunk_retries} continuous resume retries.")
+
+                status = chunk_status
                 now = time.time()
                 elapsed = max(0.001, now - upload_start_time)
 
                 if status:
                     bytes_done = status.resumable_progress
+                    last_bytes_done = bytes_done
                     total_bytes = status.total_size or total_file_size or 1
                     fraction = min(1.0, max(0.0, float(status.progress() if status.progress() is not None else (bytes_done / total_bytes))))
                     pct = fraction * 100.0
@@ -797,13 +1027,13 @@ def upload_to_google_drive(creds, file_path, folder_id, retries=3, log_cb=None, 
             emit_log(f"Network error during upload: {e}", "error", log_cb)
             
         if attempt < retries:
-            emit_log("Retrying upload in 10 seconds...", "info", log_cb)
+            emit_log("Retrying upload session in 10 seconds...", "info", log_cb)
             for _ in range(20):
                 if (cancel_check and cancel_check()) or backup_controller.is_cancelled():
                     return None
                 time.sleep(0.5)
             
-    emit_log(f"Upload failed after {retries} attempts for {file_name}.", "critical", log_cb)
+    emit_log(f"Upload failed after {retries} session attempts for {file_name}.", "critical", log_cb)
     return None
 
 
@@ -1095,11 +1325,25 @@ def run_command_elevated(cmd_string):
 
 def get_scheduler_status():
     """
-    Queries Windows Task Scheduler to determine active automation state.
-    Checks both Unattended System Service (Session 0) and Standard User Task.
+    Queries the host OS scheduler to determine active automation state.
+    - On macOS: Checks LaunchAgents (~/Library/LaunchAgents/com.databasebackup.automation.plist).
+    - On Windows: Checks Windows Task Scheduler for Unattended System Service (Session 0) and Standard User Task.
     Returns: (is_active, status_message, mode)
     where mode is 'SYSTEM_SERVICE', 'USER_TASK', or 'NONE'.
     """
+    # 0. macOS LaunchAgent check
+    if platform.system().lower() == "darwin":
+        plist_path = os.path.expanduser("~/Library/LaunchAgents/com.databasebackup.automation.plist")
+        if os.path.exists(plist_path):
+            try:
+                res = subprocess.run(["launchctl", "list"], capture_output=True, text=True, timeout=5)
+                if "com.databasebackup.automation" in res.stdout:
+                    return True, "Active (macOS LaunchAgent Background Daemon)", "SYSTEM_SERVICE"
+                return True, "Active (macOS LaunchAgent Plist Installed)", "SYSTEM_SERVICE"
+            except Exception:
+                return True, "Active (macOS LaunchAgent)", "SYSTEM_SERVICE"
+        return False, "Not Scheduled", "NONE"
+
     # 1. Check Unattended Windows System Service
     try:
         cmd = f'schtasks /query /tn "{SYSTEM_SERVICE_TASK_NAME}" /fo CSV /nh'
@@ -1140,33 +1384,21 @@ def get_scheduler_status():
 
 def enable_scheduler(executable_path=None, days="MON", time_str="02:00", as_system_service=True, on_boot=False):
     """
-    Registers the backup cycle in Windows Task Scheduler using schtasks /create.
+    Registers the backup cycle in the OS automation scheduler.
+    - On macOS: Configures and loads LaunchAgent in ~/Library/LaunchAgents/
+    - On Windows: Registers in Windows Task Scheduler via schtasks /create
     
     Supports:
     - Any single day (e.g. 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN')
     - Multiple days (e.g. ['MON', 'WED', 'FRI'] or 'MON,WED,FRI')
     - Daily execution (['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'] or 'DAILY')
     - Any time in 24-hour format (e.g. '02:00', '14:30', '23:00')
-    
-    Modes:
-    1. Unattended Windows System Service (as_system_service=True, Default):
-       - Configured under 'NT AUTHORITY\\SYSTEM' with /rl HIGHEST.
-       - Runs in Session 0 independent of user login or RDP disconnects.
-       - If on_boot=True, also registers a boot/startup recovery trigger.
-    2. Standard User Task (as_system_service=False):
-       - Runs under current user account (/rl LIMITED).
-       - Requires zero admin rights.
     """
     if not executable_path:
         if getattr(sys, 'frozen', False):
             executable_path = sys.executable
         else:
             executable_path = f'python "{os.path.join(BASE_DIR, "auto_backup.py")}"'
-            
-    if executable_path.startswith("python "):
-        cmd_run = f'{executable_path} --auto'
-    else:
-        cmd_run = f'\\"{executable_path}\\" --auto'
 
     # Normalize days input
     if isinstance(days, str):
@@ -1187,15 +1419,13 @@ def enable_scheduler(executable_path=None, days="MON", time_str="02:00", as_syst
         "THU": "Thursday", "FRI": "Friday", "SAT": "Saturday", "SUN": "Sunday"
     }
 
+    ordered_days = [d for d in all_days if d in days_list]
+    if not ordered_days:
+        ordered_days = ["MON"]
+        
     if is_daily:
-        schedule_args = f'/sc daily /st {time_str}'
         friendly_schedule = f"Every Day at {time_str}"
     else:
-        ordered_days = [d for d in all_days if d in days_list]
-        if not ordered_days:
-            ordered_days = ["MON"]
-        days_csv = ",".join(ordered_days)
-        schedule_args = f'/sc weekly /d {days_csv} /st {time_str}'
         friendly_days = [day_names_map.get(d, d) for d in ordered_days]
         if len(friendly_days) == 1:
             friendly_schedule = f"Every {friendly_days[0]} at {time_str}"
@@ -1203,6 +1433,82 @@ def enable_scheduler(executable_path=None, days="MON", time_str="02:00", as_syst
             friendly_schedule = f"Every {friendly_days[0]} and {friendly_days[1]} at {time_str}"
         else:
             friendly_schedule = f"Every {', '.join(friendly_days[:-1])}, and {friendly_days[-1]} at {time_str}"
+
+    # macOS LaunchAgent Implementation
+    if platform.system().lower() == "darwin":
+        plist_dir = os.path.expanduser("~/Library/LaunchAgents")
+        os.makedirs(plist_dir, exist_ok=True)
+        plist_path = os.path.join(plist_dir, "com.databasebackup.automation.plist")
+        
+        try:
+            hour_val, min_val = [int(p) for p in time_str.split(":")[:2]]
+        except Exception:
+            hour_val, min_val = 2, 0
+            
+        weekday_map = {"SUN": 0, "MON": 1, "TUE": 2, "WED": 3, "THU": 4, "FRI": 5, "SAT": 6}
+        calendar_intervals = []
+        if is_daily:
+            calendar_intervals.append(f"            <dict>\n                <key>Hour</key>\n                <integer>{hour_val}</integer>\n                <key>Minute</key>\n                <integer>{min_val}</integer>\n            </dict>")
+        else:
+            for d in ordered_days:
+                w_num = weekday_map.get(d, 1)
+                calendar_intervals.append(f"            <dict>\n                <key>Weekday</key>\n                <integer>{w_num}</integer>\n                <key>Hour</key>\n                <integer>{hour_val}</integer>\n                <key>Minute</key>\n                <integer>{min_val}</integer>\n            </dict>")
+                
+        intervals_str = "\n".join(calendar_intervals)
+        
+        if getattr(sys, 'frozen', False):
+            exec_args = f"        <string>{sys.executable}</string>\n        <string>--auto</string>"
+        else:
+            python_bin = sys.executable or "python3"
+            script_file = os.path.join(BASE_DIR, "auto_backup.py")
+            exec_args = f"        <string>{python_bin}</string>\n        <string>{script_file}</string>\n        <string>--auto</string>"
+
+        plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.databasebackup.automation</string>
+    <key>ProgramArguments</key>
+    <array>
+{exec_args}
+    </array>
+    <key>StartCalendarInterval</key>
+    <array>
+{intervals_str}
+    </array>
+    <key>RunAtLoad</key>
+    <{'true' if on_boot else 'false'}/>
+    <key>StandardOutPath</key>
+    <string>{LOG_FILE}</string>
+    <key>StandardErrorPath</key>
+    <string>{LOG_FILE}</string>
+</dict>
+</plist>
+"""
+        with open(plist_path, "w", encoding="utf-8") as f:
+            f.write(plist_content)
+            
+        try:
+            subprocess.run(["launchctl", "unload", plist_path], capture_output=True)
+            subprocess.run(["launchctl", "load", plist_path], capture_output=True)
+        except Exception:
+            pass
+            
+        emit_log(f"macOS LaunchAgent registered ({friendly_schedule}) at: {plist_path}")
+        return True, f"macOS LaunchAgent Active: {friendly_schedule}"
+
+    # Windows Task Scheduler Implementation
+    if executable_path.startswith("python "):
+        cmd_run = f'{executable_path} --auto'
+    else:
+        cmd_run = f'\\"{executable_path}\\" --auto'
+
+    if is_daily:
+        schedule_args = f'/sc daily /st {time_str}'
+    else:
+        days_csv = ",".join(ordered_days)
+        schedule_args = f'/sc weekly /d {days_csv} /st {time_str}'
 
     if as_system_service:
         # First remove any user-level task to avoid conflicting double-executions
@@ -1251,8 +1557,22 @@ def enable_scheduler(executable_path=None, days="MON", time_str="02:00", as_syst
 
 def disable_scheduler():
     """
-    Unregisters and cleans up all scheduled tasks (User, System Service, and Daemon Boot task).
+    Unregisters and cleans up all scheduled tasks (User, System Service, Daemon Boot task, macOS LaunchAgents).
     """
+    if platform.system().lower() == "darwin":
+        plist_path = os.path.expanduser("~/Library/LaunchAgents/com.databasebackup.automation.plist")
+        if os.path.exists(plist_path):
+            try:
+                subprocess.run(["launchctl", "unload", plist_path], capture_output=True)
+            except Exception:
+                pass
+            try:
+                os.remove(plist_path)
+            except Exception:
+                pass
+        emit_log("macOS LaunchAgent automation removed.")
+        return True, "Automated schedules removed."
+
     tasks_to_remove = [TASK_SCHEDULER_NAME, SYSTEM_SERVICE_TASK_NAME, DAEMON_SERVICE_TASK_NAME]
     removed_any = False
     
@@ -1314,21 +1634,24 @@ def detect_sql_server_instances():
 def detect_user_databases(sql_server, sql_user="", sql_password=""):
     """
     Queries Microsoft SQL Server for online user databases.
-    
-    Executes:
-    SELECT name FROM sys.databases WHERE database_id > 4 AND state_desc = 'ONLINE';
-    Filtering out database_id <= 4 excludes internal system DBs:
-    1: master, 2: tempdb, 3: model, 4: msdb
+    Universal compatibility query across SQL Server 2000, 2005, 2008, 2008 R2, 2012, 2014, 2016, 2017, 2019, 2022:
+    - Queries sys.databases on SQL Server 2005+
+    - Falls back to master.dbo.sysdatabases on SQL Server 2000 / legacy setups
+    - Excludes system databases (database_id / dbid <= 4: master, tempdb, model, msdb)
     """
-    if sql_user and sql_password:
-        cmd = f'sqlcmd -b -l 15 -S "{sql_server}" -U "{sql_user}" -P "{sql_password}" -C -h -1 -W -Q "SET NOCOUNT ON; SELECT name FROM sys.databases WHERE database_id > 4"'
-    else:
-        cmd = f'sqlcmd -b -l 15 -S "{sql_server}" -E -C -h -1 -W -Q "SET NOCOUNT ON; SELECT name FROM sys.databases WHERE database_id > 4"'
-        
-    try:
-        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
-        if res.returncode == 0:
-            return [line.strip() for line in res.stdout.splitlines() if line.strip() and not line.startswith("---")]
-    except Exception:
-        pass
+    query = (
+        "SET NOCOUNT ON; "
+        "IF OBJECT_ID('sys.databases') IS NOT NULL "
+        "  SELECT name FROM sys.databases WHERE database_id > 4 AND state_desc = 'ONLINE' "
+        "ELSE "
+        "  SELECT name FROM master.dbo.sysdatabases WHERE dbid > 4;"
+    )
+    rc, stdout, stderr = execute_sql_query_adaptive(sql_server, query, sql_user, sql_password, timeout=15)
+    if rc == 0 and stdout.strip():
+        lines = []
+        for line in stdout.strip().splitlines():
+            line_str = line.strip()
+            if line_str and not line_str.startswith("-") and not line_str.startswith("(") and not line_str.lower().startswith("name"):
+                lines.append(line_str)
+        return lines
     return []

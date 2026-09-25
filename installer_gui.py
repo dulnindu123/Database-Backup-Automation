@@ -78,11 +78,18 @@ class InstallerApp(ctk.CTk):
         # Default destination installation directory in %LOCALAPPDATA%\Programs
         self.target_dir = os.path.join(os.environ.get("LOCALAPPDATA", "C:\\"), "Programs", "DatabaseBackupApp")
 
-        # Apply branding icon if available
+        # Apply branding icon if available (ICO for Windows, PNG for macOS/Linux)
         ico = os.path.join(self.bundle_dir, "app_icon.ico")
-        if os.path.exists(ico):
+        png = os.path.join(self.bundle_dir, "app_icon.png")
+        if sys.platform.startswith("win") and os.path.exists(ico):
             try:
                 self.iconbitmap(ico)
+            except Exception:
+                pass
+        elif os.path.exists(png):
+            try:
+                img = tk.PhotoImage(file=png)
+                self.wm_iconphoto(True, img)
             except Exception:
                 pass
 
