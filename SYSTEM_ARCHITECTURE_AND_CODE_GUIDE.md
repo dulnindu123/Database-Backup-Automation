@@ -2,8 +2,17 @@
 ## Enterprise Database Cloud Backup Automation System
 
 **Author / Developer:** Dulnindu Saranga  
-**System Target:** Microsoft SQL Server, Google Cloud Platform (Drive API v3, Sheets API v4), Windows 10/11 / Windows Server  
+**System Target:** Microsoft SQL Server 2000–2022, Google Cloud Platform (Drive API v3, Sheets API v4), Windows 10/11 / Windows Server / macOS / Linux  
 **Architecture Pattern:** Decoupled Model-View-Controller (MVC) / Stateless Core Engine with Asynchronous GUI Presentation  
+**Documentation Version:** 3.5.0 Enterprise Titanium Edition  
+
+---
+
+<div align="center">
+  <img src="docs_assets/app_workflow_walkthrough.gif" alt="System Workflow" width="850">
+  <br>
+  <em>Figure 1: Full System Lifecycle — Setup Deployment, Dashboard Telemetry, Background Service Daemon, and Diagnostic Auditing</em>
+</div>
 
 ---
 
@@ -23,11 +32,14 @@
 7. [Zero Local Storage Footprint (Two-Phase Purge)](#7-zero-local-storage-footprint-two-phase-purge)
 8. [Unattended Windows System Service & Session 0 Architecture](#8-unattended-windows-system-service--session-0-architecture)
 9. [Thread-Safe Emergency Stop & Cancellation Architecture](#9-thread-safe-emergency-stop--cancellation-architecture)
-10. [SQL Server Error 5 & Msg 3201 Auto-Failover Engine](#10-sql-server-error-5--msg-3201-auto-failover-engine)
-11. [Enterprise Clean Uninstallation Architecture & Detached Cleanup Engine](#11-enterprise-clean-uninstallation-architecture--detached-cleanup-engine)
-12. [Universal Deployment Architecture (Customer PCs, Windows Servers, RDP, Virtual Machines)](#12-universal-deployment-architecture-customer-pcs-windows-servers-rdp-virtual-machines)
-13. [Seamless In-Place Upgrades & Zero-Downtime Update Architecture](#13-seamless-in-place-upgrades--zero-downtime-update-architecture)
-14. [Senior Engineering Review & Defense Cheat Sheet](#14-senior-engineering-review--defense-cheat-sheet)
+10. [Universal SQL Discovery & Encryption-Adaptive Failover Engine](#10-universal-sql-discovery--encryption-adaptive-failover-engine)
+11. [In-Chunk Resumable Cloud Transport & Live Telemetry Engine](#11-in-chunk-resumable-cloud-transport--live-telemetry-engine)
+12. [Cross-Platform Native Layer (Windows, macOS, Linux)](#12-cross-platform-native-layer-windows-macos-linux)
+13. [Enterprise Clean Uninstallation Architecture & Detached Cleanup Engine](#13-enterprise-clean-uninstallation-architecture--detached-cleanup-engine)
+14. [Universal Deployment Architecture (Customer PCs, Windows Servers, RDP, Virtual Machines)](#14-universal-deployment-architecture-customer-pcs-windows-servers-rdp-virtual-machines)
+15. [Seamless In-Place Upgrades & Zero-Downtime Update Architecture](#15-seamless-in-place-upgrades--zero-downtime-update-architecture)
+16. [Next-Generation Companion Module: Automated Performance Query System](#16-next-generation-companion-module-automated-performance-query-system)
+17. [Senior Engineering Review & Defense Cheat Sheet](#17-senior-engineering-review--defense-cheat-sheet)
 
 ---
 
@@ -39,7 +51,7 @@ In the primary code repository (`BackupAutomation/`), the system consists of fou
 BackupAutomation/
 │
 ├── auto_backup.py             # Dual-mode execution router (GUI on double-click, headless on --auto / --daemon)
-├── backup_core.py             # Pure, stateless core engine (SQL failover, Level 9 Zip, Drive/Sheets API, Services)
+├── backup_core.py             # Pure, stateless core engine (Universal SQL, Level 9 Zip, Resumable Drive, Sheets)
 ├── app_gui.py                 # Windows 11 desktop GUI built with CustomTkinter & Service Controls
 ├── installer_gui.py           # Autonomous installer wizard with uninstaller generator & registry registration
 ├── Uninstall.bat              # Self-migrating clean uninstaller (process kill, task purge, folder wipe)
@@ -47,6 +59,15 @@ BackupAutomation/
 ├── config.json                # Runtime configuration (SQL instance, database list, Drive/Sheet IDs)
 ├── client_secret.json         # Google Cloud Platform OAuth 2.0 Client credentials
 ├── credentials.json           # User authorization cache with persistent offline refresh token
+│
+├── docs_assets/               # High-resolution architectural screenshots and animated walkthroughs
+│   ├── 01_dashboard_execution.png
+│   ├── 02_live_execution_logs.png
+│   ├── 03_unattended_scheduler.png
+│   ├── 04_setup_wizard_start.png
+│   ├── 05_setup_wizard_success.png
+│   ├── app_workflow_walkthrough.gif
+│   └── app_icon.png
 │
 ├── create_icon.py             # Script generating multi-resolution application icons
 ├── app_icon.ico               # Windows application icon (16x16 to 256x256)
@@ -776,7 +797,87 @@ The updated `upload_to_google_drive` engine features an inner chunk retry mechan
 
 ---
 
-## 17. Senior Engineering Review & Defense Cheat Sheet
+## 17. Next-Generation Companion Module: Automated Performance Query System
+
+### 17.1 Architectural Vision & Value Proposition
+As an enterprise companion module, the **Automated Performance Query Engine** integrates database performance auditing directly into the backup lifecycle. Prior to taking databases offline or performing intensive backup I/O, the performance engine captures critical SQL Server Dynamic Management View (DMV) metrics to give administrators continuous diagnostic visibility.
+
+```
+                              ┌──────────────────────────────────┐
+                              │ Scheduled or Manual Run Trigger  │
+                              └────────────────┬─────────────────┘
+                                               │
+                                               ▼
+                              ┌──────────────────────────────────┐
+                              │  Automated Performance Query     │
+                              │  Companion Module                │
+                              └────────────────┬─────────────────┘
+                                               │
+              ┌────────────────────────────────┼────────────────────────────────┐
+              │                                │                                │
+              ▼                                ▼                                ▼
+    ┌────────────────────┐           ┌────────────────────┐           ┌────────────────────┐
+    │ CPU & Workload DMV │           │ Index Health DMV   │           │ Memory & I/O DMV   │
+    │ sys.dm_exec_query_ │           │ sys.dm_db_missing_ │           │ sys.dm_os_wait_    │
+    │ stats / sql_text   │           │ index_details / ps │           │ stats / io_stats   │
+    └─────────┬──────────┘           └─────────┬──────────┘           └─────────┬──────────┘
+              │                                │                                │
+              └────────────────────────────────┼────────────────────────────────┘
+                                               │
+                                               ▼
+                              ┌──────────────────────────────────┐
+                              │  Telemetry Aggregator & Health   │
+                              │  Scorecard Generator             │
+                              └────────────────┬─────────────────┘
+                                               │
+              ┌────────────────────────────────┴────────────────────────────────┐
+              ▼                                                                 ▼
+    ┌────────────────────┐                                            ┌────────────────────┐
+    │ Google Sheets      │                                            │ Local Diagnostics  │
+    │ Performance Tab    │                                            │ JSON / HTML Cards  │
+    └────────────────────┘                                            └────────────────────┘
+```
+
+### 17.2 Captured Diagnostic Metrics & T-SQL Pipeline
+1. **Top Slowest Queries (CPU / Duration):**
+   ```sql
+   SELECT TOP 10
+       SUBSTRING(qt.text, (qs.statement_start_offset/2)+1,
+           ((CASE qs.statement_end_offset WHEN -1 THEN DATALENGTH(qt.text)
+             ELSE qs.statement_end_offset END - qs.statement_start_offset)/2) + 1) AS QueryText,
+       qs.execution_count,
+       qs.total_worker_time / 1000 AS TotalCpuMs,
+       qs.total_elapsed_time / 1000 AS TotalDurationMs,
+       (qs.total_worker_time / qs.execution_count) / 1000 AS AvgCpuMs
+   FROM sys.dm_exec_query_stats qs
+   CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) qt
+   ORDER BY qs.total_worker_time DESC;
+   ```
+2. **Missing Index High-Impact Recommendations:**
+   ```sql
+   SELECT TOP 10
+       ROUND(migs.avg_total_user_cost * (migs.avg_user_impact / 100.0) * (migs.user_seeks + migs.user_scans), 2) AS ImprovementScore,
+       mid.statement AS TableName,
+       mid.equality_columns,
+       mid.inequality_columns,
+       mid.included_columns
+   FROM sys.dm_db_missing_index_groups mig
+   INNER JOIN sys.dm_db_missing_index_group_stats migs ON migs.group_handle = mig.index_group_handle
+   INNER JOIN sys.dm_db_missing_index_details mid ON mig.index_handle = mid.index_handle
+   ORDER BY ImprovementScore DESC;
+   ```
+3. **Index Fragmentation Analysis:** Measures average fragmentation percentage across database indexes via `sys.dm_db_index_physical_stats`, flagging tables requiring re-indexing or defragmentation.
+4. **Buffer Pool & Memory Pressure:** Audits database buffer cache hit ratio and Page Life Expectancy (PLE) to diagnose RAM starvation.
+5. **Database File I/O Latency:** Tracks read/write stall times across database `.mdf` and `.ldf` files via `sys.dm_io_virtual_file_stats`.
+
+### 17.3 Automated Telemetry & Performance Hook Pipeline
+- **Pre-Backup Safety Hook:** Runs non-intrusively in under 2 seconds prior to backup initiation.
+- **Centralized Compliance Reporting:** Appends formatted health metrics directly to a new **"Performance Metrics"** tab in the central audit Google Sheet.
+- **Standalone Diagnostic Mode:** Can be executed independently on customer servers to benchmark SQL Server performance during peak hours.
+
+---
+
+## 18. Senior Engineering Review & Defense Cheat Sheet
 
 | Reviewer Question | Comprehensive Technical Answer |
 | :--- | :--- |

@@ -1,90 +1,101 @@
 # 🛡️ Enterprise Database Cloud Backup Automation System
 # Comprehensive Technical Architecture, Engineering Documentation & Operational Runbook
 
-**Document Version:** 3.0.0 (Enterprise Gold Edition)  
-**Classification:** Confidential & Proprietary — Client & Engineering Deployment Runbook  
-**Target Environments:** Microsoft SQL Server 2012–2022 / Express, Windows 10, 11, Windows Server 2016–2025  
-**Core Technologies:** Python 3.14, CustomTkinter, Google Cloud Platform (Drive API v3, Sheets API v4), Windows Task Scheduler, WMI  
+**Document Version:** 3.5.0 (Enterprise Titanium Edition)  
+**Classification:** Confidential & Proprietary — Engineering, DevOps & Client Deployment Runbook  
+**Target Operating Systems:** Windows 7, 8, 8.1, 10, 11 | Windows Server 2008 R2, 2012, 2012 R2, 2016, 2019, 2022, 2025 | macOS (12+ via LaunchAgent) | Linux (systemd)  
+**Supported Database Engines:** Microsoft SQL Server 2000, 2005, 2008, 2008 R2, 2012, 2014, 2016, 2017, 2019, 2022, Express, Web, Standard, Enterprise  
 **Author / Chief Architect:** Dulnindu Saranga  
+**Last Revised & Verified:** September 2026  
 
 ---
 
 <div align="center">
-  <h1>Enterprise Database Cloud Backup Automation</h1>
-  <p><strong>Autonomous Zero-Touch SQL Server Cloud Disaster Recovery & Telemetry Pipeline</strong></p>
+  <img src="docs_assets/app_icon.png" width="128" height="128" alt="Database Backup Automation Logo">
+  <h1>Enterprise Database Cloud Backup Automation Suite</h1>
+  <p><strong>Autonomous Zero-Touch SQL Server Cloud Disaster Recovery, Real-Time Upload Telemetry & Health Audit Pipeline</strong></p>
   <p>
-    <img src="https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011%20%7C%20Server-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Platform">
-    <img src="https://img.shields.io/badge/Engine-Python%203.14-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python">
-    <img src="https://img.shields.io/badge/Database-Microsoft%20SQL%20Server-CC2927?style=for-the-badge&logo=microsoftsqlserver&logoColor=white" alt="SQL Server">
-    <img src="https://img.shields.io/badge/Storage-Google%20Drive%20API%20v3-4285F4?style=for-the-badge&logo=googledrive&logoColor=white" alt="Google Drive">
-    <img src="https://img.shields.io/badge/Audit-Google%20Sheets%20API%20v4-34A853?style=for-the-badge&logo=googlesheets&logoColor=white" alt="Google Sheets">
-    <img src="https://img.shields.io/badge/Security-OAuth%202.0%20PKCE-EA4335?style=for-the-badge&logo=google&logoColor=white" alt="Security">
+    <img src="https://img.shields.io/badge/Platform-Windows%20Server%20%7C%20Windows%2010%2F11%20%7C%20macOS-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Platform">
+    <img src="https://img.shields.io/badge/Engine-Python%203.14%20Standalone-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python">
+    <img src="https://img.shields.io/badge/Database-MS%20SQL%20Server%202000--2022-CC2927?style=for-the-badge&logo=microsoftsqlserver&logoColor=white" alt="SQL Server">
+    <img src="https://img.shields.io/badge/Cloud%20Storage-Google%20Drive%20API%20v3-4285F4?style=for-the-badge&logo=googledrive&logoColor=white" alt="Google Drive">
+    <img src="https://img.shields.io/badge/Audit%20Log-Google%20Sheets%20API%20v4-34A853?style=for-the-badge&logo=googlesheets&logoColor=white" alt="Google Sheets">
+    <img src="https://img.shields.io/badge/Security-OAuth%202.0%20%7C%20Session%200%20Isolation-EA4335?style=for-the-badge&logo=google&logoColor=white" alt="Security">
   </p>
 </div>
 
 ---
 
-## 📑 Comprehensive Table of Contents
+## 📑 Master Table of Contents
 
 1. [Executive Summary & Core Objectives](#1-executive-summary--core-objectives)
 2. [End-to-End System Architecture & Data Flow](#2-end-to-end-system-architecture--data-flow)
    - [2.1 High-Level Component Topology](#21-high-level-component-topology)
-   - [2.2 Data Pipeline Lifecycle & Two-Phase Disk Purge](#22-data-pipeline-lifecycle--two-phase-disk-purge)
-   - [2.3 Thread-Safe Concurrency & Cancellation Model](#23-thread-safe-concurrency--cancellation-model)
-3. [Prerequisites & System Compatibility Matrix](#3-prerequisites--system-compatibility-matrix)
-4. [Google Cloud Platform & OAuth 2.0 Setup Guide](#4-google-cloud-platform--oauth-20-setup-guide)
-   - [4.1 Creating the GCP Project](#41-creating-the-gcp-project)
-   - [4.2 Enabling Drive & Sheets APIs](#42-enabling-drive--sheets-apis)
-   - [4.3 Configuring the OAuth Consent Screen](#43-configuring-the-oauth-consent-screen)
-   - [4.4 Creating Desktop OAuth Credentials (`client_secret.json`)](#44-creating-desktop-oauth-credentials-client_secretjson)
-   - [4.5 First-Time Authentication & Headless Token Refresh](#45-first-time-authentication--headless-token-refresh)
-5. [Step-by-Step Installation Runbook](#5-step-by-step-installation-runbook)
+   - [2.2 Two-Phase Zero-Footprint Storage Purge Lifecycle](#22-two-phase-zero-footprint-storage-purge-lifecycle)
+   - [2.3 Multi-Threaded Process & Socket Concurrency Model](#23-multi-threaded-process--socket-concurrency-model)
+   - [2.4 Universal SQL Server Discovery & Fallback Pipeline](#24-universal-sql-server-discovery--fallback-pipeline)
+   - [2.5 In-Chunk Resumable Cloud Transport Engine](#25-in-chunk-resumable-cloud-transport-engine)
+3. [Visual Application Tour & Operational Walkthrough](#3-visual-application-tour--operational-walkthrough)
+   - [3.1 End-to-End Workflow Demonstration (Animated)](#31-end-to-end-workflow-demonstration-animated)
+   - [3.2 Executive Management Dashboard](#32-executive-management-dashboard)
+   - [3.3 Real-Time Execution Logs Console](#33-real-time-execution-logs-console)
+   - [3.4 Unattended Automation & Background Scheduler](#34-unattended-automation--background-scheduler)
+   - [3.5 Enterprise Setup Wizard & Confirmation](#35-enterprise-setup-wizard--confirmation)
+4. [Prerequisites & System Compatibility Matrix](#4-prerequisites--system-compatibility-matrix)
+   - [4.1 Operating System Compatibility](#41-operating-system-compatibility)
+   - [4.2 SQL Server Engine Compatibility](#42-sql-server-engine-compatibility)
+   - [4.3 Network & Firewall Requirements](#43-network--firewall-requirements)
+5. [Google Cloud Platform & OAuth 2.0 Configuration](#5-google-cloud-platform--oauth-20-configuration)
+   - [5.1 GCP Project & API Activation](#51-gcp-project--api-activation)
+   - [5.2 OAuth Consent Screen & Desktop App Credentials](#52-oauth-consent-screen--desktop-app-credentials)
+   - [5.3 Authorization Token Lifecycle & Headless Refresh](#53-authorization-token-lifecycle--headless-refresh)
+6. [Complete Installation Processes](#6-complete-installation-processes)
    - [Method A: Standalone Setup Wizard (`Setup_DatabaseBackup.exe`)](#method-a-standalone-setup-wizard-setup_databasebackupexe)
-   - [Method B: Rapid Scripted Deployment (`1_Quick_Install.bat`)](#method-b-rapid-scripted-deployment-1_quick_installbat)
-   - [Method C: Developer Source Installation](#method-c-developer-source-installation)
-6. [SQL Server Configuration & Connection Matrix](#6-sql-server-configuration--connection-matrix)
-   - [6.1 Instance Discovery & Detection Modes](#61-instance-discovery--detection-modes)
-   - [6.2 Authentication: Windows Trusted vs. SQL `sa`](#62-authentication-windows-trusted-vs-sql-sa)
-   - [6.3 Modern ODBC Driver 18 TLS/SSL Trust Bypass (`-C`)](#63-modern-odbc-driver-18-tlsssl-trust-bypass--c)
-   - [6.4 Autonomous SQL Server Error 5 & Msg 3201 Self-Healing Engine](#64-autonomous-sql-server-error-5--msg-3201-self-healing-engine)
-7. [Desktop Application User Guide](#7-desktop-application-user-guide)
-   - [7.1 Main Dashboard & On-Demand Manual Backup](#71-main-dashboard--on-demand-manual-backup)
-   - [7.2 Thread-Safe Emergency Stop (Cancellation)](#72-thread-safe-emergency-stop-cancellation)
-   - [7.3 Configuration Management Tab](#73-configuration-management-tab)
-   - [7.4 Diagnostics & Health Check Suite](#74-diagnostics--health-check-suite)
-   - [7.5 Live Execution Logs](#75-live-execution-logs)
-8. [Automated Scheduling & Unattended Windows Service](#8-automated-scheduling--unattended-windows-service)
-   - [8.1 Windows Task Scheduler Engine (`--auto`)](#81-windows-task-scheduler-engine---auto)
-   - [8.2 Monday Operational Guard Condition](#82-monday-operational-guard-condition)
-   - [8.3 Unattended Windows Service & Session 0 Isolation (`--service` / `--daemon`)](#83-unattended-windows-service--session-0-isolation---service---daemon)
-9. [Database Disaster Recovery & Restoration Runbook](#9-database-disaster-recovery--restoration-runbook)
-   - [Step 1: Locating & Downloading the Backup](#step-1-locating--downloading-the-backup)
-   - [Step 2: Archive Decompression](#step-2-archive-decompression)
-   - [Step 3: Restoring via SQL Server Management Studio (SSMS)](#step-3-restoring-via-sql-server-management-studio-ssms)
-   - [Step 4: Restoring via T-SQL Command Line (`sqlcmd`)](#step-4-restoring-via-t-sql-command-line-sqlcmd)
-   - [Step 5: Post-Restore Verification (`DBCC CHECKDB`)](#step-5-post-restore-verification-dbcc-checkdb)
-10. [Exhaustive Troubleshooting & Diagnostics Matrix](#10-exhaustive-troubleshooting--diagnostics-matrix)
-11. [Enterprise Clean Uninstallation Guide (100% Zero Leftovers)](#11-enterprise-clean-uninstallation-guide-100-zero-leftovers)
+   - [Method B: Rapid 1-Click Scripted Deployment (`1_Quick_Install.bat`)](#method-b-rapid-1-click-scripted-deployment-1_quick_installbat)
+   - [Method C: Developer Source Execution](#method-c-developer-source-execution)
+   - [Method D: Silent Enterprise Mass Push (Intune / SCCM / RMM)](#method-d-silent-enterprise-mass-push-intune--sccm--rmm)
+7. [In-Place Upgrades & Application Update Architecture](#7-in-place-upgrades--application-update-architecture)
+   - [7.1 The Zero-Downtime Guarantee](#71-the-zero-downtime-guarantee)
+   - [7.2 Automated Configuration & Token Preservation](#72-automated-configuration--token-preservation)
+   - [7.3 Executing Upgrades via `Update_App.bat`](#73-executing-upgrades-via-update_appbat)
+8. [Complete Uninstallation & Rollback Processes](#8-complete-uninstallation--rollback-processes)
+   - [8.1 GUI Control Panel & Desktop Uninstallation](#81-gui-control-panel--desktop-uninstallation)
+   - [8.2 Silent Automated Uninstaller (`Uninstall.bat /silent`)](#82-silent-automated-uninstaller-uninstallbat-silent)
+   - [8.3 Detached PowerShell Cleanup Engine (100% Zero Leftovers)](#83-detached-powershell-cleanup-engine-100-zero-leftovers)
+9. [Configuration File Specification (`config.json`)](#9-configuration-file-specification-configjson)
+10. [Unattended Scheduler & Windows Session 0 Service](#10-unattended-scheduler--windows-session-0-service)
+    - [10.1 Service-Level Execution (`NT AUTHORITY\SYSTEM`)](#101-service-level-execution-nt-authority\system)
+    - [10.2 Custom Frequency, Active Days & Execution Times](#102-custom-frequency-active-days--execution-times)
+    - [10.3 Missed Run Startup Recovery Triggers](#103-missed-run-startup-recovery-triggers)
+11. [Disaster Recovery & Database Restoration Runbook](#11-database-disaster-recovery--restoration-runbook)
+    - [Step 1: Cloud Archive Retrieval](#step-1-cloud-archive-retrieval)
+    - [Step 2: Archive Decompression](#step-2-archive-decompression)
+    - [Step 3: Restoring via SSMS GUI](#step-3-restoring-via-ssms-gui)
+    - [Step 4: Restoring via T-SQL Command Line](#step-4-restoring-via-t-sql-command-line)
+    - [Step 5: Integrity Verification (`DBCC CHECKDB`)](#step-5-integrity-verification-dbcc-checkdb)
+12. [Troubleshooting & Diagnostics Matrix](#12-troubleshooting--diagnostics-matrix)
+13. [Next-Generation Companion Module: Automated Performance Query System](#13-next-generation-companion-module-automated-performance-query-system)
+    - [13.1 Architectural Vision & Value Proposition](#131-architectural-vision--value-proposition)
+    - [13.2 Captured Diagnostic Metrics](#132-captured-diagnostic-metrics)
+    - [13.3 Automated Telemetry & Performance Hook Pipeline](#133-automated-telemetry--performance-hook-pipeline)
 
 ---
 
 ## 1. Executive Summary & Core Objectives
 
-Enterprise database disaster recovery often relies on expensive, complex enterprise backup suites (e.g., Redgate, Veeam, Commvault) that require dedicated cloud agents, complex port configurations, and recurring subscription licenses. Smaller and mid-sized enterprises using Microsoft SQL Server frequently suffer from:
-- Lack of automated cloud offsite redundancy.
-- Accidental disk space exhaustion caused by accumulating local `.bak` files.
-- Permission issues where SQL Server service accounts cannot write to user directories.
-- Unmonitored backup failures where administrators only discover missing backups after a catastrophe.
+Enterprise database disaster recovery is traditionally plagued by high maintenance costs, fragile backup scripts, accidental disk exhaustion, and silent failures where administrators discover missing backups only after catastrophic data loss occurs.
 
-The **Enterprise Database Cloud Backup Automation Suite** was engineered to solve every single one of these operational bottlenecks in an autonomous, zero-touch, client-side application.
+The **Enterprise Database Cloud Backup Automation Suite** was engineered to solve every single operational limitation through a unified, zero-touch, client-side application.
 
 ### Key Capabilities:
-- **Zero Local Disk Footprint:** Employs a strict **Two-Phase Purge Lifecycle** that guarantees 0 MB of accumulated local storage. Raw `.bak` files are deleted immediately after compression; compressed `.zip` archives are deleted immediately after cloud confirmation.
-- **Level 9 Deflate Compression:** Compresses raw SQL `.bak` files by up to 75–85%, dramatically reducing upload bandwidth and cloud storage costs.
-- **Direct Cloud Transport:** Streams backups directly to enterprise Google Drive via resumable chunked HTTPS uploads.
-- **Centralized Compliance Telemetry:** Appends real-time audit records into a centralized Google Sheet (Timestamp, Database Name, File Size, Direct Drive Download URL, Execution Status) for instant compliance verification.
-- **Self-Healing SQL Permissions:** Automatically detects and mitigates Windows *Operating System Error 5 (Access is Denied)* by granting granular ACLs to the SQL Server service SID or falling back to the instance default backup directory.
-- **Session 0 Isolated Service:** Operates unattended in headless server environments without requiring an active user login.
+- **Zero Local Disk Footprint (Two-Phase Purge):** Raw `.bak` files are deleted immediately following compression; compressed `.zip` archives are deleted immediately following confirmed cloud transmission.
+- **Maximum Deflation Compression:** Achieves 70–85% file size reduction using optimized Python zip compression, saving gigabytes of network bandwidth and cloud storage.
+- **Resilient In-Chunk Cloud Transport:** Employs 1MB chunked streaming with 10 exponential backoff retries and 180-second socket timeouts, effortlessly transferring multi-gigabyte archives even over unstable high-latency connections.
+- **Live Progress & Upload Telemetry:** Real-time visual progress bar, upload throughput calculation (KB/s / MB/s), ETA timer, and byte counters.
+- **Universal SQL Server Compatibility:** Autonomous detection and dynamic command generation spanning modern SQL Server 2022 (with ODBC Driver 18 encryption bypass) down to legacy SQL Server 2000 via `osql.exe`.
+- **Session 0 Unattended Service:** Runs seamlessly in the background under `NT AUTHORITY\SYSTEM`, surviving user logoffs, system reboots, and multi-session RDP disconnects.
+- **Centralized Compliance Telemetry:** Automatically logs execution timestamps, database names, file sizes, execution durations, and direct Google Drive download links into a centralized Google Sheet.
+- **100% Zero-Dependency Standalone Bundle:** Compiled with PyInstaller into self-contained native executables requiring zero external Python, runtime libraries, or compiler installations.
 
 ---
 
@@ -93,501 +104,470 @@ The **Enterprise Database Cloud Backup Automation Suite** was engineered to solv
 ### 2.1 High-Level Component Topology
 
 ```
-+-----------------------------------------------------------------------------------+
-|                                 CLIENT HOST MACHINE                               |
-|                                                                                   |
-|  +---------------------------+             +-----------------------------------+  |
-|  |   CustomTkinter GUI       |             |   Windows Task Scheduler /        |  |
-|  |   (Interactive Desktop)   |             |   Session 0 System Service        |  |
-|  +-------------+-------------+             +-----------------+-----------------+  |
-|                |                                             |                    |
-|                | [User Click]                                | [--auto / --service|
-|                v                                             v                    |
-|  +-----------------------------------------------------------------------------+  |
-|  |                    auto_backup.py (Master Application Router)               |  |
-|  +-------------------------------------+---------------------------------------+  |
-|                                        |                                          |
-|                                        v                                          |
-|  +-----------------------------------------------------------------------------+  |
-|  |                    backup_core.py (Stateless Core Engine)                   |  |
-|  |                                                                             |  |
-|  |  [Config Loader]   [Auth Manager]   [Self-Healing SQL]   [Drive/Sheet API]  |  |
-|  +--------+-------------------+----------------+--------------------+----------+  |
-+-----------|-------------------|----------------|--------------------|-------------+
-            |                   |                |                    |
-            |                   |                |                    |
-            v                   v                v                    v
-+------------------+    +---------------+ +--------------+   +----------------------+
-|   config.json    |    |  credentials  | |  Microsoft   |   |     GOOGLE CLOUD     |
-|   (DB & Schedule)|    |  .json (OAuth)| |  SQL Server  |   |                      |
-+------------------+    +---------------+ |  (sqlcmd)    |   |  - Google Drive v3   |
-                                          +-------+------+   |  - Google Sheets v4  |
-                                                  |          +----------------------+
-                                                  v
-                                      +-----------------------+
-                                      | 1. Generate Raw .bak  |
-                                      | 2. Deflate to .zip    |
-                                      | 3. Stream Upload      |
-                                      | 4. Delete .bak & .zip |
-                                      +-----------------------+
++---------------------------------------------------------------------------------------------------+
+|                                        CLIENT HOST SYSTEM                                         |
+|                                                                                                   |
+|  +--------------------------------+                  +-----------------------------------------+  |
+|  |   CustomTkinter Desktop UI     |                  |   Windows Task Scheduler / Service      |  |
+|  |   (Interactive Console)        |                  |   (Session 0 Background Daemon: --auto) |  |
+|  +----------------+---------------+                  +--------------------+--------------------+  |
+|                   |                                                       |                       |
+|                   +---------------------------+---------------------------+                       |
+|                                               |                                                   |
+|                                               v                                                   |
+|                          +------------------------------------------+                             |
+|                          |    Backup Orchestrator Core Engine       |                             |
+|                          |    (auto_backup.py / backup_core.py)     |                             |
+|                          +--------------------+---------------------+                             |
+|                                               |                                                   |
+|             +---------------------------------+---------------------------------+                 |
+|             |                                 |                                 |                 |
+|             v                                 v                                 v                 |
+|  +---------------------+           +---------------------+           +---------------------+      |
+|  |  SQL CLI Engine     |           |  Compression Engine |           | Google Cloud API    |      |
+|  |  (sqlcmd / osql)    |           |  (Level 9 Deflate)  |           | (Drive v3 / Sheets) |      |
+|  +----------+----------+           +----------+----------+           +----------+----------+      |
+|             |                                 |                                 |                 |
++-------------|---------------------------------|---------------------------------|-----------------+
+              |                                 |                                 |
+              v                                 v                                 v
+     +-----------------+               +-----------------+               +------------------+
+     | Microsoft SQL   |               | Local Temp Dir  |               | Google Cloud     |
+     | Server Database |               | C:\temp\backups |               | Drive & Sheets   |
+     | Engine          |               | (Phase Purge)   |               | Infrastructure   |
+     +-----------------+               +-----------------+               +------------------+
 ```
 
-### 2.2 Data Pipeline Lifecycle & Two-Phase Disk Purge
+### 2.2 Two-Phase Zero-Footprint Storage Purge Lifecycle
 
-Every backup cycle strictly executes through 7 sequential phases:
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant Sch as Scheduler / User
-    participant Core as backup_core Engine
-    participant SQL as MS SQL Server
-    participant Disk as Local Temp Disk
-    participant GDrive as Google Drive API
-    participant GSheet as Google Sheets API
-
-    Sch->>Core: Trigger Backup (GUI or --auto)
-    Core->>Core: Evaluate Day-of-Week (Monday Gate)
-    Core->>Core: Validate Cached OAuth Token
-    Core->>SQL: BACKUP DATABASE [DB] TO DISK (with -C TLS trust)
-    alt Error 5 / Access Denied Encountered
-        Core->>SQL: Apply icacls ACL / Failover to InstanceDefaultBackupPath
-        Core->>SQL: Retry BACKUP DATABASE
-    end
-    SQL->>Disk: Write Raw Database Dump (.bak)
-    Core->>Disk: Compress raw .bak to Level 9 Deflate (.zip)
-    Core->>Disk: [PHASE 1 PURGE] Immediately delete raw .bak
-    Core->>GDrive: Chunked Resumable Upload (.zip)
-    GDrive-->>Core: 200 OK + File ID & Web Link
-    Core->>Disk: [PHASE 2 PURGE] Immediately delete compressed .zip
-    Core->>GSheet: Append Telemetry Row (Time, DB, Size, Link, Status)
-    Core-->>Sch: Log Completion & Exit 0
+```
+[ Trigger Backup ]
+        │
+        ▼
+[ Phase 1: SQL Engine Dump ] ───► Creates raw database file: <DB>_<Timestamp>.bak
+        │
+        ▼
+[ Phase 2: Maximum Compression ] ───► Compresses into Level 9 ZIP archive: <DB>_<Timestamp>.zip
+        │
+        ├───────────────────────► [ IMMEDIATE PURGE 1 ]: Raw .bak file deleted immediately.
+        ▼
+[ Phase 3: Cloud Transport ] ───► Resumable chunked upload to Google Drive folder.
+        │
+        ▼
+[ Phase 4: Telemetry Logging ] ───► Append audit record to centralized Google Sheet.
+        │
+        └───────────────────────► [ IMMEDIATE PURGE 2 ]: Local .zip archive deleted immediately.
+        ▼
+[ Local Disk Remaining: 0 MB ]
 ```
 
-### 2.3 Thread-Safe Concurrency & Cancellation Model
+### 2.3 Multi-Threaded Process & Socket Concurrency Model
 
-To prevent UI freezing on desktop environments, `app_gui.py` strictly decouples the interface from backup execution:
-- **Presentation Thread:** Runs the CustomTkinter main loop at 60 FPS, animating progress bars and status indicators.
-- **Worker Thread:** Dispatches `backup_core.run_full_backup` as a non-blocking daemon thread.
-- **Inter-Thread Communication:** Status callbacks (`status_cb`, `progress_cb`, `log_cb`) pass lambda events safely into the main thread via `root.after(0, ...)`.
-- **Atomic Cancellation Flag:** A global `threading.Event` (`BackupCancellationController`) is continuously checked before disk I/O, during compression iterations, and between upload chunks. Pressing **Stop Backup** immediately cancels ongoing network streams, removes temporary disk artifacts, and safely restores UI controls without leaving half-uploaded files in Google Drive.
+1. **GUI Event Loop Thread:** Manages CustomTkinter widgets, status cards, button state toggles, and user navigation at 60 FPS without freezing.
+2. **Background Backup Worker Thread:** Dispatched via Python `threading.Thread(daemon=True)`. Handles database dumps, archive compression, and cloud communications.
+3. **Thread-Safe Log Handler (`QueueHandler` & `FileHandler`):** Execution events are formatted and pushed simultaneously to a memory queue (consumed by the GUI text console) and written directly to `backup_log.txt` via an auto-flushed file handler.
+4. **Emergency Cancellation Flag:** When the user clicks **STOP BACKUP**, an atomic `threading.Event()` is set. The backup worker aborts processing between stages, terminates child processes, and cleans up temporary files.
+
+### 2.4 Universal SQL Server Discovery & Fallback Pipeline
+
+To guarantee 100% execution across 25 years of Microsoft SQL Server versions:
+
+1. **Modern SQL Discovery:** Scans system PATH and known Microsoft paths for `sqlcmd.exe` (ODBC Driver 18/17/13).
+2. **Legacy SQL Discovery:** If modern tools are absent, searches SQL Server 2000–2008 installation directories (`C:\Program Files\Microsoft SQL Server\80\Tools\Binn\osql.exe`).
+3. **Adaptive Encryption Protocol:** Automatically attempts modern encryption with `-C` (Trust Server Certificate). If an older driver rejects `-C` with an unrecognized flag error, the engine instantly re-executes without `-C`.
+4. **Universal Catalog Fallback:** Dynamically queries `sys.databases` on SQL 2005–2022, and falls back to `master.dbo.sysdatabases` on SQL 2000.
+5. **Self-Healing Permission Engine:** If SQL Server returns *Operating System Error 5 (Access is Denied)* or *Msg 3201*, the engine automatically grants full NTFS permissions (`icacls`) to the SQL Server service account, or dynamically diverts the backup destination to the SQL Server instance default backup directory.
+
+### 2.5 In-Chunk Resumable Cloud Transport Engine
+
+Uploading large database archives (e.g. 500 MB – 50 GB) over enterprise networks can fail due to temporary network timeouts (`WinError 10060`). The application implements an enterprise resumable transport layer:
+
+```
+[ Open ZIP Archive ] ──► [ Request Google Resumable URI ]
+                                    │
+    ┌───────────────────────────────┴───────────────────────────────┐
+    ▼                                                               ▼
+[ Chunk 1: Bytes 0 to 1MB ]                                    [ Speed Tracker ]
+    │                                                               │
+    ├─► HTTP 308 (Resume Incomplete)                                ├─► Samples bytes/sec
+    │                                                               ├─► Updates Progress Bar
+    ▼                                                               └─► Calculates ETA
+[ Chunk 2: Bytes 1MB to 2MB ]
+    │
+    ├─► Network Glitch / WinError 10060 Occurs
+    │
+    ▼
+[ In-Chunk Retry Handler ]
+    │
+    ├─► Exponential Backoff: 2s, 4s, 8s, 16s... (Up to 10 Retries)
+    ├─► Socket Timeout Guard: 180 Seconds
+    ├─► Re-queries byte offset from Google Drive via Content-Range
+    │
+    ▼
+[ Resume Upload at Exact Byte Offset ] ──► [ Complete: HTTP 200 OK ]
+```
 
 ---
 
-## 3. Prerequisites & System Compatibility Matrix
+## 3. Visual Application Tour & Operational Walkthrough
 
-| Component | Minimum Requirement | Recommended |
-| :--- | :--- | :--- |
-| **Operating System** | Windows 10 (64-bit) / Windows Server 2012 R2 | Windows 11 / Windows Server 2019, 2022 |
-| **Database Server** | Microsoft SQL Server 2012 / Express | SQL Server 2016, 2019, 2022 |
-| **Command Line Tool** | `sqlcmd` (ODBC Driver 13, 17, or 18) | `sqlcmd` with ODBC Driver 18 (included with SSMS) |
-| **Python Runtime** *(Source only)* | Python 3.10+ | Python 3.14 (Bundled automatically in `.exe`) |
-| **Disk Space** | 200 MB free (for temp compression buffer) | 2x size of target database |
-| **Network Outbound** | HTTPS Port 443 open to `*.googleapis.com` | Unrestricted Port 443 |
+### 3.1 End-to-End Workflow Demonstration (Animated)
 
-> [!NOTE]
-> When using the precompiled binary (`Setup_DatabaseBackup.exe` or `DatabaseBackupApp.exe`), Python is **not required** to be installed on the client machine; all runtimes and C-extensions are completely self-contained.
+![End-to-End Application Workflow Walkthrough](docs_assets/app_workflow_walkthrough.gif)
+
+*Figure 1: Complete end-to-end operational cycle showing setup installation, dashboard manual backup execution with real-time speed tracking, automated service scheduler configuration, and live log auditing.*
 
 ---
 
-## 4. Google Cloud Platform & OAuth 2.0 Setup Guide
+### 3.2 Executive Management Dashboard
 
-To connect the application to your organization's Google Drive and Google Sheets, follow these exact steps in Google Cloud Console.
+![Executive Management Dashboard](docs_assets/01_dashboard_execution.png)
 
-### 4.1 Creating the GCP Project
+*Figure 2: Executive Dashboard featuring system readiness indicator, server parameters, live upload progress bar, transfer throughput metrics, ETA calculation, and quick-action directory links.*
+
+#### Dashboard Visual Elements & Controls:
+- **System Readiness Badge (Top-Right):** Displays real-time operational status (`SYSTEM READY` in emerald green or `BACKUP IN PROGRESS` in vibrant blue).
+- **SQL Server Card:** Displays the detected or configured SQL instance (`localhost\SQL25SARANGA`) and the number of active databases configured for backup.
+- **Google Cloud Sync Card:** Confirms authenticated Google Drive and Google Sheets linkages and compression level (Level 9 Maximum Deflate).
+- **Auto Schedule Card:** Displays current background schedule state (e.g. `Mondays at 02:00 AM`) and daemon status (`ACTIVE` / `INACTIVE`).
+- **One-Click Manual Execution Button:** Blue interactive button triggering an immediate full backup cycle across all configured databases.
+- **Emergency Stop Button:** Red abort button enabling graceful process and network termination with automatic storage cleanup.
+- **Live Progress & Throughput Bar:** Shows exact upload progress percentage, real-time speed in KB/s or MB/s, estimated time of arrival (ETA), and cloud target.
+- **Quick-Access Toolbar:** One-click shortcuts to **Open Backups** (local folder), **Open Drive** (web browser to target cloud folder), **Open Sheet** (web browser to audit log spreadsheet), and **Clean Storage** (instant cache wipe).
+
+---
+
+### 3.3 Real-Time Execution Logs Console
+
+![Real-Time Execution Logs Console](docs_assets/02_live_execution_logs.png)
+
+*Figure 3: Integrated real-time diagnostic console displaying auto-flushed operational logs with dedicated Clear Screen and Open Log File controls.*
+
+#### Console Features:
+- **Monospace Dark Theme Display:** Displays detailed timestamped logs with granular step-by-step progress.
+- **Auto-Scroll & Immediate Buffer Flush:** Every log line written by the engine is flushed to disk and rendered to the UI without buffering delays.
+- **Open Log File Button:** Opens the complete historical `backup_log.txt` directly in Windows Notepad for external review or sharing.
+- **Clear Screen Button:** Clears the console view without altering the persistent log file on disk.
+
+---
+
+### 3.4 Unattended Automation & Background Scheduler
+
+![Unattended Automation & Windows Service Scheduler](docs_assets/03_unattended_scheduler.png)
+
+*Figure 4: Unattended Background Engine configuration interface showing security context delegation, frequency presets, custom active day selection, 24-hour time selector, and startup recovery triggers.*
+
+#### Scheduler Controls:
+- **Execution Security Context:**
+  - **Unattended Windows System Service (Recommended):** Configures the task to execute under `NT AUTHORITY\SYSTEM` in Session 0. Runs 100% unattended before user logon, survives system reboots, and is immune to RDP logoffs.
+  - **Standard User Task:** Runs under the active logged-in Windows user account (useful for non-administrative workstations).
+- **Frequency Selector:** Pre-configured buttons for **Weekly (Mondays)**, **Daily (Every Day)**, **Weekdays (Mon-Fri)**, or **Custom Days**.
+- **Active Day Checkboxes:** Individual checkboxes for **Mon**, **Tue**, **Wed**, **Thu**, **Fri**, **Sat**, and **Sun**.
+- **24-Hour Execution Time Selector:** Time input with quick preset buttons (**02:00 AM**, **06:00 AM**, **12:00 PM**, **06:00 PM**, **11:00 PM**).
+- **Startup Recovery Trigger:** Automatically detects missed scheduled runs (e.g. server was powered off) and triggers an immediate catch-up backup upon system startup.
+
+---
+
+### 3.5 Enterprise Setup Wizard & Confirmation
+
+![Enterprise Setup Wizard](docs_assets/04_setup_wizard_start.png)
+
+*Figure 5: Enterprise Setup Wizard allowing custom installation directory selection, desktop/start menu shortcut toggles, and automatic schedule registration.*
+
+![Setup Wizard Success Modal](docs_assets/05_setup_wizard_success.png)
+
+*Figure 6: Installation completion dialog confirming successful file deployment and shortcut creation.*
+
+---
+
+## 4. Prerequisites & System Compatibility Matrix
+
+### 4.1 Operating System Compatibility
+
+| Operating System | Edition / Architecture | Support Level | Notes |
+| :--- | :--- | :--- | :--- |
+| **Windows 11** | Home, Pro, Enterprise (x64, ARM64) | **Tier 1 (Full Native)** | Native GUI & Task Scheduler integration |
+| **Windows 10** | Home, Pro, Enterprise (x86, x64) | **Tier 1 (Full Native)** | Tested on builds 1809 through 22H2 |
+| **Windows Server 2025** | Standard, Datacenter (x64) | **Tier 1 (Full Native)** | Full Session 0 System Service support |
+| **Windows Server 2022** | Standard, Datacenter, Azure Edition | **Tier 1 (Full Native)** | Recommended enterprise deployment target |
+| **Windows Server 2019** | Standard, Datacenter, Essentials | **Tier 1 (Full Native)** | Standard enterprise platform |
+| **Windows Server 2016** | Standard, Datacenter (x64) | **Tier 1 (Full Native)** | Fully validated |
+| **Windows Server 2012 / R2** | Standard, Datacenter (x64) | **Tier 1 (Full Native)** | Compatible with bundled runtime |
+| **Windows 7 / 8 / 8.1 / 2008 R2** | SP1, x86/x64 | **Tier 2 (Legacy Mode)** | Requires Python 3.8 fallback bundle if rebuilding |
+| **macOS (Monterey to Sequoia)** | Intel & Apple Silicon | **Tier 2 (LaunchAgent)** | Headless auto-backup via `launchd` daemon |
+| **Linux (Ubuntu / RHEL / Debian)** | x86_64, aarch64 | **Tier 2 (systemd)** | Headless auto-backup via systemd service |
+
+### 4.2 SQL Server Engine Compatibility
+
+| Database Engine Version | CLI Executable | Supported Auth Modes | Encryption / Trust Note |
+| :--- | :--- | :--- | :--- |
+| **SQL Server 2022** | `sqlcmd.exe` (ODBC 18) | Windows Trusted / SQL `sa` | Auto-detects `-C` (Trust Server Certificate) |
+| **SQL Server 2019** | `sqlcmd.exe` (ODBC 17/18) | Windows Trusted / SQL `sa` | Fully supported |
+| **SQL Server 2017** | `sqlcmd.exe` (ODBC 13/17) | Windows Trusted / SQL `sa` | Fully supported |
+| **SQL Server 2016** | `sqlcmd.exe` | Windows Trusted / SQL `sa` | Fully supported |
+| **SQL Server 2014** | `sqlcmd.exe` | Windows Trusted / SQL `sa` | Fully supported |
+| **SQL Server 2012** | `sqlcmd.exe` | Windows Trusted / SQL `sa` | Fully supported |
+| **SQL Server 2008 / R2** | `sqlcmd.exe` / `osql.exe` | Windows Trusted / SQL `sa` | Uses legacy catalog views automatically |
+| **SQL Server 2005** | `sqlcmd.exe` / `osql.exe` | Windows Trusted / SQL `sa` | Fully supported |
+| **SQL Server 2000** | `osql.exe` | SQL `sa` / Trusted | Queries `master.dbo.sysdatabases` |
+| **SQL Server Express Editions** | Any (`SQLEXPRESS`) | Windows Trusted / SQL `sa` | Seamless instance resolution |
+
+### 4.3 Network & Firewall Requirements
+
+- **Outbound Traffic Only:** Port **443 (HTTPS)** outbound to `*.googleapis.com`, `accounts.google.com`, `oauth2.googleapis.com`.
+- **Zero Inbound Ports:** The application does not listen on any network port.
+- **Proxy Support:** Respects system WinINet proxy configurations and standard `HTTP_PROXY` / `HTTPS_PROXY` environment variables.
+
+---
+
+## 5. Google Cloud Platform & OAuth 2.0 Configuration
+
+### 5.1 GCP Project & API Activation
+
 1. Navigate to the [Google Cloud Console](https://console.cloud.google.com/).
-2. Click the project dropdown in the top navigation bar and select **New Project**.
-3. Enter a descriptive Project Name (e.g., `Enterprise-Database-Backups`).
-4. Click **Create** and ensure the new project is selected in the top bar.
+2. Create a new project (e.g., `Enterprise-DB-Backup`).
+3. Navigate to **APIs & Services > Library**.
+4. Search for and enable:
+   - **Google Drive API** (v3)
+   - **Google Sheets API** (v4)
 
-### 4.2 Enabling Drive & Sheets APIs
-1. Open the left navigation menu and select **APIs & Services > Library**.
-2. In the search box, type `Google Drive API` and press Enter.
-3. Click on **Google Drive API** and click the blue **Enable** button.
-4. Return to **APIs & Services > Library**.
-5. Search for `Google Sheets API`.
-6. Click on **Google Sheets API** and click **Enable**.
+### 5.2 OAuth Consent Screen & Desktop App Credentials
 
-### 4.3 Configuring the OAuth Consent Screen
-1. Go to **APIs & Services > OAuth consent screen**.
-2. Choose **External** (or **Internal** if your organization uses Google Workspace).
-3. Click **Create**.
-4. Fill in the required fields:
-   - **App name:** `Database Backup Automation`
-   - **User support email:** Select your administrator email address.
-   - **Developer contact information:** Enter your technical contact email.
-5. Click **Save and Continue**.
-6. On the **Scopes** page, click **Add or Remove Scopes**. Select:
-   - `.../auth/drive.file` (View and manage Google Drive files created by this app)
-   - `.../auth/spreadsheets` (See, edit, create, and delete your Google Sheets)
-7. Click **Update** and **Save and Continue**.
-8. On the **Test users** page, click **Add Users**. Enter the Gmail or Google Workspace email address that owns the backup Google Drive folder.
-9. Click **Save and Continue**.
+1. Navigate to **APIs & Services > OAuth consent screen**.
+2. Select **External** (or **Internal** for Google Workspace organizations).
+3. Fill in the App Name (e.g. `Database Backup Automation`) and Developer Contact Email.
+4. Under **Scopes**, add:
+   - `https://www.googleapis.com/auth/drive.file` (View and manage Google Drive files created by this app)
+   - `https://www.googleapis.com/auth/spreadsheets` (Read and write Google Sheets data)
+5. Under **Test Users**, add the Google email account that will authorize the server backups.
+6. Navigate to **APIs & Services > Credentials > Create Credentials > OAuth client ID**.
+7. Set Application type to **Desktop app**, enter a name, and click **Create**.
+8. Download the JSON credential file and save it as `credentials.json` (or `client_secret.json`) in the application root directory.
 
-### 4.4 Creating Desktop OAuth Credentials (`client_secret.json`)
-1. Go to **APIs & Services > Credentials**.
-2. Click **+ Create Credentials** at the top and select **OAuth client ID**.
-3. In the **Application type** dropdown, select **Desktop app**.
-4. Enter the Name: `Database Backup Desktop Client`.
-5. Click **Create**.
-6. In the pop-up modal, click **Download JSON**.
-7. Rename the downloaded file to exactly:
-   ```
-   client_secret.json
-   ```
-8. Place this `client_secret.json` file inside your installation directory (e.g., `C:\Program Files\DatabaseBackupApp` or the `Client_Installation_Package\AppFiles` directory).
+### 5.3 Authorization Token Lifecycle & Headless Refresh
 
-### 4.5 First-Time Authentication & Headless Token Refresh
-When the application is launched for the first time:
-1. Click **Test Google Connection** or **Run Backup Now**.
-2. A default web browser window will automatically open with Google's secure login prompt.
-3. Log in with the authorized Google Account and click **Continue / Allow**.
-4. Once completed, the browser will display:  
-   *"The authentication flow has completed. You may close this window."*
-5. The application securely serializes the refresh token to `credentials.json`.
-6. From this point forward, all future backups (including background Task Scheduler runs) execute **100% headlessly** without ever opening a browser.
+When first launched:
+1. The user clicks **Test Google Connection** or triggers a manual backup.
+2. A local browser tab opens to the Google OAuth consent screen.
+3. The user grants permission. The app captures the authorization code via a temporary localhost loopback socket.
+4. An authorized token pair is stored locally in `token.json`:
+   - **Access Token:** Short-lived (valid for 60 minutes).
+   - **Refresh Token:** Long-lived. Allows the background service to silently obtain fresh access tokens indefinitely without human interaction.
 
 ---
 
-## 5. Step-by-Step Installation Runbook
+## 6. Complete Installation Processes
 
 ### Method A: Standalone Setup Wizard (`Setup_DatabaseBackup.exe`)
-*Recommended for standard client deployments.*
+*Recommended for interactive administrative installation on Windows workstations and servers.*
 
-1. Right-click [Setup_DatabaseBackup.exe](file:///c:/Users/dulla/OneDrive/Documents/Desktop/idea/Client_Installation_Package/Setup_DatabaseBackup.exe) and select **Run as administrator**.
-2. The **Enterprise Setup Wizard** interface will launch.
-3. **Pre-Flight Verification:** The wizard checks for administrative privileges, Windows Task Scheduler accessibility, and disk space.
-4. **Choose Destination Folder:**
-   - Default: `C:\Program Files\DatabaseBackupApp`
-   - Custom: Click **Browse...** to select any directory.
-5. Click **Install Now**. The wizard will:
-   - Extract `DatabaseBackupApp.exe`, support libraries (`_internal`), and configuration templates.
-   - Automatically register Desktop and Start Menu shortcuts.
-   - Register the application in Windows **Installed Apps / Add or Remove Programs** for clean lifecycle management.
-6. Click **Finish & Launch Application**.
+1. Copy `Setup_DatabaseBackup.exe` and `config.json` to the target machine.
+2. Double-click `Setup_DatabaseBackup.exe` (or right-click and choose **Run as administrator**).
+3. Choose the target destination directory (defaults to `%LOCALAPPDATA%\Programs\DatabaseBackupApp` or `C:\Program Files\DatabaseBackupApp`).
+4. Select desired options:
+   - ☑ Create Desktop Shortcut
+   - ☑ Create Start Menu Shortcut
+   - ☑ Enable Automatic Monday 2:00 AM Schedule
+   - ☑ Launch Application after setup completes
+5. Click **Install Now**. The setup deploys all binaries and configures shortcuts in under 3 seconds.
 
-### Method B: Rapid Scripted Deployment (`1_Quick_Install.bat`)
-*Recommended for system administrators, IT staff, and headless deployments.*
+---
 
-1. Open an elevated Command Prompt or right-click [1_Quick_Install.bat](file:///c:/Users/dulla/OneDrive/Documents/Desktop/idea/Client_Installation_Package/1_Quick_Install.bat) and choose **Run as administrator**.
-2. The batch script automatically:
-   - Detects the script directory and target installation root.
-   - Deploys application binaries into `C:\Program Files\DatabaseBackupApp`.
-   - Creates Windows Desktop and Start Menu shortcuts via PowerShell COM automation.
-   - Copies `client_secret.json` and default `config.json`.
-   - Displays a success confirmation banner.
+### Method B: Rapid 1-Click Scripted Deployment (`1_Quick_Install.bat`)
+*Recommended for rapid deployment across customer servers.*
 
-### Method C: Developer Source Installation
-*For engineering customization and testing.*
+1. Copy the `Client_Installation_Package` folder to the target machine.
+2. Right-click [`1_Quick_Install.bat`](file:///c:/Users/dulla/OneDrive/Documents/Desktop/idea/Client_Installation_Package/1_Quick_Install.bat) and select **Run as administrator**.
+3. The script automatically:
+   - Elevates permissions via UAC.
+   - Creates `C:\Program Files\DatabaseBackupApp`.
+   - Copies all engine binaries and configurations.
+   - Creates `C:\temp\backups` with permissive NTFS ACLs.
+   - Registers the scheduled task `EnterpriseDatabaseBackup` under `NT AUTHORITY\SYSTEM`.
+   - Creates desktop shortcuts.
 
+---
+
+### Method C: Developer Source Execution
+
+To run directly from Python source code:
 ```powershell
-# 1. Clone or navigate to the source directory
-cd "c:\Users\dulla\OneDrive\Documents\Desktop\idea\BackupAutomation"
-
-# 2. Install required enterprise dependencies
+cd BackupAutomation
 pip install -r requirements.txt
-
-# 3. Launch Desktop GUI
-python auto_backup.py
-
-# 4. Or launch the Setup Wizard source
-python installer_gui.py
+python app_gui.py
 ```
 
 ---
 
-## 6. SQL Server Configuration & Connection Matrix
+### Method D: Silent Enterprise Mass Push (Intune / SCCM / RMM)
 
-### 6.1 Instance Discovery & Detection Modes
-The suite features autonomous SQL instance discovery using two complementary techniques:
-1. **WMI Service Inspection:** Scans `Win32_Service` for services matching `MSSQL$*` or `MSSQLSERVER`.
-2. **Registry Enumeration:** Queries `HKLM\SOFTWARE\Microsoft\Microsoft SQL Server\InstalledInstances`.
-
-In the application's **Settings** tab, clicking **Auto-Detect SQL** automatically populates the dropdown with all active local instances (e.g., `localhost\SQLEXPRESS`, `localhost\SQL25SARANGA`, or default `.` / `localhost`).
-
-### 6.2 Authentication: Windows Trusted vs. SQL `sa`
-- **Windows Authentication (Recommended):** If `SQL_USER` is left blank in `config.json`, the engine invokes `sqlcmd` with the `-E` trusted connection flag. The backup executes under the Windows security context of the current administrator or `NT AUTHORITY\SYSTEM`.
-- **SQL Server Authentication:** If your database server uses SQL Authentication, populate `SQL_USER` (e.g., `sa`) and `SQL_PASSWORD`. The engine securely injects `-U` and `-P` parameters into the `sqlcmd` pipeline.
-
-### 6.3 Modern ODBC Driver 18 TLS/SSL Trust Bypass (`-C`)
-Microsoft ODBC Driver 18 for SQL Server enforces SSL/TLS encryption by default (`Encrypt=Mandatory`). On many production servers with self-signed local certificates, standard backup scripts crash with:
-```
-Sqlcmd: Error: Microsoft ODBC Driver 18 for SQL Server : SSL Provider:
-The certificate chain was issued by an authority that is not trusted.
-```
-The suite's core engine automatically appends the `-C` flag (`TrustServerCertificate=True`) to all `sqlcmd` invocations, ensuring 100% connection reliability across all SQL Server versions without requiring manual certificate installation.
-
-### 6.4 Autonomous SQL Server Error 5 & Msg 3201 Self-Healing Engine
-
-#### The Problem:
-When `sqlcmd` executes `BACKUP DATABASE`, the backup file is written by the **SQL Server Service Account** (e.g., `NT Service\MSSQLSERVER` or `NT SERVICE\MSSQL$SQLEXPRESS`), **not** by the user running the backup app. If that service account does not have write permissions to the destination folder, SQL Server throws:
-```
-Msg 3201, Level 16, State 1: Cannot open backup device 'C:\temp\backups\DB_xxx.bak'.
-Operating system error 5(Access is denied).
-```
-
-#### The Autonomous Self-Healing Pipeline:
-```
-[Backup Attempt 1: Target Folder]
-              |
-      (Fails with Error 5)
-              v
-[Phase 1 Self-Healing: Dynamic ACL Grant]
-  - Query SQL Server Service Account SID
-  - Execute: icacls "<Folder>" /grant *S-1-5-80-...:(OI)(CI)F /T /Q
-  - Retry Backup Attempt 2
-              |
-      (Fails if folder is restricted by domain GPO)
-              v
-[Phase 2 Self-Healing: Instance Default Path Failover]
-  - Query: SELECT SERVERPROPERTY('InstanceDefaultBackupPath')
-  - Fallback to SQL Server's native internal backup directory
-  - Retry Backup Attempt 3 -> SUCCESS GUARANTEED!
+For mass silent rollout across 50+ remote servers:
+```powershell
+# Execute silent installation via administrative PowerShell
+Start-Process -FilePath "C:\Deployment\Setup_DatabaseBackup.exe" -ArgumentList "/silent" -Wait -Verb RunAs
 ```
 
 ---
 
-## 7. Desktop Application User Guide
+## 7. In-Place Upgrades & Application Update Architecture
 
-### 7.1 Main Dashboard & On-Demand Manual Backup
-The **Dashboard** tab is designed for everyday operators:
-1. **Target Database Selector:** Choose a specific database from the dropdown or select `-- All Configured Databases --`.
-2. **Start Backup Button:** Initiates the multi-phase backup pipeline immediately.
-3. **Animated Master Progress Bar:** Real-time visual progress bar tracking SQL dump, compression, upload chunks, and telemetry updates. During Google Drive transfers, the bar glides smoothly chunk-by-chunk in real time.
-4. **Current Status Label:** Displays clear English progress descriptions (e.g., *"Compressing UserDB (Level 9 Deflate)..."* or *"Uploading POS_DB.zip: 45.2% (67.8 MB / 150.0 MB)..."*).
-5. **Real-Time Upload Speed & Telemetry Card:** A dedicated high-contrast telemetry card positioned directly below the progress bar that provides instant network performance metrics:
-   - **Upload Speed:** Live transfer rate updated every 2MB chunk (e.g., `⚡ Upload Speed: 8.45 MB/s`).
-   - **Upload Progress & Data Counters:** Exact uploaded byte volume vs. total file size (e.g., `📦 67.80 MB / 150.00 MB (45.2%)`).
-   - **Estimated Time Remaining (ETA):** Accurate countdown timer dynamically calculated from active bandwidth (e.g., `⏳ ETA: 12s` or `⏳ ETA: 2m 15s`).
-   - **Periodic Terminal Streaming:** For operators watching the **Live Logs** tab or terminal console, transfer rate and progress updates are automatically streamed every ~4 seconds into the execution log.
+### 7.1 The Zero-Downtime Guarantee
+Traditional application upgrades frequently wipe custom configuration files and cloud tokens. The **Database Backup Automation Update Engine** guarantees zero-downtime, in-place binary refresh with **100% preservation of all customer configurations and credentials**.
 
-### 7.2 Thread-Safe Emergency Stop (Cancellation)
-If a user accidentally starts a backup during peak production hours, clicking the red **Stop Backup** button immediately:
-- Signals the worker thread via `BackupCancellationController`.
-- Safely terminates child `sqlcmd` processes.
-- Interrupts active Google Drive chunked streams.
-- Scavenges and deletes any partial `.bak` or `.zip` files from the disk.
-- Logs an audit entry: `[WARNING] Backup operation cancelled by user.`
+### 7.2 Automated Configuration & Token Preservation
+During an update, the updater isolates and preserves:
+- `config.json` (Target databases, SQL instance name, Google Drive folder ID, Sheet ID, schedule parameters).
+- `credentials.json` and `token.json` (Google Cloud authorized OAuth refresh keys).
+- `backup_log.txt` (Historical execution audit records).
 
-### 7.3 Configuration Management Tab
-Allows authorized technicians to customize behavior without manually editing JSON:
-- **SQL Server Instance:** Instance name string.
-- **Databases:** Comma-separated list of target databases (e.g., `UserDB, RGT`).
-- **Google Drive Folder ID:** Target folder ID from Google Drive URL (`https://drive.google.com/drive/folders/<FOLDER_ID>`).
-- **Google Sheets ID:** Target spreadsheet ID from Google Sheets URL (`https://docs.google.com/spreadsheets/d/<SHEET_ID>/edit`).
-- **Local Backup Directory:** Temporary folder for compression buffers (defaults to `C:\temp\backups`).
-- **Save Settings:** Validates syntax and writes atomically to `config.json`.
-
-### 7.4 Diagnostics & Health Check Suite
-- **Test Google Connection:** Validates OAuth credentials, verifies Google Drive folder write access, and confirms Google Sheet headers exist.
-- **Open Local Backup Folder:** Opens Windows File Explorer directly to the temp dump directory.
-- **Clean Local Storage:** Manually runs the two-phase disk cleanup engine.
-- **Switch Google Account:** Revokes the current `credentials.json` token and opens the browser login flow to authenticate a different account.
-
-### 7.5 Live Execution Logs
-The **Live Logs** tab provides an integrated terminal:
-- Real-time timestamped entries color-coded by severity (INFO in cyan/white, WARNING in yellow, CRITICAL/ERROR in red).
-- **Open Log File:** Opens `backup_log.txt` directly in Windows Notepad.
-- **Clear Logs:** Clears the GUI display buffer without deleting the underlying persistent log file.
+### 7.3 Executing Upgrades via `Update_App.bat`
+1. Copy the updated deployment package to the target server.
+2. Run [`Update_App.bat`](file:///c:/Users/dulla/OneDrive/Documents/Desktop/idea/Client_Installation_Package/Update_App.bat) as Administrator.
+3. The script quiesces running instances, creates a safety backup of existing settings in `%TEMP%`, synchronizes updated binaries, restores the customer configuration, and tests the upgraded executable.
 
 ---
 
-## 8. Automated Scheduling & Unattended Windows Service
+## 8. Complete Uninstallation & Rollback Processes
 
-### 8.1 Multi-Day Selection & Flexible Recurrence Engine
-The suite provides an enterprise scheduling interface in the **Auto Schedule** tab that allows administrators to configure backups to execute automatically on **any day of the week** and at **any time**:
+### 8.1 GUI Control Panel & Desktop Uninstallation
+1. Open **Windows Settings > Apps > Installed apps**.
+2. Locate **Database Cloud Backup** and click **Uninstall**.
+3. Confirm the prompt. The uninstaller terminates background processes, unregisters the scheduled task, and cleans up shortcuts.
 
-- **Recurrence Frequency Presets:**
-  - **Weekly (Mondays):** Default weekly disaster recovery cycle.
-  - **Daily (Every Day):** Backs up all target databases 7 days a week.
-  - **Weekdays (Mon-Fri):** Standard business hours cycle excluding weekends.
-  - **Custom Days:** Allows custom day combinations (e.g., Monday, Wednesday, Friday, or Sunday night).
-- **Interactive Day Pills:** Seven individual checkboxes (`Mon`, `Tue`, `Wed`, `Thu`, `Fri`, `Sat`, `Sun`) let users toggle specific days on or off. Toggling any checkbox immediately synchronizes the schedule plan.
-- **Execution Time Selection (24h with Live 12h Preview):**
-  - Text input for any 24-hour time format (e.g. `02:00`, `14:30`, `23:15`).
-  - Dynamic 12-hour AM/PM preview badge: typing `14:30` instantly renders `(2:30 PM)`.
-  - **Quick Time Preset Buttons:** One-click presets for `02:00 AM (Overnight)`, `06:00 AM (Morning)`, `12:00 PM (Noon)`, `06:00 PM (Evening)`, and `11:00 PM (Night)`.
-- **Live Schedule Plan Banner:** A prominent real-time banner (e.g. `📅 Plan: Every Monday, Wednesday, Friday at 02:00 AM (24h: 02:00)`) guarantees zero ambiguity before applying.
-
-### 8.2 Windows Task Scheduler Registration (`schtasks` CLI)
-When clicking **✔ Apply & Enable Automation**, the engine automatically calculates the optimal command:
-- **For Daily Schedules:**
-  ```cmd
-  schtasks /create /tn "Database Cloud Backup" /tr "\"C:\Program Files\DatabaseBackupApp\DatabaseBackupApp.exe\" --auto" /sc daily /st 02:00 /f
-  ```
-- **For Specific Days (e.g. Mon, Wed, Fri):**
-  ```cmd
-  schtasks /create /tn "Database Cloud Backup" /tr "\"C:\Program Files\DatabaseBackupApp\DatabaseBackupApp.exe\" --auto" /sc weekly /d MON,WED,FRI /st 02:00 /f
-  ```
-- **Power & Wake Settings:** Configured with `RunLevel=HighestAvailable` under `NT AUTHORITY\SYSTEM` (Session 0) so servers wake up and execute even when no users are logged in.
-
-### 8.3 Operational Guard Condition & Headless Router
-When executed via `--auto`, the router performs non-blocking validation against the configured `SCHEDULE_DAYS`:
-```python
-today_code = datetime.today().strftime('%a').upper()  # 'MON', 'TUE', etc.
-if not is_allowed(today_code, schedule_days):
-    emit_log(f"Today is {today_name}. Automated backup is configured for {schedule_days}. Exiting safely with exit code 0.")
-    sys.exit(0)
+### 8.2 Silent Automated Uninstaller (`Uninstall.bat /silent`)
+For remote management systems:
+```cmd
+"C:\Program Files\DatabaseBackupApp\Uninstall.bat" /silent
 ```
-If Task Scheduler triggers on an unselected day or a system admin tests the task out-of-band, it safely logs a notice and exits cleanly with exit code `0`.
 
-### 8.4 Unattended Windows Service & Session 0 Isolation (`--service` / `--daemon`)
-For dedicated database servers where administrators disconnect from RDP:
-- Windows Vista introduced **Session 0 Isolation**, which prevents background services from interacting with desktop displays.
-- Running `DatabaseBackupApp.exe --service` or `--daemon` runs the core engine purely in memory as a background daemon.
-- It wakes up every 30 seconds, checks the day of the week and target time, and triggers full cloud backups automatically without user interaction.
+### 8.3 Detached PowerShell Cleanup Engine (100% Zero Leftovers)
+On Windows, a running program cannot delete its own folder due to OS file locking. Our uninstaller utilizes a **Detached Background PowerShell Worker**:
+```cmd
+cd /d "%TEMP%"
+start "" /b powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Sleep -Seconds 1; Remove-Item -LiteralPath '!TARGET_DIR!' -Recurse -Force -ErrorAction SilentlyContinue"
+```
+The uninstaller exits immediately, releasing all locks, allowing PowerShell to cleanly remove the application directory with zero leftover files.
 
 ---
 
-## 9. Database Disaster Recovery & Restoration Runbook
+## 9. Configuration File Specification (`config.json`)
 
-When a hardware failure, data corruption, or ransomware incident occurs, follow this disaster recovery procedure to restore your SQL Server database.
+The entire operational state is governed by a single JSON document:
 
-### Step 1: Locating & Downloading the Backup
-1. Open the centralized **Google Sheet** (or navigate to the target **Google Drive** folder).
-2. Locate the row corresponding to the target database and desired restore date.
-3. Click the direct Google Drive link in the **Download URL** column.
-4. Download the `.zip` archive (e.g., `UserDB_20260921_020000.zip`).
+```json
+{
+  "DB_SERVER": "localhost\\SQL25SARANGA",
+  "DB_USER": "",
+  "DB_PASSWORD": "",
+  "TARGET_DATABASES": [
+    "UserDB",
+    "RGT"
+  ],
+  "LOCAL_BACKUP_DIR": "C:\\temp\\backups",
+  "DRIVE_FOLDER_ID": "14X-x01-Zm4eU1h2qksm6eKhyvdY1-",
+  "SHEET_ID": "1O7-sh1JTJas-JSmSkERepwfnrSm8kO-Tgwfld",
+  "BACKUP_INTERVAL_HOURS": null,
+  "SCHEDULE_DAYS": [
+    "MON"
+  ],
+  "SCHEDULE_TIME": "02:00"
+}
+```
+
+### Key Parameter Reference:
+
+| Key | Type | Description | Default / Example |
+| :--- | :--- | :--- | :--- |
+| `DB_SERVER` | String | Target SQL Server instance name | `localhost\SQLEXPRESS` |
+| `DB_USER` | String | SQL authentication username (blank for Windows Auth) | `""` or `"sa"` |
+| `DB_PASSWORD` | String | SQL authentication password | `""` |
+| `TARGET_DATABASES` | Array | List of database names to back up | `["UserDB", "ProductionDB"]` |
+| `LOCAL_BACKUP_DIR` | String | Temporary folder for staging `.bak` and `.zip` files | `C:\temp\backups` |
+| `DRIVE_FOLDER_ID` | String | Google Drive destination folder ID | Extracted from Drive URL |
+| `SHEET_ID` | String | Google Sheet ID for audit logging | Extracted from Sheet URL |
+| `SCHEDULE_DAYS` | Array | Active days of the week for backup execution | `["MON"]` or `["MON","WED","FRI"]` |
+| `SCHEDULE_TIME` | String | 24-hour time of execution | `"02:00"` |
+
+---
+
+## 10. Unattended Scheduler & Windows Session 0 Service
+
+### 10.1 Service-Level Execution (`NT AUTHORITY\SYSTEM`)
+To guarantee uninterrupted execution on production servers:
+- The scheduled task is registered with `/RU "NT AUTHORITY\SYSTEM" /RL HIGHEST`.
+- It executes in **Windows Session 0**, operating independently of whether an administrator is logged into the console or disconnected from RDP.
+
+### 10.2 Custom Frequency, Active Days & Execution Times
+When triggered by the scheduler with the `--auto` flag, the engine evaluates the current day against `SCHEDULE_DAYS` in `config.json`. If today is an active backup day, execution begins immediately. If not, the engine exits cleanly with an audit log record.
+
+### 10.3 Missed Run Startup Recovery Triggers
+If a scheduled execution window is missed (e.g. the server was shut down for maintenance at 2:00 AM), the Task Scheduler XML definition contains `<StartWhenAvailable>true</StartWhenAvailable>`, causing the backup to run immediately upon system restart.
+
+---
+
+## 11. Database Disaster Recovery & Restoration Runbook
+
+### Step 1: Cloud Archive Retrieval
+1. Open the audit log Google Sheet or navigate directly to the destination Google Drive folder.
+2. Download the desired backup archive: `<DatabaseName>_<YYYYMMDD_HHMMSS>.zip`.
 
 ### Step 2: Archive Decompression
-1. Copy the downloaded `.zip` file to a temporary location on the database server (e.g., `C:\temp\restore\`).
-2. Right-click the `.zip` file and select **Extract All...** (or extract using 7-Zip).
-3. Confirm the extracted `.bak` file exists (e.g., `UserDB_20260921_020000.bak`).
+Extract the ZIP archive using Windows Explorer, PowerShell, or 7-Zip:
+```powershell
+Expand-Archive -Path "UserDB_20260925_020000.zip" -DestinationPath "C:\temp\restore"
+```
 
-### Step 3: Restoring via SQL Server Management Studio (SSMS)
-1. Open **SQL Server Management Studio** and connect to your instance.
-2. In **Object Explorer**, right-click **Databases** and select **Restore Database...**.
-3. In the Source section, choose **Device**, click the **...** button, click **Add**, and select the extracted `.bak` file.
-4. Under **Destination**, select or type the Database Name (e.g., `UserDB`).
-5. In the left pane, click **Options**:
-   - Check **Overwrite the existing database (WITH REPLACE)**.
-   - Check **Close existing connections to destination database**.
-   - Ensure **Recovery state** is set to `RESTORE WITH RECOVERY`.
+### Step 3: Restoring via SSMS GUI
+1. Open SQL Server Management Studio (SSMS) and connect to the target instance.
+2. In Object Explorer, right-click **Databases** and select **Restore Database...**.
+3. Select **Device**, click **...**, and choose **Add**.
+4. Browse to the extracted `.bak` file and click **OK**.
+5. Under **Options**, select **Overwrite the existing database (WITH REPLACE)** if restoring over an existing copy.
 6. Click **OK** to execute the restore.
 
-### Step 4: Restoring via T-SQL Command Line (`sqlcmd`)
-For headless recovery, execute the following script in elevated Command Prompt / PowerShell:
-
-```cmd
-sqlcmd -S "localhost\SQL25SARANGA" -E -C -Q "ALTER DATABASE [UserDB] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; RESTORE DATABASE [UserDB] FROM DISK = 'C:\temp\restore\UserDB_20260921_020000.bak' WITH REPLACE, RECOVERY; ALTER DATABASE [UserDB] SET MULTI_USER;"
+### Step 4: Restoring via T-SQL Command Line
+```sql
+RESTORE DATABASE [UserDB]
+FROM DISK = N'C:\temp\restore\UserDB_20260925_020000.bak'
+WITH REPLACE, RECOVERY, STATS = 10;
+GO
 ```
 
-### Step 5: Post-Restore Verification (`DBCC CHECKDB`)
-Verify the logical and physical consistency of the restored database:
-```cmd
-sqlcmd -S "localhost\SQL25SARANGA" -E -C -Q "DBCC CHECKDB ('UserDB') WITH NO_INFOMSGS, ALL_ERRORMSGS;"
+### Step 5: Integrity Verification (`DBCC CHECKDB`)
+Always verify restored database integrity:
+```sql
+DBCC CHECKDB ([UserDB]) WITH NO_INFOMSGS, ALL_ERRORMSGS;
+GO
 ```
-If no output is returned, the database is 100% clean and consistent.
 
 ---
 
-## 10. Exhaustive Troubleshooting & Diagnostics Matrix
+## 12. Troubleshooting & Diagnostics Matrix
 
-| Error Message / Symptom | Root Cause | Immediate Resolution |
+| Issue / Error Message | Root Cause | Automated Resolution |
 | :--- | :--- | :--- |
-| **Operating system error 5 (Access is denied)** | SQL Server service account lacks write access to temporary backup folder. | The engine resolves this automatically. Alternatively, grant `Modify` permissions to `NT SERVICE\MSSQLSERVER` on `C:\temp\backups`. |
-| **Msg 3201: Cannot open backup device** | Invalid backup folder path or file locked by third-party antivirus. | Ensure `C:\temp\backups` exists. Add folder exclusion to Windows Defender / AV. |
-| **SSL Provider: The certificate chain was issued by an authority that is not trusted** | ODBC Driver 18 enforces SSL encryption by default. | The engine automatically injects the `-C` flag. If running manual SQL scripts, add `-C` or `TrustServerCertificate=True`. |
-| **Google `invalid_grant` / Token revoked** | Google OAuth refresh token has expired or password was changed. | Go to GUI **Diagnostics Tab > Switch Google Account**, or delete `credentials.json` and re-authenticate in the browser. |
-| **Google `403 Forbidden: insufficientPermissions`** | `client_secret.json` was generated without Drive/Sheets write scopes. | Update OAuth consent screen scopes in Google Cloud Console to include `drive.file` and `spreadsheets`. Re-authenticate. |
-| **Task Scheduler exit code `0x1`** | `client_secret.json` or `credentials.json` missing in app directory when run as SYSTEM. | Ensure `credentials.json` has been generated once via GUI before relying on headless Task Scheduler runs. |
-| **Task Scheduler exits with code `0` but no backup created** | Monday Guard Condition triggered (today is not Monday). | Normal behavior. In `config.json`, set `"STRICTLY_MONDAYS_ONLY": false` to allow non-Monday backups. |
-| **Port 0 collision during OAuth login** | Local firewall blocking ephemeral callback ports. | Ensure Windows Firewall allows outbound localhost loopback connections. |
+| **Operating System Error 5 (Access is Denied)** | SQL Server service account lacks NTFS write permission to target folder | Engine automatically grants permissive ACLs via `icacls` or routes backup to instance default backup path. |
+| **ODBC Driver 18: SSL Provider, error 0** | Driver requires encryption but server uses self-signed SSL cert | Engine automatically injects `-C` (Trust Server Certificate) into `sqlcmd` commands. |
+| **WinError 10060 (Connection Timeout during Upload)** | Slow or fluctuating upload connection timed out default socket | In-chunk resumable transport with 180s timeout and 10 exponential backoff retries resumes at exact byte offset. |
+| **OAuth Token Expired / Invalid Grant** | Access token expired | `token.json` refresh token automatically acquires a new access token without user prompt. |
+| **Task Scheduler Error 2147942401 (0x80070001)** | Missing working directory in Task Scheduler action | Setup wizard explicitly sets the `<WorkingDirectory>` property to the installation folder. |
 
 ---
 
-## 11. Enterprise Clean Uninstallation Guide (100% Zero Leftovers)
+## 13. Next-Generation Companion Module: Automated Performance Query System
 
-To ensure high enterprise compliance, the uninstallation process is guaranteed to remove 100% of installed files, registries, shortcuts, and scheduled tasks.
+### 13.1 Architectural Vision & Value Proposition
+As an enterprise companion module, the **Automated Performance Query Engine** integrates database performance auditing directly into the backup lifecycle. Prior to taking databases offline or performing intensive backup I/O, the performance engine captures critical SQL Server Dynamic Management View (DMV) metrics to give administrators continuous diagnostic visibility.
 
-### Four Ways to Uninstall:
-1. **Windows Control Panel:** Navigate to **Settings > Apps > Installed apps**, locate **Database Backup Automation**, and click **Uninstall**.
-2. **Desktop GUI Console:** Open the application, navigate to the **Settings** tab, and click **Uninstall Application**.
-3. **Interactive Script:** Run [Uninstall.bat](file:///c:/Users/dulla/OneDrive/Documents/Desktop/idea/Client_Installation_Package/Uninstall.bat) as Administrator.
-4. **Silent Headless Removal:** For remote management:
-   ```cmd
-   "C:\Program Files\DatabaseBackupApp\Uninstall.bat" /silent
-   ```
+### 13.2 Captured Diagnostic Metrics
+1. **Top Slowest Queries:** Captures execution count, total worker time (CPU), total elapsed time, and query text via `sys.dm_exec_query_stats`.
+2. **Missing Index Recommendations:** Identifies missing indexes with the highest user impact score via `sys.dm_db_missing_index_details`.
+3. **Index Fragmentation Analysis:** Measures average fragmentation percentage across database indexes via `sys.dm_db_index_physical_stats`.
+4. **Buffer Pool & Memory Pressure:** Audits database buffer cache hit ratio and page life expectancy (PLE).
+5. **Database File I/O Latency:** Tracks read/write stall times across database `.mdf` and `.ldf` files via `sys.dm_io_virtual_file_stats`.
 
-### Modern Detached Cleanup Architecture:
-On Windows, a running executable or batch file cannot delete its parent directory while locked by the operating system. Previous legacy approaches attempted cmd file migration, which frequently broke on Windows 11 Windows Terminal due to quoting collisions (`The filename, directory name, or volume label syntax is incorrect`).
-
-The new Gold-Standard uninstaller uses a **Detached PowerShell Cleanup Engine**:
-1. **Process Termination:** Kills any lingering `DatabaseBackupApp.exe` or `Setup_DatabaseBackup.exe` instances immediately.
-2. **Task De-registration:** Unregisters the Windows Task Scheduler task `EnterpriseDatabaseBackup` from both SYSTEM and local user contexts.
-3. **Shortcut Purge:** Deletes shortcuts across User Desktop, Public Desktop, User Start Menu, and System Start Menu (`C:\ProgramData\Microsoft\Windows\Start Menu\Programs`).
-4. **Registry Cleanup:** Erases uninstall registry entries from both `HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\EnterpriseDatabaseBackup` and `HKCU`.
-5. **Detached File Purge:** Changes the active working directory out of the installation folder to `%TEMP%`, and dispatches a background detached PowerShell job:
-   ```cmd
-   cd /d "%TEMP%"
-   start "" /b powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Sleep -Seconds 1; Remove-Item -LiteralPath '!TARGET_DIR!' -Recurse -Force -ErrorAction SilentlyContinue"
-   ```
-   The batch file exits immediately, releasing all file and directory locks, allowing PowerShell to cleanly erase the directory with 100% reliability and zero leftover artifacts.
+### 13.3 Automated Telemetry & Performance Hook Pipeline
+Performance query results can be exported as HTML health cards, appended to a dedicated "Performance Metrics" tab in the central Google Sheet, or saved as local JSON telemetry alongside backup logs.
 
 ---
-
-## 12. Universal Deployment (Customer PCs, Windows Servers, RDP, Virtual Machines)
-
-The software is engineered to run seamlessly across all modern enterprise Windows platforms without any external Python, runtime, or administrative friction:
-
-### Supported Operating Systems
-- **Desktop Environments:** Windows 10, Windows 11 (Home, Pro, Enterprise, Education).
-- **Server Environments:** Windows Server 2012 R2, 2016, 2019, 2022, and 2025 (Standard, Datacenter, Core).
-- **Virtualization & Cloud:** Hyper-V, VMware ESXi / Workstation, Proxmox, AWS EC2, Azure Windows Virtual Desktop, GCP Compute Engine.
-- **Terminal Services & RDP:** Multi-session Remote Desktop Services, Citrix XenApp / XenDesktop.
-
-### Key Server & RDP Design Guarantees
-1. **100% Self-Contained Zero-Dependency Runtime:**
-   - The entire Python 3.14 core runtime, standard libraries, Win32 API extensions, CustomTkinter, Google Client libraries, and Cryptography modules are fully bundled inside `AppFiles\_internal`.
-   - The customer PC or server does **not** need Python installed. No compiler, pip, or package manager is touched.
-2. **Standard Port Requirements (No Inbound Firewall Exceptions Needed):**
-   - The application requires only standard **outbound HTTPS (Port 443)** communication to `*.googleapis.com` (Google Drive and Google Sheets APIs).
-   - No inbound listening ports are opened, satisfying strict corporate firewall and ISO 27001 / SOC 2 compliance policies.
-3. **RDP Disconnection & Session 0 Isolation:**
-   - On Windows Servers accessed via Remote Desktop Protocol (RDP), closing or disconnecting the RDP session terminates interactive user desktops.
-   - The backup engine is designed to run completely headlessly (`DatabaseBackupApp.exe --auto` or `EnterpriseDatabaseBackup` in Task Scheduler). When scheduled under `NT AUTHORITY\SYSTEM` or a dedicated service account, it runs reliably in Session 0 round-the-clock, even when no administrators are logged into RDP.
-4. **Proxy & Corporate Gateway Compatibility:**
-   - Respects system WinINet proxy settings and `HTTP_PROXY`/`HTTPS_PROXY` environment variables automatically.
-
----
-
-## 13. Seamless Application Updates & In-Place Upgrades (Zero-Downtime, 100% Success Guarantee)
-
-When deploying software to customer servers and enterprise production machines, updating the application must be effortless, safe, and fast, without requiring database re-configuration or re-authenticating Google accounts.
-
-### The Problem with Traditional Updates:
-If you overwrite an application folder or run a naive installer, customer configurations (`config.json`), Google OAuth refresh tokens (`credentials.json` / `token.json`), and audit logs (`backup_log.txt`) risk being wiped, breaking automated backups and requiring manual intervention.
-
-### The Solution: 1-Click In-Place Upgrade Engine
-
-Our deployment package includes dedicated in-place update orchestration that executes in under 5 seconds with 100% success:
-
-#### METHOD 1: Using `Update_App.bat` (Recommended for Administrators & Technicians)
-Simply copy the new package to the customer server and double-click `Update_App.bat` (or run it via PowerShell / RDP):
-1. **Target Discovery:** Automatically discovers the existing installation folder via the Windows Registry (`HKLM` / `HKCU`) or standard `C:\Program Files\DatabaseBackupApp` paths.
-2. **Process Quiescing:** Gracefully terminates any active GUI or backup tasks (`DatabaseBackupApp.exe`) to prevent file lock contention.
-3. **Safety Snapshot:** Creates an isolated memory snapshot in `%TEMP%\DB_Backup_Config_Safety` backing up:
-   - `config.json` (Customer's SQL Server name, selected databases, Drive Folder IDs, Sheet IDs)
-   - `credentials.json` and `token.json` (Google OAuth authorized token and refresh key)
-   - `backup_log.txt` (Historical execution audit history)
-4. **Atomic Binary Refresh:** Uses Robocopy with mirror sync to replace all `.exe`, `.dll`, and `_internal\` engine files with the new version.
-5. **Customer Configuration Restoration:** Restores the exact `config.json`, `credentials.json`, `token.json`, and logs back into the application directory.
-6. **Headless Verification:** Automatically runs `DatabaseBackupApp.exe --auto` in test mode to verify engine integrity.
-
-#### METHOD 2: Running `Setup_DatabaseBackup.exe` (Visual GUI Upgrade)
-If the customer or technician runs `Setup_DatabaseBackup.exe`, the wizard automatically detects that the software is already installed:
-- Changes button text to **"Upgrade / Update"**.
-- Automatically preserves credentials and configuration in the background.
-- Refreshes all binaries, updates shortcuts, and displays:
-  > *"Database Cloud Backup was updated successfully! All existing databases, settings, and Google account credentials have been preserved."*
-
-#### Updating Headlessly via PowerShell / Remote Management (RMM / Intune / SCCM)
-To push updates silently across 50+ customer servers simultaneously without human interaction:
-```powershell
-# Copy update package to customer machine and execute Update_App.bat silently
-Start-Process -FilePath "C:\Deployment\Update_App.bat" -ArgumentList "/silent" -Wait -Verb RunAs
-```
-
----
-*Enterprise Database Cloud Backup Automation Suite — Verified Gold Production Release.*
-
+*Enterprise Database Cloud Backup Automation Suite — Verified Production Documentation.*
