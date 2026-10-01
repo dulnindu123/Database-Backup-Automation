@@ -26,6 +26,18 @@ import sys
 import logging
 from datetime import datetime
 
+# Configure Windows console streams for UTF-8 compatibility
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 # -----------------------------------------------------------------------------
 # GOOGLE OAUTH SCOPE RELAXATION
 # -----------------------------------------------------------------------------
@@ -279,7 +291,10 @@ def main():
         except Exception as e:
             import traceback
             err_trace = traceback.format_exc()
-            emit_log(f"Critical error launching GUI:\n{err_trace}", "critical")
+            try:
+                emit_log(f"Critical error launching GUI:\n{err_trace}", "critical")
+            except Exception:
+                pass
             try:
                 import ctypes
                 ctypes.windll.user32.MessageBoxW(

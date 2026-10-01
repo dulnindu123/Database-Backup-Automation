@@ -415,7 +415,14 @@ def emit_log(message, level="info", log_cb=None, module=None):
         except Exception:
             pass
 
-    print(formatted)
+    try:
+        print(formatted)
+    except Exception:
+        try:
+            enc = getattr(sys.stdout, 'encoding', 'utf-8') or 'utf-8'
+            print(formatted.encode(enc, errors='replace').decode(enc, errors='replace'))
+        except Exception:
+            pass
     
     # Forward to desktop GUI real-time terminal widget
     if log_cb:

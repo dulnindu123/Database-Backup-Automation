@@ -676,7 +676,7 @@ class BackupAutomationApp(ctk.CTk):
         drive_row.pack(fill="x", padx=15, pady=(0, 10))
         self.entry_google_drive = ctk.CTkEntry(drive_row, width=420, placeholder_text="Folder ID or https://drive.google.com/drive/folders/...")
         self.entry_google_drive.pack(side="left", padx=(0, 10))
-        ctk.CTkButton(drive_row, text="Open Folder ↗", width=110, fg_color="#059669", hover_color="#047857", command=self._open_drive_folder).pack(side="left")
+        ctk.CTkButton(drive_row, text="Open Folder ->", width=110, fg_color="#059669", hover_color="#047857", command=self._open_drive_folder).pack(side="left")
 
         # Master Google Sheet ID / Link
         self._create_field_label(cloud_box, "Customer Master Google Sheet ID or Link:", pack_padx=15)
@@ -684,7 +684,7 @@ class BackupAutomationApp(ctk.CTk):
         sheet_row.pack(fill="x", padx=15, pady=(0, 10))
         self.entry_google_sheet = ctk.CTkEntry(sheet_row, width=420, placeholder_text="Spreadsheet ID or https://docs.google.com/spreadsheets/d/...")
         self.entry_google_sheet.pack(side="left", padx=(0, 10))
-        ctk.CTkButton(sheet_row, text="Open Sheet ↗", width=110, fg_color="#2563eb", hover_color="#1d4ed8", command=self._open_master_sheet).pack(side="left")
+        ctk.CTkButton(sheet_row, text="Open Sheet ->", width=110, fg_color="#2563eb", hover_color="#1d4ed8", command=self._open_master_sheet).pack(side="left")
 
         # 3 Modules Tabs Display Badges
         tabs_row = ctk.CTkFrame(cloud_box, fg_color="transparent")
