@@ -1,19 +1,29 @@
 {
-    "SQL_SERVER_NAME": "localhost\\SQL25SARANGA",
+    "SQL_SERVER_NAME": "",
     "SQL_USERNAME": "",
     "SQL_PASSWORD": "",
     "BACKUP_FOLDER": "C:\\temp\\backups",
     "BACKUP_EXTENSION": ".zip",
-    "TARGET_DATABASES": [
-        "UserDB",
-        "RGT"
-    ],
-    "GOOGLE_DRIVE_FOLDER_ID": "1LKuo7j4cHvvP0-p0C6PVo6gdkgoVBaQ4",
-    "GOOGLE_SHEET_ID": "1FAnmfTAixeDgwA5f3TvJ9IEtFp1OuFTyw3UpDiOdvwg",
+    "TARGET_DATABASES": [],
+    "BROKER_URL": "http://127.0.0.1:5000",
+    "TELEMETRY_BROKER_URL": "http://127.0.0.1:5000",
+    "GOOGLE_DRIVE_FOLDER_ID": "",
+    "GOOGLE_SHEET_ID": "",
     "STRICTLY_MONDAYS_ONLY": true,
     "SCHEDULE_DAYS": [
         "MON"
     ],
     "SCHEDULE_TIME": "02:00",
-    "DELETE_LOCAL_AFTER_UPLOAD": true
+    "DELETE_LOCAL_AFTER_UPLOAD": true,
+    "STORAGE_MONITOR_ENABLED": true,
+    "STORAGE_C_DRIVE_ALERT_GB": 30,
+    "STORAGE_OTHER_DRIVES_ALERT_PERCENT": 90,
+    "STORAGE_INCLUDE_NETWORK_DRIVES": true,
+    "STORAGE_ALERT_EMAIL_RECIPIENT": "",
+    "STORAGE_ALERT_SMTP_SERVER": "smtp-mail.outlook.com",
+    "STORAGE_ALERT_SMTP_PORT": 587,
+    "STORAGE_ALERT_SENDER_EMAIL": "",
+    "STORAGE_ALERT_SENDER_PASSWORD": "",
+    "STORAGE_SHEET_TAB_NAME": "Storage Monitor",
+    "STORAGE_SCAN_FREQUENCY": "Daily"
 }

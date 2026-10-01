@@ -1,0 +1,95 @@
+"""
+Upload broker. The ONLY component that talks to Google Cloud Storage.
+Runs on Cloud Run with a service account that has just roles/storage.objectCreator
+on one bucket. It exposes ONE action: start an upload of a correctly named object.
+There is no list, read, delete, or "choose your own path" endpoint.
+"""
+import os, re, json, hmac, hashlib, datetime, logging
+from flask import Flask, request, jsonify
+from google.cloud import storage
+from google.api_core.exceptions import PreconditionFailed
+
+app = Flask(__name__)
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+BUCKET = os.environ["BUCKET"]
+TOKENS_FILE = os.environ.get("TOKENS_FILE", "/secrets/pc_tokens.json")  # Secret Manager volume
+ALLOWED_DBS = {d.strip() for d in os.environ["ALLOWED_DBS"].split(",") if d.strip()}
+MAX_BYTES = int(os.environ.get("MAX_BYTES", str(20 * 1024 ** 3)))
+PC_ID_RE = re.compile(r"^[a-z0-9-]{3,40}$")
+
+_client = storage.Client()
+
+
+def audit(event, **kw):
+    # Structured JSON -> Cloud Logging. Build log-based alerts on these.
+    logging.info(json.dumps({"event": event, **kw}))
+
+
+def authenticate(header):
+    """Header format: 'Bearer <pc_id>.<secret>'. Returns pc_id or None."""
+    try:
+        scheme, cred = header.split(" ", 1)
+        pc_id, secret = cred.split(".", 1)
+        if scheme != "Bearer" or not PC_ID_RE.match(pc_id):
+            return None
+        with open(TOKENS_FILE) as f:  # re-read each request so revocation is immediate
+            table = json.load(f)
+        stored = table.get(pc_id)
+        if not stored:  # missing or revoked (remove the entry to revoke)
+            return None
+        given = hashlib.sha256(secret.encode()).hexdigest()
+        return pc_id if hmac.compare_digest(given, stored) else None
+    except Exception:
+        return None
+
+
+@app.post("/request-upload")
+def request_upload():
+    pc = authenticate(request.headers.get("Authorization", ""))
+    if not pc:
+        audit("auth_rejected", ip=request.remote_addr)
+        return jsonify(error="unauthorized"), 401
+
+    body = request.get_json(silent=True) or {}
+    db, size, seq = body.get("db"), body.get("size"), body.get("seq", 1)
+
+    if "all" not in ALLOWED_DBS and db not in ALLOWED_DBS:
+        audit("bad_db", pc=pc, db=str(db)[:50]); return jsonify(error="db not allowed"), 400
+    if not isinstance(size, int) or isinstance(size, bool) or not (0 < size <= MAX_BYTES):
+        audit("bad_size", pc=pc, size=str(size)[:20]); return jsonify(error="bad size"), 400
+    if seq not in (1, 2, 3):
+        audit("bad_seq", pc=pc); return jsonify(error="bad seq"), 400
+
+    # The BROKER chooses the object name. Client input cannot influence the path.
+    day = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d")
+    name = f"{pc}/{db}/{day}_{seq}.dbk2"
+    blob = _client.bucket(BUCKET).blob(name)
+    try:
+        # if_generation_match=0 => fail if the object already exists (no overwrite).
+        uri = blob.create_resumable_upload_session(
+            content_type="application/octet-stream", size=size, if_generation_match=0)
+    except PreconditionFailed:
+        audit("duplicate", pc=pc, object=name)
+        return jsonify(error="already uploaded for this slot"), 409
+    except Exception as e:
+        audit("gcs_error", pc=pc, err=str(e)[:200])
+        return jsonify(error="storage error"), 502
+
+    audit("upload_granted", pc=pc, object=name, size=size)
+    return jsonify(session_uri=uri, object=name)
+
+
+@app.post("/verify")
+def verify_token():
+    pc = authenticate(request.headers.get("Authorization", ""))
+    if not pc:
+        audit("auth_rejected", ip=request.remote_addr, endpoint="verify")
+        return jsonify(error="unauthorized"), 401
+    audit("token_verified", pc=pc)
+    return jsonify(pc=pc, status="verified")
+
+
+@app.get("/healthz")
+def healthz():
+    return "ok"

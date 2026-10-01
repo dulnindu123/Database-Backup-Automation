@@ -56,9 +56,11 @@ from backup_core import (
     BASE_DIR,
     LOG_FILE,
     load_config,
-    authenticate,
+    broker_ready,
     run_full_backup,
-    emit_log
+    emit_log,
+    # Section 9: Server Clean Up
+    run_storage_monitor
 )
 
 
@@ -107,14 +109,19 @@ def run_automated_mode():
     
     # Authenticate non-interactively (uses cached refresh token from credentials.json).
     # interactive=False prevents the engine from trying to launch a web browser on an unattended server.
-    creds = authenticate(interactive=False)
-    if not creds:
-        emit_log("Task Scheduler failed: Could not obtain valid Google Credentials (credentials.json missing or revoked).", "critical")
+    ok, why = broker_ready(config)
+    if not ok:
+        emit_log(f"Task Scheduler failed: secure upload not configured: {why}", "critical")
         sys.exit(1)
 
     # Run the full automated backup pipeline across all target databases
     success, summary = run_full_backup(config=config)
     emit_log(f"Automated backup result: {summary}")
+
+    # Run the storage monitor after backup (piggyback scan)
+    if config.get("STORAGE_MONITOR_ENABLED", True):
+        emit_log("Running post-backup storage monitoring scan...")
+        run_storage_monitor(config=config)
     
     # Return explicit exit code to Windows Task Scheduler history
     sys.exit(0 if success else 1)
@@ -132,9 +139,9 @@ def run_manual_cli():
     config = load_config()
     
     # In manual mode, interactive=True allows launching the browser if login is needed
-    creds = authenticate(interactive=True)
-    if not creds:
-        print("Error: Could not authenticate with Google.")
+    ok, why = broker_ready(config)
+    if not ok:
+        print(f"Error: secure upload not configured: {why}")
         sys.exit(1)
         
     def cli_status(msg):
@@ -186,17 +193,40 @@ def run_daemon_mode():
             
             if day_matches and time_matches and (last_run_day != cur_day_key):
                 emit_log(f"Service trigger activated at {now}. Executing scheduled backup cycle...")
-                creds = authenticate(interactive=False)
-                if creds:
+                ok, why = broker_ready(config)
+                if ok:
                     run_full_backup(config=config)
                     last_run_day = cur_day_key
                 else:
-                    emit_log("Service daemon failed: Google credentials missing or invalid.", "critical")
+                    emit_log(f"Service daemon failed: secure upload not configured: {why}", "critical")
                     
             time.sleep(30)
         except Exception as e:
             emit_log(f"Service daemon error: {e}", "error")
             time.sleep(60)
+
+
+def run_storage_scan_mode():
+    """
+    Standalone headless storage monitoring mode.
+    Designed to be invoked by its own Windows Task Scheduler entry
+    (Daily / Weekly / Monthly) independently from the backup schedule.
+    
+    Scans all drives, logs to Google Sheet, and sends email alerts if needed.
+    """
+    emit_log("=" * 60)
+    emit_log("STANDALONE STORAGE MONITORING SCAN: --storage-scan flag detected")
+    emit_log("=" * 60)
+
+    config = load_config()
+    
+    if not config.get("STORAGE_MONITOR_ENABLED", True):
+        emit_log("Storage monitoring is disabled in configuration. Exiting.")
+        sys.exit(0)
+
+    success, summary, drives, critical = run_storage_monitor(config=config)
+    emit_log(f"Storage scan result: {summary}")
+    sys.exit(0 if success else 1)
 
 
 def main():
@@ -212,20 +242,56 @@ def main():
     elif "--daemon" in sys.argv or "--service" in sys.argv:
         run_daemon_mode()
 
-    # Route 3: Command-line terminal execution
+    # Route 3: Standalone storage monitoring scan
+    elif "--storage-scan" in sys.argv:
+        run_storage_scan_mode()
+
+    # Route 4: Command-line terminal execution
     elif "--manual-cli" in sys.argv or "--cli" in sys.argv:
         run_manual_cli()
+
+    # Route 5: Headless token provisioning on customer PC (used by installer without Python)
+    elif "--import-token" in sys.argv:
+        try:
+            idx = sys.argv.index("--import-token")
+            if idx + 1 >= len(sys.argv):
+                print("[ERROR] --import-token requires a file path or token string argument.", file=sys.stderr)
+                sys.exit(1)
+            raw_input = sys.argv[idx + 1]
+            from broker_client import import_and_protect_token
+            from backup_core import DATA_DIR, load_config
+            cfg = load_config()
+            token_filename = cfg.get("BROKER_TOKEN_FILE", "token.dpapi")
+            target_token_path = os.path.join(DATA_DIR, token_filename)
+            import_and_protect_token(raw_input, target_token_path)
+            print(f"[OK] Token imported and protected via DPAPI: {target_token_path}")
+            sys.exit(0)
+        except Exception as e:
+            print(f"[ERROR] Failed to import token: {e}", file=sys.stderr)
+            sys.exit(1)
         
-    # Route 3: Standard user desktop execution (default)
+    # Route 6: Standard user desktop execution (default)
     else:
         try:
             from app_gui import BackupAutomationApp
             app = BackupAutomationApp()
             app.mainloop()
         except Exception as e:
-            # Fallback to console error log if GUI display server fails to initialize
-            emit_log(f"Failed to launch GUI, falling back to CLI menu: {e}", "error")
-            run_manual_cli()
+            import traceback
+            err_trace = traceback.format_exc()
+            emit_log(f"Critical error launching GUI:\n{err_trace}", "critical")
+            try:
+                import ctypes
+                ctypes.windll.user32.MessageBoxW(
+                    0,
+                    f"Enterprise Database Cloud Backup could not initialize GUI.\n\nError: {e}\n\nPlease check backup_log.txt for full error details.",
+                    "Database Cloud Backup - Initialization Error",
+                    0x10
+                )
+            except Exception:
+                pass
+            if sys.stdin and hasattr(sys.stdin, "isatty") and sys.stdin.isatty():
+                run_manual_cli()
 
 
 if __name__ == "__main__":

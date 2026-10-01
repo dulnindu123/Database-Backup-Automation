@@ -247,25 +247,29 @@ class InstallerApp(ctk.CTk):
             # Terminate active process to prevent Windows in-use file locks
             if is_upgrade:
                 self.status_lbl.configure(text="Terminating active processes for update...")
-                subprocess.run("taskkill /F /IM DatabaseBackupApp.exe >nul 2>&1", shell=True)
+                subprocess.run(["taskkill.exe", "/F", "/IM", "DatabaseBackupApp.exe"], capture_output=True)
                 # Safeguard customer configuration, credentials, tokens, and logs
                 os.makedirs(temp_safety_dir, exist_ok=True)
-                for save_file in ["config.json", "credentials.json", "token.json", "backup_log.txt"]:
+                for save_file in ["config.json", "token.dpapi", "broker_token.dat", "backup_public.pem", "escrow_public.pem", "backup_log.txt"]:
                     src_f = os.path.join(self.target_dir, save_file)
                     if os.path.exists(src_f):
                         shutil.copy2(src_f, os.path.join(temp_safety_dir, save_file))
 
             # Step 1: Copy application payload via Robocopy
             self.status_lbl.configure(text="Copying application binaries and libraries...")
-            cmd = f'robocopy "{self.source_app_dir}" "{self.target_dir}" /E /IS /IT'
-            subprocess.run(cmd, shell=True)
+            subprocess.run(["robocopy.exe", self.source_app_dir, self.target_dir, "/E", "/IS", "/IT"], capture_output=True)
 
             # Restore customer settings if this was an upgrade
             if is_upgrade and os.path.exists(temp_safety_dir):
-                for save_file in ["config.json", "credentials.json", "token.json", "backup_log.txt"]:
+                for save_file in ["config.json", "token.dpapi", "backup_public.pem", "escrow_public.pem", "backup_log.txt"]:
                     backed_f = os.path.join(temp_safety_dir, save_file)
                     if os.path.exists(backed_f):
                         shutil.copy2(backed_f, os.path.join(self.target_dir, save_file))
+                # Migrate legacy broker_token.dat to token.dpapi if token.dpapi not present
+                legacy_dat = os.path.join(temp_safety_dir, "broker_token.dat")
+                target_dpapi = os.path.join(self.target_dir, "token.dpapi")
+                if os.path.exists(legacy_dat) and not os.path.exists(target_dpapi):
+                    shutil.copy2(legacy_dat, target_dpapi)
                 shutil.rmtree(temp_safety_dir, ignore_errors=True)
 
             self.progress.set(0.7)
@@ -285,7 +289,7 @@ class InstallerApp(ctk.CTk):
                     f'if (Test-Path "{target_ico}") {{ $sc.IconLocation = "{target_ico},0" }}; '
                     f'$sc.Save()'
                 )
-                subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd], shell=True)
+                subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd], capture_output=True)
 
             # Step 3: Create Start Menu Shortcut via WScript.Shell COM
             if self.cb_startmenu.get():
@@ -297,7 +301,7 @@ class InstallerApp(ctk.CTk):
                     f'if (Test-Path "{target_ico}") {{ $sc.IconLocation = "{target_ico},0" }}; '
                     f'$sc.Save()'
                 )
-                subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd2], shell=True)
+                subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd2], capture_output=True)
 
             # Step 4: Configure Windows Task Scheduler
             if self.cb_schedule.get():
@@ -321,12 +325,13 @@ class InstallerApp(ctk.CTk):
                         pass
                 
                 is_daily = ("DAILY" in sched_days or len(sched_days) == 7)
+                sched_args = ["schtasks.exe", "/create", "/tn", "Database Cloud Backup", "/tr", f'"{target_exe}" --auto', "/f"]
                 if is_daily:
-                    sched_cmd = f'schtasks /create /tn "Database Cloud Backup" /tr "\\"{target_exe}\\" --auto" /sc daily /st {sched_time} /f'
+                    sched_args.extend(["/sc", "daily", "/st", sched_time])
                 else:
                     days_csv = ",".join([d.strip().upper() for d in sched_days])
-                    sched_cmd = f'schtasks /create /tn "Database Cloud Backup" /tr "\\"{target_exe}\\" --auto" /sc weekly /d {days_csv} /st {sched_time} /f'
-                subprocess.run(sched_cmd, shell=True)
+                    sched_args.extend(["/sc", "weekly", "/d", days_csv, "/st", sched_time])
+                subprocess.run(sched_args, capture_output=True)
 
             # Step 5: Install self-migrating Uninstaller & register with Windows Installed Apps
             self.status_lbl.configure(text="Registering uninstaller and Windows configuration...")
@@ -341,7 +346,7 @@ class InstallerApp(ctk.CTk):
             self.btn_install.configure(text="Finished", state="normal", command=self._finish)
             
             if is_upgrade:
-                msg = "Database Cloud Backup was updated successfully!\n\nAll existing databases, settings, and Google account credentials have been preserved."
+                msg = "Database Cloud Backup was updated successfully!\n\nAll existing databases, settings, and encryption keys have been preserved."
             else:
                 msg = "Database Cloud Backup was installed successfully!\n\nA shortcut has been created on your Desktop."
             messagebox.showinfo("Success", msg)
@@ -452,17 +457,17 @@ exit /b 0
         if not target_ico:
             target_ico = os.path.join(target_dir, "app_icon.ico")
         reg_cmds = [
-            f'reg add "{reg_key}" /v "DisplayName" /d "Database Cloud Backup" /t REG_SZ /f',
-            f'reg add "{reg_key}" /v "DisplayVersion" /d "2.0.0" /t REG_SZ /f',
-            f'reg add "{reg_key}" /v "Publisher" /d "Dulnindu Saranga" /t REG_SZ /f',
-            f'reg add "{reg_key}" /v "InstallLocation" /d "{target_dir}" /t REG_SZ /f',
-            f'reg add "{reg_key}" /v "DisplayIcon" /d "{target_ico}" /t REG_SZ /f',
-            f'reg add "{reg_key}" /v "UninstallString" /d "\\"{uninstall_path}\\"" /t REG_SZ /f',
-            f'reg add "{reg_key}" /v "NoModify" /d 1 /t REG_DWORD /f',
-            f'reg add "{reg_key}" /v "NoRepair" /d 1 /t REG_DWORD /f'
+            ["reg.exe", "add", reg_key, "/v", "DisplayName", "/d", "Database Cloud Backup", "/t", "REG_SZ", "/f"],
+            ["reg.exe", "add", reg_key, "/v", "DisplayVersion", "/d", "4.0.0", "/t", "REG_SZ", "/f"],
+            ["reg.exe", "add", reg_key, "/v", "Publisher", "/d", "Enterprise Cloud DR", "/t", "REG_SZ", "/f"],
+            ["reg.exe", "add", reg_key, "/v", "InstallLocation", "/d", target_dir, "/t", "REG_SZ", "/f"],
+            ["reg.exe", "add", reg_key, "/v", "DisplayIcon", "/d", target_ico, "/t", "REG_SZ", "/f"],
+            ["reg.exe", "add", reg_key, "/v", "UninstallString", "/d", f'"{uninstall_path}"', "/t", "REG_SZ", "/f"],
+            ["reg.exe", "add", reg_key, "/v", "NoModify", "/d", "1", "/t", "REG_DWORD", "/f"],
+            ["reg.exe", "add", reg_key, "/v", "NoRepair", "/d", "1", "/t", "REG_DWORD", "/f"]
         ]
         for cmd in reg_cmds:
-            subprocess.run(cmd, shell=True, capture_output=True)
+            subprocess.run(cmd, capture_output=True)
     except Exception:
         pass
 

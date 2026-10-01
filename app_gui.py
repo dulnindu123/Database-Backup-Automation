@@ -46,9 +46,7 @@ from backup_core import (
     LOG_FILE,
     load_config,
     save_config,
-    authenticate,
-    reset_credentials,
-    test_google_connection,
+    test_broker_connection,
     run_full_backup,
     get_scheduler_status,
     enable_scheduler,
@@ -61,7 +59,11 @@ from backup_core import (
     stop_active_backup,
     is_backup_cancelled,
     emit_log,
-    open_path_native
+    open_path_native,
+    # Section 9: Server Clean Up — Storage Monitor
+    scan_storage_drives,
+    run_storage_monitor,
+    send_test_storage_email
 )
 
 # -----------------------------------------------------------------------------
@@ -166,18 +168,40 @@ class BackupAutomationApp(ctk.CTk):
 
         # ── Main TabView ──────────────────────────────────────────────
         self.tabview = ctk.CTkTabview(self, corner_radius=10)
-        self.tabview.pack(fill="both", expand=True, padx=20, pady=15)
+        self.tabview.pack(fill="both", expand=True, padx=20, pady=(15, 5))
 
         self.tab_dashboard = self.tabview.add("  Dashboard  ")
         self.tab_schedule = self.tabview.add("  Auto Schedule  ")
         self.tab_settings = self.tabview.add("  Settings  ")
         self.tab_diagnostics = self.tabview.add("  Live Logs  ")
+        self.tab_server_health = self.tabview.add("  Server Health  ")
 
         # Initialize individual tabs
         self._build_dashboard_tab()
         self._build_schedule_tab()
         self._build_settings_tab()
         self._build_diagnostics_tab()
+        self._build_server_health_tab()
+
+        # ── Bottom Footer Bar (Version Number Display) ────────────────
+        self.footer_frame = ctk.CTkFrame(self, fg_color="transparent", height=24)
+        self.footer_frame.pack(fill="x", side="bottom", padx=25, pady=(0, 6))
+
+        self.footer_status_label = ctk.CTkLabel(
+            self.footer_frame,
+            text="Enterprise Database Cloud Backup & Server Health Monitor",
+            font=ctk.CTkFont(size=11),
+            text_color="#6b7280"
+        )
+        self.footer_status_label.pack(side="left")
+
+        self.footer_version_label = ctk.CTkLabel(
+            self.footer_frame,
+            text="v4.0.0",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#9ca3af"
+        )
+        self.footer_version_label.pack(side="right")
 
     # =========================================================================
     # TAB 1: DASHBOARD
@@ -201,12 +225,12 @@ class BackupAutomationApp(ctk.CTk):
         self.card_dbs_label = ctk.CTkLabel(c1, text=f"{dbs_count} Databases Configured", font=ctk.CTkFont(size=12), text_color="#9ca3af")
         self.card_dbs_label.pack(anchor="w", padx=15, pady=(2, 12))
 
-        # Card 2: Cloud Sync Status
+        # Card 2: Zero-Trust Security Wall Status
         c2 = ctk.CTkFrame(stats_frame, corner_radius=10, fg_color=("#374151", "#1f2937"))
         c2.grid(row=0, column=1, padx=6, sticky="nsew")
-        ctk.CTkLabel(c2, text="GOOGLE CLOUD SYNC", font=ctk.CTkFont(size=11, weight="bold"), text_color="#34d399").pack(anchor="w", padx=15, pady=(12, 2))
-        ctk.CTkLabel(c2, text="Drive & Sheets Linked", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=15)
-        ctk.CTkLabel(c2, text="Compressed Level 9 ZIP", font=ctk.CTkFont(size=12), text_color="#9ca3af").pack(anchor="w", padx=15, pady=(2, 12))
+        ctk.CTkLabel(c2, text="ZERO-TRUST CLOUD WALL", font=ctk.CTkFont(size=11, weight="bold"), text_color="#34d399").pack(anchor="w", padx=15, pady=(12, 2))
+        ctk.CTkLabel(c2, text="Upload & Telemetry Broker", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=15)
+        ctk.CTkLabel(c2, text="DBK2 Encrypted (AES-256 + RSA)", font=ctk.CTkFont(size=12), text_color="#9ca3af").pack(anchor="w", padx=15, pady=(2, 12))
 
         # Card 3: Scheduler Status
         c3 = ctk.CTkFrame(stats_frame, corner_radius=10, fg_color=("#374151", "#1f2937"))
@@ -229,7 +253,7 @@ class BackupAutomationApp(ctk.CTk):
 
         ctk.CTkLabel(
             action_card,
-            text="Runs an immediate full SQL backup, compresses with maximum deflation, uploads to Google Drive, and logs to Google Sheets.",
+            text="Runs an immediate full SQL backup, encrypts with DBK2 hybrid AES-256-GCM + RSA-4096, streams to Cloud Storage via Upload Broker, and logs telemetry.",
             font=ctk.CTkFont(size=12),
             text_color="#9ca3af"
         ).pack(pady=(0, 20))
@@ -285,7 +309,7 @@ class BackupAutomationApp(ctk.CTk):
 
         self.telemetry_label = ctk.CTkLabel(
             self.telemetry_card,
-            text="⚡ Upload Speed: Idle   •   ⏳ ETA: --   •   ☁ Target: Google Drive",
+            text="⚡ Upload Speed: Idle   •   ⏳ ETA: --   •   ☁ Target: Zero-Trust Upload Broker",
             font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
             text_color="#94a3b8"
         )
@@ -306,37 +330,26 @@ class BackupAutomationApp(ctk.CTk):
             command=self._open_local_backup_folder
         ).pack(side="left", padx=5)
 
-        # Button 2: Open Google Drive Folder
+        # Button 2: Test Broker Connection
         ctk.CTkButton(
             links_frame,
-            text="☁ Open Drive",
+            text="🔍 Test Broker",
             font=ctk.CTkFont(size=12),
             fg_color="#374151",
             hover_color="#4b5563",
             width=135,
-            command=self._open_google_drive
+            command=self._start_test_connection_thread
         ).pack(side="left", padx=5)
 
-        # Button 3: Open Google Sheet Audit Log
-        ctk.CTkButton(
-            links_frame,
-            text="📊 Open Sheet",
-            font=ctk.CTkFont(size=12),
-            fg_color="#374151",
-            hover_color="#4b5563",
-            width=135,
-            command=self._open_google_sheet
-        ).pack(side="left", padx=5)
-
-        # Button 4: Clean Local Storage Drive
+        # Button 3: Clean Local Storage Drive
         ctk.CTkButton(
             links_frame,
             text="🧹 Clean Storage",
             font=ctk.CTkFont(size=12),
             fg_color="#374151",
-            hover_color="#dc2626",
+            hover_color="#4b5563",
             width=135,
-            command=self._clean_local_storage
+            command=self._cleanup_storage
         ).pack(side="left", padx=5)
 
     # =========================================================================
@@ -406,7 +419,7 @@ class BackupAutomationApp(ctk.CTk):
         ctk.CTkLabel(
             mode_card,
             text="• Runs under NT AUTHORITY\\SYSTEM in Session 0 with highest privileges.\n"
-                 "• Operates 100% unattended before any user logs in, survives reboots, and is never disrupted by RDP logoffs.",
+                 "• Operates unattended before any user logs in, survives reboots, and is not disrupted by RDP logoffs.",
             font=ctk.CTkFont(size=11),
             text_color="#9ca3af",
             justify="left"
@@ -629,15 +642,51 @@ class BackupAutomationApp(ctk.CTk):
         self.entry_backup_folder.pack(side="left", padx=(0, 10))
         ctk.CTkButton(folder_row, text="Browse...", width=80, command=self._browse_backup_folder).pack(side="left")
 
-        # Google Drive Folder ID
-        self._create_field_label(scroll, "Google Drive Folder ID:")
-        self.entry_drive_id = ctk.CTkEntry(scroll, width=500)
-        self.entry_drive_id.pack(anchor="w", padx=20, pady=(0, 10))
+        # Security Wall & Upload Broker Configuration
+        sec_box = ctk.CTkFrame(scroll, corner_radius=10, fg_color=("#1f2937", "#111827"), border_width=1, border_color="#374151")
+        sec_box.pack(fill="x", padx=20, pady=(10, 15))
 
-        # Google Sheet ID
-        self._create_field_label(scroll, "Google Sheet ID:")
-        self.entry_sheet_id = ctk.CTkEntry(scroll, width=500)
-        self.entry_sheet_id.pack(anchor="w", padx=20, pady=(0, 10))
+        sec_top = ctk.CTkFrame(sec_box, fg_color="transparent")
+        sec_top.pack(fill="x", padx=15, pady=(12, 6))
+
+        ctk.CTkLabel(
+            sec_top,
+            text="ZERO-TRUST CLOUD SECURITY WALL (BROKER & ENCRYPTION)",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#60a5fa"
+        ).pack(side="left")
+
+        self._create_field_label(sec_box, "Upload Broker URL (Cloud Run Endpoint):", pack_padx=15)
+        self.entry_broker_url = ctk.CTkEntry(sec_box, width=470, placeholder_text="https://backup-broker-xxxx.run.app")
+        self.entry_broker_url.pack(anchor="w", padx=15, pady=(0, 10))
+
+        # Status Badges for Token & Encryption Key
+        status_row = ctk.CTkFrame(sec_box, fg_color="transparent")
+        status_row.pack(fill="x", padx=15, pady=(0, 12))
+
+        self.lbl_token_status = ctk.CTkLabel(
+            status_row,
+            text="🔑 Broker Token: Checking...",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#9ca3af",
+            fg_color="#374151",
+            corner_radius=6,
+            padx=10,
+            pady=4
+        )
+        self.lbl_token_status.pack(side="left", padx=(0, 10))
+
+        self.lbl_key_status = ctk.CTkLabel(
+            status_row,
+            text="🔒 Public Key: Checking...",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#9ca3af",
+            fg_color="#374151",
+            corner_radius=6,
+            padx=10,
+            pady=4
+        )
+        self.lbl_key_status.pack(side="left")
 
         # Storage Management / Zero-Footprint Toggle
         self.chk_delete_local = ctk.CTkCheckBox(
@@ -666,27 +715,15 @@ class BackupAutomationApp(ctk.CTk):
 
         self.btn_test_conn = ctk.CTkButton(
             btn_frame,
-            text="🔍  Test Google Connection",
+            text="🔍  Test Broker Connection",
             font=ctk.CTkFont(size=14, weight="bold"),
             fg_color="#059669",
             hover_color="#047857",
             height=42,
-            width=200,
+            width=220,
             command=self._start_test_connection_thread
         )
         self.btn_test_conn.pack(side="left", padx=(0, 15))
-
-        self.btn_switch_account = ctk.CTkButton(
-            btn_frame,
-            text="🔄  Switch Google Account",
-            font=ctk.CTkFont(size=14, weight="bold"),
-            fg_color="#4f46e5",
-            hover_color="#4338ca",
-            height=42,
-            width=200,
-            command=self._switch_google_account
-        )
-        self.btn_switch_account.pack(side="left")
 
         # ── Danger Zone / Application Lifecycle ─────────────────────────
         danger_frame = ctk.CTkFrame(scroll, corner_radius=10, fg_color=("#1f2937", "#111827"), border_width=1, border_color="#374151")
@@ -751,7 +788,7 @@ class BackupAutomationApp(ctk.CTk):
                 break
 
         if uninstaller_path and os.path.exists(uninstaller_path):
-            subprocess.Popen(f'start "" "{uninstaller_path}" "{BASE_DIR}"', shell=True)
+            subprocess.Popen([uninstaller_path, BASE_DIR])
             self.destroy()
             sys.exit(0)
         else:
@@ -818,6 +855,50 @@ class BackupAutomationApp(ctk.CTk):
             self.log_textbox.see("end")
         self.after(0, _update)
 
+    def _open_local_backup_folder(self):
+        """Opens the local backup directory in Windows File Explorer."""
+        folder = self.config_data.get("BACKUP_FOLDER", r"C:\temp\backups")
+        if not os.path.exists(folder):
+            try:
+                os.makedirs(folder, exist_ok=True)
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to create backup directory:\n{e}")
+                return
+        try:
+            os.startfile(folder)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to open folder:\n{e}")
+
+    def _cleanup_storage(self):
+        """Manually triggers local backup storage folder cleanup."""
+        folder = self.config_data.get("BACKUP_FOLDER", r"C:\temp\backups")
+        if not os.path.exists(folder):
+            messagebox.showinfo("Cleanup Storage", "Backup directory does not exist or is already clean.")
+            return
+        confirm = messagebox.askyesno("Confirm Cleanup", f"Are you sure you want to clean up local temporary backup files in:\n{folder}?")
+        if not confirm:
+            return
+        cleaned, freed_bytes = cleanup_local_backup_folder(folder, log_cb=self.append_log)
+        freed_str = format_file_size(freed_bytes)
+        messagebox.showinfo("Storage Cleanup Complete", f"Successfully cleaned {cleaned} old files.\nFreed space: {freed_str}")
+
+    def _open_log_file(self):
+        """Opens the active log file in default text editor / notepad."""
+        log_path = os.path.join(BASE_DIR, LOG_FILE)
+        if not os.path.exists(log_path):
+            with open(log_path, "w", encoding="utf-8") as f:
+                f.write(f"--- Log File Initialized {datetime.datetime.now()} ---\n")
+        try:
+            os.startfile(log_path)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to open log file:\n{e}")
+
+    def _clear_logs(self):
+        """Clears the live on-screen log textbox."""
+        if hasattr(self, "log_textbox"):
+            self.log_textbox.delete("1.0", "end")
+            self.append_log("Log display cleared.")
+
     # =========================================================================
     # CONFIGURATION & SETTINGS CONTROLLERS
     # =========================================================================
@@ -840,11 +921,23 @@ class BackupAutomationApp(ctk.CTk):
         self.entry_backup_folder.delete(0, "end")
         self.entry_backup_folder.insert(0, c.get("BACKUP_FOLDER", "C:\\temp\\backups"))
 
-        self.entry_drive_id.delete(0, "end")
-        self.entry_drive_id.insert(0, c.get("GOOGLE_DRIVE_FOLDER_ID", ""))
+        self.entry_broker_url.delete(0, "end")
+        self.entry_broker_url.insert(0, c.get("BROKER_URL", ""))
 
-        self.entry_sheet_id.delete(0, "end")
-        self.entry_sheet_id.insert(0, c.get("GOOGLE_SHEET_ID", ""))
+        # Check Token and Key files
+        token_filename = c.get("BROKER_TOKEN_FILE", "token.dpapi")
+        token_path = os.path.join(BASE_DIR, token_filename)
+        if os.path.exists(token_path):
+            self.lbl_token_status.configure(text=f"🔑 Token: Present ({token_filename})", text_color="#34d399", fg_color="#064e3b")
+        else:
+            self.lbl_token_status.configure(text=f"🔑 Token: MISSING ({token_filename})", text_color="#f87171", fg_color="#7f1d1d")
+
+        key_filename = c.get("PUBLIC_KEY_FILE", "backup_public.pem")
+        pub_key_path = os.path.join(BASE_DIR, key_filename)
+        if os.path.exists(pub_key_path):
+            self.lbl_key_status.configure(text=f"🔒 Public Key: Present ({key_filename})", text_color="#34d399", fg_color="#064e3b")
+        else:
+            self.lbl_key_status.configure(text=f"🔒 Public Key: MISSING ({key_filename})", text_color="#f87171", fg_color="#7f1d1d")
 
         sched_days = c.get("SCHEDULE_DAYS")
         if not sched_days:
@@ -911,32 +1004,35 @@ class BackupAutomationApp(ctk.CTk):
 
         time_val = self.entry_sched_time.get().strip() or "02:00"
 
-        new_config = {
+        new_config = dict(self.config_data)
+        new_config.update({
             "SQL_SERVER_NAME": self.entry_sql_server.get().strip(),
             "SQL_USERNAME": self.entry_sql_user.get().strip(),
             "SQL_PASSWORD": self.entry_sql_pass.get().strip(),
             "BACKUP_FOLDER": backup_dir,
             "BACKUP_EXTENSION": ".zip",
             "TARGET_DATABASES": db_list,
-            "GOOGLE_DRIVE_FOLDER_ID": self.entry_drive_id.get().strip(),
-            "GOOGLE_SHEET_ID": self.entry_sheet_id.get().strip(),
+            "BROKER_URL": self.entry_broker_url.get().strip(),
             "STRICTLY_MONDAYS_ONLY": (selected_days == ["MON"]),
             "SCHEDULE_DAYS": selected_days,
             "SCHEDULE_TIME": time_val,
             "DELETE_LOCAL_AFTER_UPLOAD": bool(self.chk_delete_local.get())
-        }
+        })
+        new_config.pop("GOOGLE_DRIVE_FOLDER_ID", None)
+        new_config.pop("GOOGLE_SHEET_ID", None)
 
         ok, msg = save_config(new_config)
         if ok:
             self.config_data = new_config
-            self.card_sql_label.configure(text=new_config["SQL_SERVER_NAME"])
+            self.card_sql_label.configure(text=new_config.get("SQL_SERVER_NAME", "localhost"))
             self.card_dbs_label.configure(text=f"{len(db_list)} Databases Configured")
+            self._load_config_into_ui()
             messagebox.showinfo("Saved", "Configuration saved successfully!")
         else:
             messagebox.showerror("Error", f"Failed to save configuration:\n{msg}")
 
     # =========================================================================
-    # SCHEDULE PRESET & DAY SELECTOR HELPERS
+    # SCHEDULE & AUTOMATION CONTROLLERS
     # =========================================================================
     def _set_quick_time(self, time_val):
         """Sets the time entry from a quick preset button."""
@@ -1013,9 +1109,6 @@ class BackupAutomationApp(ctk.CTk):
 
         self.lbl_sched_summary.configure(text=desc, fg_color=bg_col, text_color=txt_col)
 
-    # =========================================================================
-    # TASK SCHEDULER & WINDOWS SERVICE CONTROLLERS
-    # =========================================================================
     def _refresh_schedule_status(self):
         """Queries Windows Task Scheduler and updates the UI status badge."""
         active, status_desc, mode = get_scheduler_status()
@@ -1073,114 +1166,32 @@ class BackupAutomationApp(ctk.CTk):
             self._refresh_schedule_status()
 
     # =========================================================================
-    # EXTERNAL TOOLS & STORAGE MAINTENANCE
-    # =========================================================================
-    def _open_local_backup_folder(self):
-        """Opens local backup directory in native OS file manager."""
-        folder = self.config_data.get("BACKUP_FOLDER", "C:\\temp\\backups")
-        if not os.path.exists(folder):
-            try:
-                os.makedirs(folder, exist_ok=True)
-            except Exception:
-                pass
-        if os.path.exists(folder):
-            if not open_path_native(folder):
-                messagebox.showwarning("Notice", f"Could not launch file manager for: {folder}")
-        else:
-            messagebox.showwarning("Warning", f"Folder not found: {folder}")
-
-    def _clean_local_storage(self):
-        """Prompts and executes on-demand sweep of local residual backup files."""
-        folder = self.config_data.get("BACKUP_FOLDER", "C:\\temp\\backups")
-        if not os.path.exists(folder):
-            messagebox.showinfo("Storage Cleaned", f"Backup folder does not exist yet:\n{folder}\n0 files found.")
-            return
-
-        if messagebox.askyesno("Clean Storage Drive", f"Delete all residual backup files (.bak and .zip) from:\n{folder}\n\nProceed to free local storage drive space?"):
-            deleted, freed = cleanup_local_backup_folder(folder=folder, log_cb=self.append_log)
-            if deleted > 0:
-                messagebox.showinfo("Storage Cleaned", f"Successfully cleaned storage drive!\nRemoved: {deleted} files\nSpace freed: {format_file_size(freed)}")
-            else:
-                messagebox.showinfo("Storage Cleaned", "Storage drive is already clean.\n0 residual backup files found.")
-
-    def _open_google_drive(self):
-        """Opens configured Google Drive folder in default web browser."""
-        folder_id = self.config_data.get("GOOGLE_DRIVE_FOLDER_ID", "")
-        if folder_id:
-            webbrowser.open(f"https://drive.google.com/drive/folders/{folder_id}")
-        else:
-            messagebox.showinfo("Notice", "Google Drive Folder ID not configured.")
-
-    def _open_google_sheet(self):
-        """Opens configured Google Sheet audit trail in default web browser."""
-        sheet_id = self.config_data.get("GOOGLE_SHEET_ID", "")
-        if sheet_id:
-            webbrowser.open(f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit")
-        else:
-            messagebox.showinfo("Notice", "Google Sheet ID not configured.")
-
-    def _open_log_file(self):
-        """Opens backup_log.txt in native OS text editor."""
-        if os.path.exists(LOG_FILE):
-            if not open_path_native(LOG_FILE):
-                messagebox.showwarning("Notice", f"Could not open log file: {LOG_FILE}")
-        else:
-            messagebox.showinfo("Log", "No log file found yet.")
-
-    def _clear_logs(self):
-        """Clears the live log viewer textbox."""
-        self.log_textbox.delete("1.0", "end")
-
-    def _switch_google_account(self):
-        """Disconnects current Google account by deleting cached token.json."""
-        if messagebox.askyesno(
-            "Switch Google Account", 
-            "This will disconnect the current Google account and allow you to sign in with a different account.\n\n"
-            "Note: Make sure your new Google account has Edit permissions to the configured Drive Folder and Google Sheet!\n\n"
-            "Do you want to proceed?"
-        ):
-            ok, msg = reset_credentials()
-            if ok:
-                self.append_log("\nStored Google credentials cleared.")
-                self.append_log("Starting sign-in for new Google account...")
-                self.tabview.set("  Live Logs  ")
-                self._start_test_connection_thread()
-            else:
-                messagebox.showerror("Error", msg)
-
-    # =========================================================================
-    # ASYNCHRONOUS THREADING: TEST CONNECTION
+    # ASYNCHRONOUS THREADING: TEST BROKER CONNECTION
     # =========================================================================
     def _start_test_connection_thread(self):
-        """Spawns non-blocking daemon thread to test Google connection."""
+        """Spawns non-blocking daemon thread to test Upload Broker connection."""
         if self.is_running:
             return
         self.btn_test_conn.configure(state="disabled", text="Testing...")
-        self.append_log("\n--- Testing Google Services Connection ---")
+        self.append_log("\n--- Testing Zero-Trust Upload Broker Connection ---")
         threading.Thread(target=self._run_test_connection, daemon=True).start()
 
     def _run_test_connection(self):
-        """Background worker validating Google Drive and Google Sheets connectivity."""
+        """Background worker validating Upload Broker and PC Authentication Token."""
         try:
-            creds = authenticate(interactive=True, log_cb=self.append_log)
-            res = test_google_connection(
-                creds,
-                drive_folder_id=self.entry_drive_id.get().strip(),
-                sheet_id=self.entry_sheet_id.get().strip(),
-                log_cb=self.append_log
-            )
-            
-            if res["auth"] and res["drive"] and res["sheet"]:
-                msg = f"SUCCESS!\n\nDrive Destination: {res['drive_name']}\nGoogle Sheet: {res['sheet_title']}"
-                self.after(0, lambda: messagebox.showinfo("Connection OK", msg))
+            res = test_broker_connection(self.config_data, log_cb=self.append_log)
+            if res.get("verified"):
+                pc_id = res.get("pc_id", "unknown")
+                msg = f"SUCCESS!\n\nUpload Broker: Connected\nAuthenticated PC ID: {pc_id}\nEncryption: RSA-4096 Hybrid AES-256"
+                self.after(0, lambda: messagebox.showinfo("Broker Connection OK", msg))
             else:
-                err_text = "\n".join(res["errors"])
+                err_text = "\n".join(res.get("errors", ["Unknown connection error"]))
                 self.after(0, lambda: messagebox.showerror("Connection Failed", f"Issues detected:\n\n{err_text}"))
         except Exception as e:
             self.append_log(f"Test error: {e}", "error")
             self.after(0, lambda: messagebox.showerror("Error", str(e)))
         finally:
-            self.after(0, lambda: self.btn_test_conn.configure(state="normal", text="🔍  Test Google Connection"))
+            self.after(0, lambda: self.btn_test_conn.configure(state="normal", text="🔍  Test Broker Connection"))
 
     # =========================================================================
     # ASYNCHRONOUS THREADING: FULL BACKUP WORKFLOW
@@ -1283,6 +1294,450 @@ class BackupAutomationApp(ctk.CTk):
                     self.telemetry_label.configure(text="⚡ Upload Speed: Idle   •   ⏳ ETA: --   •   ☁ Target: Google Drive", text_color="#94a3b8")
                 self.was_cancelled = False
             self.after(0, _reset_ui)
+
+    # =========================================================================
+    # TAB 5: SERVER HEALTH — STORAGE MONITORING & EMAIL ALERTS
+    # =========================================================================
+    def _build_server_health_tab(self):
+        """Builds the Server Health tab with drive status cards, scan controls, and alert configuration."""
+        tab = self.tab_server_health
+
+        scroll = ctk.CTkScrollableFrame(tab, corner_radius=10, fg_color=("#374151", "#1f2937"))
+        scroll.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # ── Section Header ─────────────────────────────────────────────
+        ctk.CTkLabel(
+            scroll,
+            text="Server Storage Monitor & Clean Up",
+            font=ctk.CTkFont(size=18, weight="bold")
+        ).pack(anchor="w", padx=20, pady=(15, 5))
+
+        ctk.CTkLabel(
+            scroll,
+            text="Scans all storage drives, logs capacity to Google Sheets, and sends High Importance email alerts when drives are almost full.",
+            font=ctk.CTkFont(size=12),
+            text_color="#9ca3af"
+        ).pack(anchor="w", padx=20, pady=(0, 15))
+
+        # ── Drive Status Cards Container ───────────────────────────────
+        self.sh_drives_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+        self.sh_drives_frame.pack(fill="x", padx=20, pady=(0, 10))
+
+        # Placeholder label before first scan
+        self.sh_placeholder_label = ctk.CTkLabel(
+            self.sh_drives_frame,
+            text="Click \"🔍 Scan Now\" to detect and display all storage drives.",
+            font=ctk.CTkFont(size=13),
+            text_color="#6b7280"
+        )
+        self.sh_placeholder_label.pack(pady=20)
+
+        # ── Scan Status Bar ────────────────────────────────────────────
+        self.sh_status_bar = ctk.CTkFrame(scroll, fg_color=("#1e293b", "#0f172a"), corner_radius=8)
+        self.sh_status_bar.pack(fill="x", padx=20, pady=(0, 15))
+
+        self.sh_scan_status = ctk.CTkLabel(
+            self.sh_status_bar,
+            text="Status: Waiting for scan...",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#9ca3af"
+        )
+        self.sh_scan_status.pack(side="left", padx=15, pady=10)
+
+        self.sh_last_scan = ctk.CTkLabel(
+            self.sh_status_bar,
+            text="Last Scan: Never",
+            font=ctk.CTkFont(size=11),
+            text_color="#6b7280"
+        )
+        self.sh_last_scan.pack(side="right", padx=15, pady=10)
+
+        # ── Action Buttons ─────────────────────────────────────────────
+        btn_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=20, pady=(0, 15))
+
+        self.btn_scan_now = ctk.CTkButton(
+            btn_frame,
+            text="🔍  Scan Now",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color="#2563eb",
+            hover_color="#1d4ed8",
+            height=40,
+            width=160,
+            corner_radius=20,
+            command=self._start_storage_scan_thread
+        )
+        self.btn_scan_now.pack(side="left", padx=5)
+
+        ctk.CTkButton(
+            btn_frame,
+            text="📊  Open Storage Sheet",
+            font=ctk.CTkFont(size=12),
+            fg_color="#374151",
+            hover_color="#4b5563",
+            height=38,
+            width=175,
+            command=self._open_storage_sheet
+        ).pack(side="left", padx=5)
+
+        ctk.CTkButton(
+            btn_frame,
+            text="📧  Test Email",
+            font=ctk.CTkFont(size=12),
+            fg_color="#374151",
+            hover_color="#4b5563",
+            height=38,
+            width=130,
+            command=self._test_storage_email
+        ).pack(side="left", padx=5)
+
+        # ── Alert Threshold Settings Card ──────────────────────────────
+        threshold_card = ctk.CTkFrame(scroll, corner_radius=8, fg_color=("#1e293b", "#111827"), border_width=1, border_color="#374151")
+        threshold_card.pack(fill="x", padx=20, pady=(0, 15))
+
+        ctk.CTkLabel(
+            threshold_card,
+            text="ALERT THRESHOLD SETTINGS",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#60a5fa"
+        ).pack(anchor="w", padx=15, pady=(12, 10))
+
+        # Row 1: C: Drive threshold (GB)
+        c_row = ctk.CTkFrame(threshold_card, fg_color="transparent")
+        c_row.pack(fill="x", padx=15, pady=(0, 8))
+
+        ctk.CTkLabel(
+            c_row,
+            text="C: Drive (System) — Alert when free space falls below:",
+            font=ctk.CTkFont(size=12),
+            text_color="#d1d5db"
+        ).pack(side="left")
+
+        self.sh_c_drive_entry = ctk.CTkEntry(c_row, width=60, justify="center")
+        self.sh_c_drive_entry.pack(side="left", padx=(10, 5))
+        self.sh_c_drive_entry.insert(0, str(self.config_data.get("STORAGE_C_DRIVE_ALERT_GB", 30)))
+
+        ctk.CTkLabel(c_row, text="GB", font=ctk.CTkFont(size=12), text_color="#9ca3af").pack(side="left")
+
+        # Row 2: Other drives threshold (%)
+        o_row = ctk.CTkFrame(threshold_card, fg_color="transparent")
+        o_row.pack(fill="x", padx=15, pady=(0, 8))
+
+        ctk.CTkLabel(
+            o_row,
+            text="Other Drives — Alert when usage exceeds:",
+            font=ctk.CTkFont(size=12),
+            text_color="#d1d5db"
+        ).pack(side="left")
+
+        self.sh_other_pct_entry = ctk.CTkEntry(o_row, width=60, justify="center")
+        self.sh_other_pct_entry.pack(side="left", padx=(10, 5))
+        self.sh_other_pct_entry.insert(0, str(self.config_data.get("STORAGE_OTHER_DRIVES_ALERT_PERCENT", 90)))
+
+        ctk.CTkLabel(o_row, text="%", font=ctk.CTkFont(size=12), text_color="#9ca3af").pack(side="left")
+
+        # Row 3: Include network drives toggle
+        net_row = ctk.CTkFrame(threshold_card, fg_color="transparent")
+        net_row.pack(fill="x", padx=15, pady=(0, 12))
+
+        self.sh_include_network = ctk.CTkSwitch(
+            net_row,
+            text="Include Network / Shared Drives",
+            font=ctk.CTkFont(size=12)
+        )
+        self.sh_include_network.pack(side="left")
+        if self.config_data.get("STORAGE_INCLUDE_NETWORK_DRIVES", True):
+            self.sh_include_network.select()
+
+        # ── Scan Frequency Card ────────────────────────────────────────
+        freq_card = ctk.CTkFrame(scroll, corner_radius=8, fg_color=("#1e293b", "#111827"), border_width=1, border_color="#374151")
+        freq_card.pack(fill="x", padx=20, pady=(0, 15))
+
+        ctk.CTkLabel(
+            freq_card,
+            text="SCAN FREQUENCY",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#60a5fa"
+        ).pack(anchor="w", padx=15, pady=(12, 8))
+
+        freq_row = ctk.CTkFrame(freq_card, fg_color="transparent")
+        freq_row.pack(fill="x", padx=15, pady=(0, 12))
+
+        ctk.CTkLabel(
+            freq_row,
+            text="Run storage scan:",
+            font=ctk.CTkFont(size=12),
+            text_color="#d1d5db"
+        ).pack(side="left")
+
+        self.sh_freq_var = ctk.CTkOptionMenu(
+            freq_row,
+            values=["Daily", "Weekly", "Monthly"],
+            width=120,
+            fg_color="#374151",
+            button_color="#4b5563",
+            button_hover_color="#6b7280"
+        )
+        self.sh_freq_var.pack(side="left", padx=(10, 0))
+        self.sh_freq_var.set(self.config_data.get("STORAGE_SCAN_FREQUENCY", "Daily"))
+
+        # ── Email Settings Card ────────────────────────────────────────
+        email_card = ctk.CTkFrame(scroll, corner_radius=8, fg_color=("#1e293b", "#111827"), border_width=1, border_color="#374151")
+        email_card.pack(fill="x", padx=20, pady=(0, 15))
+
+        ctk.CTkLabel(
+            email_card,
+            text="EMAIL ALERT CONFIGURATION",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#60a5fa"
+        ).pack(anchor="w", padx=15, pady=(12, 10))
+
+        # Recipient
+        self._sh_email_row(email_card, "Recipient Email:", "sh_recipient",
+                          self.config_data.get("STORAGE_ALERT_EMAIL_RECIPIENT", "support@spillabs.com"))
+        # Sender
+        self._sh_email_row(email_card, "Sender Email:", "sh_sender",
+                          self.config_data.get("STORAGE_ALERT_SENDER_EMAIL", ""))
+        # Password
+        self._sh_email_row(email_card, "Sender Password:", "sh_password",
+                          self.config_data.get("STORAGE_ALERT_SENDER_PASSWORD", ""), show="●")
+        # SMTP Server
+        self._sh_email_row(email_card, "SMTP Server:", "sh_smtp",
+                          self.config_data.get("STORAGE_ALERT_SMTP_SERVER", "smtp-mail.outlook.com"))
+        # SMTP Port
+        self._sh_email_row(email_card, "SMTP Port:", "sh_smtp_port",
+                          str(self.config_data.get("STORAGE_ALERT_SMTP_PORT", 587)), width=80)
+
+        # Spacer at bottom
+        ctk.CTkFrame(email_card, fg_color="transparent", height=10).pack()
+
+        # ── Save Settings Button ───────────────────────────────────────
+        ctk.CTkButton(
+            scroll,
+            text="💾  Save Storage Monitor Settings",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color="#059669",
+            hover_color="#047857",
+            height=42,
+            width=280,
+            corner_radius=21,
+            command=self._save_storage_settings
+        ).pack(pady=(5, 20))
+
+    def _sh_email_row(self, parent, label_text, attr_name, default_val, show=None, width=280):
+        """Helper to create a labeled entry row for the email settings card."""
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", padx=15, pady=(0, 8))
+
+        ctk.CTkLabel(
+            row, text=label_text,
+            font=ctk.CTkFont(size=12), text_color="#d1d5db",
+            width=130, anchor="w"
+        ).pack(side="left")
+
+        entry = ctk.CTkEntry(row, width=width)
+        if show:
+            entry.configure(show=show)
+        entry.pack(side="left", padx=(5, 0))
+        entry.insert(0, default_val)
+        setattr(self, attr_name, entry)
+
+    def _save_storage_settings(self):
+        """Saves all Server Health tab settings to config.json."""
+        try:
+            c_gb = int(self.sh_c_drive_entry.get().strip())
+        except ValueError:
+            c_gb = 30
+        try:
+            o_pct = int(self.sh_other_pct_entry.get().strip())
+        except ValueError:
+            o_pct = 90
+        try:
+            smtp_port = int(self.sh_smtp_port.get().strip())
+        except ValueError:
+            smtp_port = 587
+
+        self.config_data["STORAGE_MONITOR_ENABLED"] = True
+        self.config_data["STORAGE_C_DRIVE_ALERT_GB"] = max(1, min(c_gb, 500))
+        self.config_data["STORAGE_OTHER_DRIVES_ALERT_PERCENT"] = max(50, min(o_pct, 99))
+        self.config_data["STORAGE_INCLUDE_NETWORK_DRIVES"] = bool(self.sh_include_network.get())
+        self.config_data["STORAGE_ALERT_EMAIL_RECIPIENT"] = self.sh_recipient.get().strip()
+        self.config_data["STORAGE_ALERT_SENDER_EMAIL"] = self.sh_sender.get().strip()
+        self.config_data["STORAGE_ALERT_SENDER_PASSWORD"] = self.sh_password.get().strip()
+        self.config_data["STORAGE_ALERT_SMTP_SERVER"] = self.sh_smtp.get().strip()
+        self.config_data["STORAGE_ALERT_SMTP_PORT"] = smtp_port
+        self.config_data["STORAGE_SCAN_FREQUENCY"] = self.sh_freq_var.get()
+
+        ok, msg = save_config(self.config_data)
+        if ok:
+            messagebox.showinfo("Saved", "Storage monitor settings saved successfully.")
+        else:
+            messagebox.showerror("Error", f"Failed to save settings:\n{msg}")
+
+    def _start_storage_scan_thread(self):
+        """Launches the storage scan in a background thread to keep the UI fluid."""
+        self.btn_scan_now.configure(state="disabled", text="Scanning...")
+        self.sh_scan_status.configure(text="Status: Scanning drives...", text_color="#fbbf24")
+        threading.Thread(target=self._execute_storage_scan, daemon=True).start()
+
+    def _execute_storage_scan(self):
+        """Background worker for the storage monitoring scan cycle."""
+        from datetime import datetime as dt
+
+        def status_update(text):
+            self.after(0, lambda: self.sh_scan_status.configure(text=f"Status: {text}", text_color="#fbbf24"))
+
+        try:
+            # Save any threshold changes before scanning
+            self.after(0, self._save_storage_settings)
+
+            success, summary, drives, critical = run_storage_monitor(
+                config=self.config_data,
+                log_cb=self.append_log,
+                status_cb=status_update
+            )
+
+            # Update UI with scan results on the main thread
+            def _update_ui():
+                # Update status bar
+                now_str = dt.now().strftime("%Y-%m-%d %H:%M:%S")
+                self.sh_last_scan.configure(text=f"Last Scan: {now_str}")
+
+                if critical:
+                    self.sh_scan_status.configure(
+                        text=f"Status: ⚠️ {len(critical)} drive(s) critical!",
+                        text_color="#f87171"
+                    )
+                else:
+                    self.sh_scan_status.configure(
+                        text="Status: ✅ All drives healthy",
+                        text_color="#10b981"
+                    )
+
+                # Rebuild drive cards
+                self._rebuild_drive_cards(drives, critical)
+
+                # Re-enable scan button
+                self.btn_scan_now.configure(state="normal", text="🔍  Scan Now")
+
+            self.after(0, _update_ui)
+
+        except Exception as e:
+            def _err():
+                self.sh_scan_status.configure(text=f"Status: Error — {e}", text_color="#f87171")
+                self.btn_scan_now.configure(state="normal", text="🔍  Scan Now")
+            self.after(0, _err)
+
+    def _rebuild_drive_cards(self, drives, critical):
+        """Destroys old drive cards and rebuilds them with fresh scan data."""
+        # Clear existing cards
+        for widget in self.sh_drives_frame.winfo_children():
+            widget.destroy()
+
+        if not drives:
+            ctk.CTkLabel(
+                self.sh_drives_frame,
+                text="No drives detected.",
+                font=ctk.CTkFont(size=13), text_color="#6b7280"
+            ).pack(pady=20)
+            return
+
+        # Create a grid of drive cards (3 per row)
+        critical_letters = {d["drive_letter"] for d in critical}
+        cards_per_row = 3
+
+        self.sh_drives_frame.columnconfigure(tuple(range(cards_per_row)), weight=1, uniform="dc")
+
+        for idx, d in enumerate(drives):
+            row_i = idx // cards_per_row
+            col_i = idx % cards_per_row
+
+            is_critical = d["drive_letter"] in critical_letters
+            border_color = "#dc2626" if is_critical else "#374151"
+            bg_color = ("#2a1515", "#1a0a0a") if is_critical else ("#1e293b", "#0f172a")
+
+            card = ctk.CTkFrame(
+                self.sh_drives_frame,
+                corner_radius=10,
+                fg_color=bg_color,
+                border_width=2,
+                border_color=border_color
+            )
+            card.grid(row=row_i, column=col_i, padx=5, pady=5, sticky="nsew")
+
+            # Drive letter & type badge
+            header_f = ctk.CTkFrame(card, fg_color="transparent")
+            header_f.pack(fill="x", padx=12, pady=(10, 4))
+
+            label_text = d["drive_letter"]
+            if d.get("label"):
+                label_text += f"  {d['label']}"
+
+            ctk.CTkLabel(
+                header_f,
+                text=label_text,
+                font=ctk.CTkFont(size=15, weight="bold"),
+                text_color="#f87171" if is_critical else "#e5e7eb"
+            ).pack(side="left")
+
+            type_color = "#818cf8" if d["drive_type"] == "Network" else "#6b7280"
+            ctk.CTkLabel(
+                header_f,
+                text=d["drive_type"],
+                font=ctk.CTkFont(size=10),
+                text_color=type_color
+            ).pack(side="right")
+
+            # Usage progress bar
+            pct_val = d["usage_percent"] / 100.0
+            bar_color = "#dc2626" if is_critical else ("#f59e0b" if d["usage_percent"] > 80 else "#10b981")
+
+            pbar = ctk.CTkProgressBar(
+                card, width=180, height=10, corner_radius=5,
+                progress_color=bar_color
+            )
+            pbar.pack(padx=12, pady=(4, 4))
+            pbar.set(pct_val)
+
+            # Stats
+            ctk.CTkLabel(
+                card,
+                text=f"Total: {d['total_gb']:.1f} GB   |   Free: {d['free_gb']:.1f} GB   |   {d['usage_percent']}% used",
+                font=ctk.CTkFont(size=11),
+                text_color="#9ca3af"
+            ).pack(padx=12, pady=(0, 4))
+
+            # Critical alert reason
+            if is_critical:
+                reason = next((c.get("alert_reason", "") for c in critical if c["drive_letter"] == d["drive_letter"]), "")
+                if reason:
+                    ctk.CTkLabel(
+                        card,
+                        text=f"⚠️ {reason}",
+                        font=ctk.CTkFont(size=10, weight="bold"),
+                        text_color="#fbbf24"
+                    ).pack(padx=12, pady=(0, 8))
+            else:
+                ctk.CTkLabel(card, text="", height=8).pack()  # spacer
+
+    def _open_storage_sheet(self):
+        """Opens the Google Sheet Storage Monitor tab in the default browser."""
+        sheet_id = self.config_data.get("GOOGLE_SHEET_ID", "")
+        if sheet_id:
+            import webbrowser
+            webbrowser.open(f"https://docs.google.com/spreadsheets/d/{sheet_id}")
+        else:
+            messagebox.showwarning("No Sheet ID", "Google Sheet ID is not configured in Settings.")
+
+    def _test_storage_email(self):
+        """Sends a test email to verify SMTP configuration."""
+        # Save current settings first
+        self._save_storage_settings()
+        ok, msg = send_test_storage_email(self.config_data, log_cb=self.append_log)
+        if ok:
+            messagebox.showinfo("Test Email", msg)
+        else:
+            messagebox.showerror("Test Email Failed", msg)
 
 
 def main():

@@ -45,6 +45,9 @@ from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from googleapiclient.errors import HttpError
+import re
+from crypto_stream import encrypt_file
+from broker_client import secure_upload
 
 # -----------------------------------------------------------------------------
 # GOOGLE OAUTH CONFIGURATION & SANITIZATION
@@ -65,9 +68,8 @@ if sys.stderr is None:
 # - drive.file: Allows full access ONLY to files/folders created by this application.
 #               The application cannot read, modify, or delete any other files in Google Drive.
 # - spreadsheets: Allows appending telemetry and audit rows to the compliance spreadsheet.
+# SECURE BUILD: the app no longer requests Drive access at all. Uploads go through the broker.
 SCOPES = [
-    "https://www.googleapis.com/auth/drive",
-    "https://www.googleapis.com/auth/drive.file",
     "https://www.googleapis.com/auth/spreadsheets"
 ]
 
@@ -75,6 +77,70 @@ SCOPES = [
 TASK_SCHEDULER_NAME = "Database Cloud Backup"
 SYSTEM_SERVICE_TASK_NAME = "Database Cloud Backup (System Service)"
 DAEMON_SERVICE_TASK_NAME = "Database Cloud Backup Service"
+
+
+
+# =============================================================================
+# SECURE BUILD HELPERS (input validation, broker readiness, hardened ACLs)
+# =============================================================================
+_DB_NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_\-\. ]{0,127}$")
+_CREATE_NO_WINDOW = 0x08000000 if platform.system().lower() == "windows" else 0
+
+
+def _valid_db_name(db_name):
+    return bool(db_name) and bool(_DB_NAME_RE.match(db_name))
+
+
+# Export alias for public API / tests
+is_safe_db_name = _valid_db_name
+
+
+def broker_ready(config, base_dir=None):
+    """Checks the prerequisites for a secure upload. Returns (ok, reason)."""
+    b_dir = base_dir or BASE_DIR
+    if not config.get("BROKER_URL"):
+        return False, "BROKER_URL missing in config.json"
+
+    token_file = config.get("BROKER_TOKEN_FILE", "token.dpapi")
+    token_path = token_file if os.path.isabs(token_file) else os.path.join(b_dir, token_file)
+    if not os.path.exists(token_path):
+        data_dir = globals().get("DATA_DIR", b_dir)
+        alt_path = os.path.join(data_dir, os.path.basename(token_file))
+        if os.path.exists(alt_path):
+            token_path = alt_path
+        else:
+            return False, f"{os.path.basename(token_file)} missing (provision this PC's token)"
+
+    pub_file = config.get("PUBLIC_KEY_FILE", "backup_public.pem")
+    pub_path = pub_file if os.path.isabs(pub_file) else os.path.join(b_dir, pub_file)
+    if not os.path.exists(pub_path):
+        data_dir = globals().get("DATA_DIR", b_dir)
+        alt_pub = os.path.join(data_dir, os.path.basename(pub_file))
+        if os.path.exists(alt_pub):
+            pub_path = alt_pub
+        else:
+            return False, f"{os.path.basename(pub_file)} missing (encryption public key)"
+
+    if not config.get("ALLOW_NO_ESCROW", False):
+        escrow_file = config.get("ESCROW_KEY_FILE", "escrow_public.pem")
+        escrow_path = escrow_file if os.path.isabs(escrow_file) else os.path.join(b_dir, escrow_file)
+        if not os.path.exists(escrow_path):
+            data_dir = globals().get("DATA_DIR", b_dir)
+            alt_escrow = os.path.join(data_dir, os.path.basename(escrow_file))
+            if not os.path.exists(alt_escrow):
+                return False, f"{os.path.basename(escrow_file)} missing (escrow key required unless ALLOW_NO_ESCROW=true)"
+
+    return True, ""
+
+
+# Export alias
+is_broker_ready = broker_ready
+
+
+def _sql_service_account(sql_server):
+    """'host\\INSTANCE' -> 'NT SERVICE\\MSSQL$INSTANCE'; default instance -> 'NT SERVICE\\MSSQLSERVER'."""
+    inst = sql_server.split("\\", 1)[1].strip() if "\\" in (sql_server or "") else ""
+    return "NT SERVICE\\MSSQL$" + inst if inst and inst.upper() != "MSSQLSERVER" else "NT SERVICE\\MSSQLSERVER"
 
 
 # =============================================================================
@@ -160,12 +226,35 @@ def get_base_dir():
 
 # Global filesystem paths
 BASE_DIR = get_base_dir()
-LOG_FILE = os.path.join(BASE_DIR, "backup_log.txt")
-CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
-TOKEN_FILE = os.path.join(BASE_DIR, "token.json")
-if not os.path.exists(TOKEN_FILE) and os.path.exists(os.path.join(BASE_DIR, "credentials.json")):
-    TOKEN_FILE = os.path.join(BASE_DIR, "credentials.json")
-CLIENT_SECRET_FILE = os.path.join(BASE_DIR, "client_secret.json")
+
+
+def get_data_dir():
+    """
+    Returns system data directory: %ALLUSERSPROFILE%\\DatabaseBackupApp (C:\\ProgramData\\DatabaseBackupApp).
+    Falls back to BASE_DIR if ProgramData is unavailable or if config exists in BASE_DIR.
+    """
+    program_data = os.environ.get("ALLUSERSPROFILE", r"C:\ProgramData")
+    target = os.path.join(program_data, "DatabaseBackupApp")
+    if os.path.exists(target):
+        return target
+    if os.path.exists(os.path.join(BASE_DIR, "config.json")):
+        return BASE_DIR
+    try:
+        os.makedirs(target, exist_ok=True)
+        return target
+    except Exception:
+        return BASE_DIR
+
+
+DATA_DIR = get_data_dir()
+LOG_FILE = os.path.join(DATA_DIR, "backup_log.txt")
+CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
+if not os.path.exists(CONFIG_FILE) and os.path.exists(os.path.join(BASE_DIR, "config.json")):
+    CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
+    LOG_FILE = os.path.join(BASE_DIR, "backup_log.txt")
+TOKEN_FILE = os.path.join(DATA_DIR, "token.dpapi")
+if not os.path.exists(TOKEN_FILE) and os.path.exists(os.path.join(BASE_DIR, "token.dpapi")):
+    TOKEN_FILE = os.path.join(BASE_DIR, "token.dpapi")
 
 # Initialize dedicated application logger with UTF-8 FileHandler
 logger = logging.getLogger("DatabaseBackup")
@@ -220,12 +309,13 @@ def emit_log(message, level="info", log_cb=None):
 # 1. CONFIGURATION MANAGEMENT
 # =============================================================================
 
-def load_config():
+def load_config(config_path=None):
     """
-    Loads JSON configuration settings from config.json.
+    Loads JSON configuration settings from config.json (or config_path).
     If the file does not exist, populates default enterprise parameters,
     creates config.json on disk, and returns the default dictionary.
     """
+    target_file = config_path or CONFIG_FILE
     default_config = {
         "SQL_SERVER_NAME": "localhost\\SQLEXPRESS",
         "SQL_USERNAME": "",
@@ -238,16 +328,28 @@ def load_config():
         "STRICTLY_MONDAYS_ONLY": True,
         "SCHEDULE_DAYS": ["MON"],
         "SCHEDULE_TIME": "02:00",
-        "DELETE_LOCAL_AFTER_UPLOAD": True
+        "DELETE_LOCAL_AFTER_UPLOAD": True,
+        # Section 9: Server Clean Up — Storage Monitor & Email Alerts
+        "STORAGE_MONITOR_ENABLED": True,
+        "STORAGE_C_DRIVE_ALERT_GB": 30,
+        "STORAGE_OTHER_DRIVES_ALERT_PERCENT": 90,
+        "STORAGE_INCLUDE_NETWORK_DRIVES": True,
+        "STORAGE_ALERT_EMAIL_RECIPIENT": "support@spillabs.com",
+        "STORAGE_ALERT_SMTP_SERVER": "smtp-mail.outlook.com",
+        "STORAGE_ALERT_SMTP_PORT": 587,
+        "STORAGE_ALERT_SENDER_EMAIL": "",
+        "STORAGE_ALERT_SENDER_PASSWORD": "",
+        "STORAGE_SHEET_TAB_NAME": "Storage Monitor",
+        "STORAGE_SCAN_FREQUENCY": "Daily"
     }
-    
-    if not os.path.exists(CONFIG_FILE):
-        emit_log(f"config.json not found at {CONFIG_FILE}. Creating default configuration template.", "warning")
-        save_config(default_config)
+
+    if not os.path.exists(target_file):
+        emit_log(f"config.json not found at {target_file}. Creating default configuration template.", "warning")
+        save_config(default_config, target_path=target_file)
         return default_config
         
     try:
-        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+        with open(target_file, 'r', encoding='utf-8-sig') as f:
             cfg = json.load(f)
             # Ensure any newly introduced settings default cleanly if missing from older configs
             for k, v in default_config.items():
@@ -259,12 +361,13 @@ def load_config():
         return default_config
 
 
-def save_config(config_dict):
+def save_config(config_dict, target_path=None):
     """
-    Serializes and writes updated configuration dictionary to config.json.
+    Serializes and writes updated configuration dictionary to config.json (or target_path).
     """
+    dest = target_path or CONFIG_FILE
     try:
-        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+        with open(dest, 'w', encoding='utf-8') as f:
             json.dump(config_dict, f, indent=4)
         emit_log("Configuration successfully updated on disk.")
         return True, "Configuration saved successfully."
@@ -362,6 +465,61 @@ def reset_credentials():
 # 3. DIAGNOSTIC HEALTH PROBES
 # =============================================================================
 
+def test_broker_connection(config, log_cb=None):
+    """
+    Validates Upload Broker availability and PC Token authentication.
+    Returns a dict with 'verified' (bool), 'pc_id' (str), and 'errors' (list of str).
+    """
+    results = {
+        "verified": False,
+        "pc_id": "unknown",
+        "errors": []
+    }
+    broker_url = (config.get("BROKER_URL") or "").rstrip("/")
+    if not broker_url:
+        results["errors"].append("BROKER_URL is not configured in settings.")
+        emit_log("Broker connection test failed: BROKER_URL missing.", "error", log_cb)
+        return results
+
+    token_file = config.get("BROKER_TOKEN_FILE", "broker_token.dat")
+    token_path = os.path.join(BASE_DIR, token_file)
+    if not os.path.exists(token_path):
+        results["errors"].append(f"Broker token file ({token_file}) missing on this PC.")
+        emit_log(f"Broker connection test failed: {token_file} missing.", "error", log_cb)
+        return results
+
+    try:
+        from broker_client import load_token
+        token = load_token(token_path)
+        pc_id = token.split(".")[0] if "." in token else "pc-client"
+        results["pc_id"] = pc_id
+    except Exception as e:
+        results["errors"].append(f"Failed to read local broker token: {e}")
+        emit_log(f"Broker token read error: {e}", "error", log_cb)
+        return results
+
+    try:
+        r = requests.post(f"{broker_url}/verify",
+                          headers={"Authorization": f"Bearer {token}"},
+                          timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            results["verified"] = True
+            results["pc_id"] = data.get("pc", pc_id)
+            emit_log(f"Broker connection verified. PC ID: {results['pc_id']}", "info", log_cb)
+        elif r.status_code == 401:
+            results["errors"].append("Broker rejected PC Token (Unauthorized/Revoked).")
+            emit_log("Broker rejected token.", "error", log_cb)
+        else:
+            results["errors"].append(f"Broker returned HTTP {r.status_code}: {r.text[:100]}")
+            emit_log(f"Broker error: HTTP {r.status_code}", "error", log_cb)
+    except Exception as e:
+        results["errors"].append(f"Network error connecting to broker ({broker_url}): {e}")
+        emit_log(f"Broker unreachable: {e}", "error", log_cb)
+
+    return results
+
+
 def test_google_connection(creds, drive_folder_id, sheet_id, log_cb=None):
     """
     Performs non-destructive read validation against Google Cloud services.
@@ -440,33 +598,47 @@ def open_path_native(target_path):
 
 def grant_sql_folder_permissions(folder_path):
     """
-    Grants filesystem write/modify permissions on the target directory.
-    - On Windows: Uses icacls with language-independent SIDs (*S-1-1-0 Everyone, *S-1-5-32-545 Users).
-    - On macOS / Linux: Ensures directory exists and applies readable/writable permissions.
+    SECURE BUILD: least-privilege ACL instead of 'Everyone: Modify'.
+    Access = SYSTEM (full), Administrators (full), the SQL Server service account (modify),
+    and the account running this app (modify). Nobody else, including other local users.
+    Folders under Program Files (SQL Server's own default backup dir) are left untouched.
     """
     try:
         norm_path = os.path.normpath(folder_path)
         if not os.path.exists(norm_path):
             os.makedirs(norm_path, exist_ok=True)
-            
-        if platform.system().lower() == "windows":
-            # Grant Everyone Modify (OI)(CI)M permissions
-            subprocess.run(
-                f'icacls "{norm_path}" /grant *S-1-1-0:(OI)(CI)M /T /C /Q',
-                shell=True, capture_output=True, text=True, timeout=10
-            )
-            # Grant Users Modify (OI)(CI)M permissions
-            subprocess.run(
-                f'icacls "{norm_path}" /grant *S-1-5-32-545:(OI)(CI)M /T /C /Q',
-                shell=True, capture_output=True, text=True, timeout=10
-            )
-        else:
+        if platform.system().lower() != "windows":
             try:
-                os.chmod(norm_path, 0o775)
+                os.chmod(norm_path, 0o700)
             except Exception:
                 pass
-    except Exception:
-        pass
+            return True
+        low = norm_path.lower()
+        if "\\program files" in low:
+            return True  # SQL's default backup dir already has correct ACLs
+        try:
+            sql_server = load_config().get("SQL_SERVER_NAME", "")
+        except Exception:
+            sql_server = ""
+        me = f"{os.environ.get('USERDOMAIN', '')}\\{os.environ.get('USERNAME', '')}".strip("\\")
+        grants = ["*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F",
+                  f"{_sql_service_account(sql_server)}:(OI)(CI)M"]
+        if me and "\\" in me:
+            grants.append(f"{me}:(OI)(CI)M")
+        # Grant FIRST, then remove inheritance, so we can never lock ourselves out.
+        for g in grants:
+            r = subprocess.run(["icacls", norm_path, "/grant:r", g, "/C", "/Q"],
+                               shell=False, capture_output=True, text=True, timeout=15,
+                               creationflags=_CREATE_NO_WINDOW)
+            if r.returncode != 0:
+                emit_log(f"ACL grant failed for '{g}': {(r.stderr or r.stdout).strip()[:200]}", "warning")
+        subprocess.run(["icacls", norm_path, "/inheritance:r", "/C", "/Q"],
+                       shell=False, capture_output=True, text=True, timeout=15,
+                       creationflags=_CREATE_NO_WINDOW)
+        return True
+    except Exception as e:
+        emit_log(f"Could not harden folder permissions on '{folder_path}': {e}", "warning")
+        return False
 
 
 def find_sql_cli_executable():
@@ -531,62 +703,74 @@ def find_sql_cli_executable():
     return "sqlcmd", "sqlcmd"
 
 
+def _sql_argv(cli_type, cli_path, sql_server, sql_user, timeout, query, trust_cert, for_query):
+    """Builds an argument LIST (never a shell string). Passwords go via environment, not argv."""
+    argv = [cli_path, "-b", "-l", str(timeout), "-S", sql_server]
+    argv += ["-U", sql_user] if sql_user else ["-E"]
+    if cli_type == "sqlcmd":
+        if trust_cert:
+            argv.append("-C")
+        if for_query:
+            argv += ["-h", "-1", "-W"]
+    else:  # osql.exe
+        argv.append("-n")
+        if for_query:
+            argv += ["-h", "-1", "-w", "8000"]
+    argv += ["-Q", query]
+    return argv
+
+
+def _sql_env(cli_type, sql_user, sql_password):
+    env = os.environ.copy()
+    if sql_user and sql_password:
+        env["SQLCMDPASSWORD" if cli_type == "sqlcmd" else "OSQLPASSWORD"] = sql_password
+    return env
+
+
+def _looks_like_bad_c_flag(out, err):
+    t = ((err or "") + "\n" + (out or "")).lower()
+    return "-c" in t and ("unknown option" in t or "invalid option" in t or "unrecognized" in t)
+
+
 def execute_sql_query_adaptive(sql_server, query, sql_user="", sql_password="", timeout=15):
     """
-    Executes a SQL query against SQL Server adaptively handling modern (-C) and legacy flags.
-    Automatically retries without '-C' if the installed sqlcmd does not recognize the flag.
-    Falls back to osql if sqlcmd is unavailable.
-    
-    Returns:
-        (returncode, stdout, stderr)
+    Runs a read-only query with sqlcmd/osql using shell=False. Retries without -C if the
+    installed client rejects that flag.  Returns (returncode, stdout, stderr).
     """
     cli_type, cli_path = find_sql_cli_executable()
-    escaped_query = query.replace('"', '""')
-    
-    if cli_type == "sqlcmd":
-        # First attempt: Try with -C (Trust Server Certificate, required for modern ODBC 18)
-        if sql_user and sql_password:
-            cmd = f'"{cli_path}" -b -l {timeout} -S "{sql_server}" -U "{sql_user}" -P "{sql_password}" -C -h -1 -W -Q "{escaped_query}"'
-        else:
-            cmd = f'"{cli_path}" -b -l {timeout} -S "{sql_server}" -E -C -h -1 -W -Q "{escaped_query}"'
-            
-        try:
-            res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout + 5)
-            # Check if -C was rejected as an unknown/invalid option (common on older SQL Server / SSMS versions)
-            err_lower = (res.stderr or "").lower() + (res.stdout or "").lower()
-            if "-c" in err_lower and ("unknown option" in err_lower or "invalid option" in err_lower or "unrecognized" in err_lower):
-                # Fallback attempt without -C
-                if sql_user and sql_password:
-                    cmd_no_c = f'"{cli_path}" -b -l {timeout} -S "{sql_server}" -U "{sql_user}" -P "{sql_password}" -h -1 -W -Q "{escaped_query}"'
-                else:
-                    cmd_no_c = f'"{cli_path}" -b -l {timeout} -S "{sql_server}" -E -h -1 -W -Q "{escaped_query}"'
-                res = subprocess.run(cmd_no_c, shell=True, capture_output=True, text=True, timeout=timeout + 5)
-            return res.returncode, res.stdout, res.stderr
-        except Exception as e:
-            return -1, "", str(e)
-            
-    else:  # osql.exe fallback
-        if sql_user and sql_password:
-            cmd = f'"{cli_path}" -b -l {timeout} -S "{sql_server}" -U "{sql_user}" -P "{sql_password}" -n -h -1 -w 8000 -Q "{escaped_query}"'
-        else:
-            cmd = f'"{cli_path}" -b -l {timeout} -S "{sql_server}" -E -n -h -1 -w 8000 -Q "{escaped_query}"'
-        try:
-            res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout + 5)
-            return res.returncode, res.stdout, res.stderr
-        except Exception as e:
-            return -1, "", str(e)
+    env = _sql_env(cli_type, sql_user, sql_password)
+
+    def _run(trust):
+        return subprocess.run(
+            _sql_argv(cli_type, cli_path, sql_server, sql_user, timeout, query, trust, True),
+            shell=False, capture_output=True, text=True, timeout=timeout + 5,
+            env=env, creationflags=_CREATE_NO_WINDOW)
+    try:
+        res = _run(True)
+        if cli_type == "sqlcmd" and _looks_like_bad_c_flag(res.stdout, res.stderr):
+            res = _run(False)
+        return res.returncode, res.stdout, res.stderr
+    except Exception as e:
+        return -1, "", str(e)
 
 
 def execute_sql_backup_command(sql_server, db_name, bak_filepath, sql_user="", sql_password="", cancel_check=None):
     """
-    Executes BACKUP DATABASE command adaptively handling modern and legacy SQL Server / SSMS versions.
-    Integrates with backup_controller for instant emergency abort.
+    Executes BACKUP DATABASE using shell=False, after strict validation of the database name
+    and target path, so a tampered config.json cannot inject SQL or OS commands.
     """
+    if not _valid_db_name(db_name):
+        return 1, "", f"Refused: invalid database name {db_name!r}"
+    if "'" in bak_filepath or "\n" in bak_filepath or "\r" in bak_filepath:
+        return 1, "", "Refused: invalid backup path"
     cli_type, cli_path = find_sql_cli_executable()
     backup_sql = f"BACKUP DATABASE [{db_name}] TO DISK='{bak_filepath}' WITH FORMAT"
-    
-    def _run_cmd(cmd_str):
-        proc = subprocess.Popen(cmd_str, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    env = _sql_env(cli_type, sql_user, sql_password)
+
+    def _run_cmd(trust):
+        argv = _sql_argv(cli_type, cli_path, sql_server, sql_user, 15, backup_sql, trust, False)
+        proc = subprocess.Popen(argv, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, env=env, creationflags=_CREATE_NO_WINDOW)
         backup_controller.set_active_process(proc)
         try:
             stdout, stderr = proc.communicate()
@@ -594,30 +778,10 @@ def execute_sql_backup_command(sql_server, db_name, bak_filepath, sql_user="", s
         finally:
             backup_controller.clear_active_process()
 
-    if cli_type == "sqlcmd":
-        # Try with -C first
-        if sql_user and sql_password:
-            cmd = f'"{cli_path}" -b -l 15 -S "{sql_server}" -U "{sql_user}" -P "{sql_password}" -C -Q "{backup_sql}"'
-        else:
-            cmd = f'"{cli_path}" -b -l 15 -S "{sql_server}" -E -C -Q "{backup_sql}"'
-            
-        code, out, err = _run_cmd(cmd)
-        combined_err = ((err or "") + "\n" + (out or "")).lower()
-        if "-c" in combined_err and ("unknown option" in combined_err or "invalid option" in combined_err or "unrecognized" in combined_err):
-            # Retry without -C
-            if sql_user and sql_password:
-                cmd_no_c = f'"{cli_path}" -b -l 15 -S "{sql_server}" -U "{sql_user}" -P "{sql_password}" -Q "{backup_sql}"'
-            else:
-                cmd_no_c = f'"{cli_path}" -b -l 15 -S "{sql_server}" -E -Q "{backup_sql}"'
-            code, out, err = _run_cmd(cmd_no_c)
-        return code, out, err
-    else:
-        # osql.exe fallback
-        if sql_user and sql_password:
-            cmd = f'"{cli_path}" -b -l 15 -S "{sql_server}" -U "{sql_user}" -P "{sql_password}" -n -Q "{backup_sql}"'
-        else:
-            cmd = f'"{cli_path}" -b -l 15 -S "{sql_server}" -E -n -Q "{backup_sql}"'
-        return _run_cmd(cmd)
+    code, out, err = _run_cmd(True)
+    if cli_type == "sqlcmd" and _looks_like_bad_c_flag(out, err):
+        code, out, err = _run_cmd(False)
+    return code, out, err
 
 
 def get_sql_instance_default_backup_path(sql_server, sql_user="", sql_password=""):
@@ -1127,12 +1291,12 @@ def run_full_backup(config=None, log_cb=None, progress_cb=None, status_cb=None, 
             status_cb("Backup Cancelled")
         return False, "Backup operation was cancelled by user."
         
-    creds = authenticate(interactive=True, log_cb=log_cb)
-    if not creds:
-        emit_log("Authentication failed. Aborting backup cycle.", "critical", log_cb)
+    ok, why = broker_ready(config)
+    if not ok:
+        emit_log(f"Secure upload is not configured: {why}. Aborting backup cycle.", "critical", log_cb)
         if status_cb:
-            status_cb("Authentication Failed")
-        return False, "Google Authentication Failed"
+            status_cb("Secure upload not configured")
+        return False, f"Secure upload not configured: {why}"
 
     if (cancel_check and cancel_check()) or backup_controller.is_cancelled():
         emit_log("Backup cycle cancelled by user after authentication.", "warning", log_cb)
@@ -1202,17 +1366,44 @@ def run_full_backup(config=None, log_cb=None, progress_cb=None, status_cb=None, 
                     overall = db_base + (0.30 * db_weight) + (upload_fraction * 0.70 * db_weight)
                     progress_cb(min(0.98, max(0.0, overall)))
 
-            link = upload_to_google_drive(
-                creds=creds,
-                file_path=backup_zip,
-                folder_id=config.get("GOOGLE_DRIVE_FOLDER_ID"),
-                retries=3,
-                log_cb=log_cb,
-                status_cb=status_cb,
-                progress_cb=_upload_progress_bridge,
-                telemetry_cb=telemetry_cb,
-                cancel_check=cancel_check
-            )
+            # Encrypt with the PUBLIC key(s) (private keys stay offline), then upload via the broker.
+            enc_path = os.path.splitext(backup_zip)[0] + ".dbk2"
+            pub_key = os.path.join(BASE_DIR, config.get("PUBLIC_KEY_FILE", "backup_public.pem"))
+            escrow_key = os.path.join(BASE_DIR, config.get("ESCROW_KEY_FILE", "escrow_public.pem"))
+            _log = lambda m, l="info": emit_log(m, l, log_cb)
+            link = None
+            try:
+                if status_cb:
+                    status_cb(f"Encrypting {file_name} (DBK2)...")
+                allow_no_escrow = config.get("ALLOW_NO_ESCROW", False)
+                if not os.path.exists(escrow_key) and not allow_no_escrow:
+                    raise ValueError(
+                        f"Escrow key '{os.path.basename(escrow_key)}' missing! DBK2 encryption requires an escrow key "
+                        "by default. Either place escrow_public.pem in the application directory or set ALLOW_NO_ESCROW: true in config.json."
+                    )
+                escrow_to_pass = escrow_key if os.path.exists(escrow_key) else None
+
+                encrypt_file(
+                    backup_zip, enc_path, pub_key,
+                    cancel_check=cancel_check,
+                    escrow_key_path=escrow_to_pass,
+                    allow_no_escrow=allow_no_escrow,
+                    db_name=db_name
+                )
+                link = secure_upload(
+                    enc_path, db_name, config, BASE_DIR,
+                    log_cb=_log, progress_cb=_upload_progress_bridge,
+                    telemetry_cb=telemetry_cb, cancel_check=cancel_check, status_cb=status_cb)
+            except InterruptedError:
+                emit_log(f"Encryption of {file_name} cancelled.", "warning", log_cb)
+            except Exception as up_err:
+                emit_log(f"Encrypt/upload error for {db_name}: {up_err}", "error", log_cb)
+            finally:
+                try:
+                    if os.path.exists(enc_path):
+                        os.remove(enc_path)
+                except Exception:
+                    pass
 
             if (cancel_check and cancel_check()) or backup_controller.is_cancelled():
                 emit_log(f"EMERGENCY STOP: Upload stopped for {db_name}.", "warning", log_cb)
@@ -1224,14 +1415,7 @@ def run_full_backup(config=None, log_cb=None, progress_cb=None, status_cb=None, 
             if link:
                 if status_cb:
                     status_cb(f"Logging {file_name} to Google Sheet...")
-                update_google_sheet(
-                    creds=creds,
-                    sheet_id=config.get("GOOGLE_SHEET_ID"),
-                    backup_filename=file_name,
-                    file_size_str=file_size_str,
-                    download_link=link,
-                    log_cb=log_cb
-                )
+                emit_log(f"AUDIT: uploaded and verified {link} ({file_size_str})", "info", log_cb)
                 success_count += 1
                 
                 # Step 4: PHASE 2 STORAGE CLEANUP (Delete local .zip after upload)
@@ -1346,8 +1530,7 @@ def get_scheduler_status():
 
     # 1. Check Unattended Windows System Service
     try:
-        cmd = f'schtasks /query /tn "{SYSTEM_SERVICE_TASK_NAME}" /fo CSV /nh'
-        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)
+        res = subprocess.run(["schtasks", "/query", "/tn", SYSTEM_SERVICE_TASK_NAME, "/fo", "CSV", "/nh"], capture_output=True, text=True, timeout=10)
         if res.returncode == 0 and SYSTEM_SERVICE_TASK_NAME in res.stdout:
             status_line = res.stdout.strip().split("\n")[0]
             parts = [p.strip('"\r') for p in status_line.split('","')]
@@ -1359,8 +1542,7 @@ def get_scheduler_status():
 
     # 2. Check Standard User Scheduled Task
     try:
-        cmd = f'schtasks /query /tn "{TASK_SCHEDULER_NAME}" /fo CSV /nh'
-        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)
+        res = subprocess.run(["schtasks", "/query", "/tn", TASK_SCHEDULER_NAME, "/fo", "CSV", "/nh"], capture_output=True, text=True, timeout=10)
         if res.returncode == 0 and TASK_SCHEDULER_NAME in res.stdout:
             status_line = res.stdout.strip().split("\n")[0]
             parts = [p.strip('"\r') for p in status_line.split('","')]
@@ -1372,8 +1554,7 @@ def get_scheduler_status():
 
     # 3. Check Background Daemon Task (if present)
     try:
-        cmd = f'schtasks /query /tn "{DAEMON_SERVICE_TASK_NAME}" /fo CSV /nh'
-        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)
+        res = subprocess.run(["schtasks", "/query", "/tn", DAEMON_SERVICE_TASK_NAME, "/fo", "CSV", "/nh"], capture_output=True, text=True, timeout=10)
         if res.returncode == 0 and DAEMON_SERVICE_TASK_NAME in res.stdout:
             return True, "Active (Continuous Background Daemon Service)", "SYSTEM_SERVICE"
     except Exception:
@@ -1434,69 +1615,10 @@ def enable_scheduler(executable_path=None, days="MON", time_str="02:00", as_syst
         else:
             friendly_schedule = f"Every {', '.join(friendly_days[:-1])}, and {friendly_days[-1]} at {time_str}"
 
-    # macOS LaunchAgent Implementation
-    if platform.system().lower() == "darwin":
-        plist_dir = os.path.expanduser("~/Library/LaunchAgents")
-        os.makedirs(plist_dir, exist_ok=True)
-        plist_path = os.path.join(plist_dir, "com.databasebackup.automation.plist")
-        
-        try:
-            hour_val, min_val = [int(p) for p in time_str.split(":")[:2]]
-        except Exception:
-            hour_val, min_val = 2, 0
-            
-        weekday_map = {"SUN": 0, "MON": 1, "TUE": 2, "WED": 3, "THU": 4, "FRI": 5, "SAT": 6}
-        calendar_intervals = []
-        if is_daily:
-            calendar_intervals.append(f"            <dict>\n                <key>Hour</key>\n                <integer>{hour_val}</integer>\n                <key>Minute</key>\n                <integer>{min_val}</integer>\n            </dict>")
-        else:
-            for d in ordered_days:
-                w_num = weekday_map.get(d, 1)
-                calendar_intervals.append(f"            <dict>\n                <key>Weekday</key>\n                <integer>{w_num}</integer>\n                <key>Hour</key>\n                <integer>{hour_val}</integer>\n                <key>Minute</key>\n                <integer>{min_val}</integer>\n            </dict>")
-                
-        intervals_str = "\n".join(calendar_intervals)
-        
-        if getattr(sys, 'frozen', False):
-            exec_args = f"        <string>{sys.executable}</string>\n        <string>--auto</string>"
-        else:
-            python_bin = sys.executable or "python3"
-            script_file = os.path.join(BASE_DIR, "auto_backup.py")
-            exec_args = f"        <string>{python_bin}</string>\n        <string>{script_file}</string>\n        <string>--auto</string>"
-
-        plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.databasebackup.automation</string>
-    <key>ProgramArguments</key>
-    <array>
-{exec_args}
-    </array>
-    <key>StartCalendarInterval</key>
-    <array>
-{intervals_str}
-    </array>
-    <key>RunAtLoad</key>
-    <{'true' if on_boot else 'false'}/>
-    <key>StandardOutPath</key>
-    <string>{LOG_FILE}</string>
-    <key>StandardErrorPath</key>
-    <string>{LOG_FILE}</string>
-</dict>
-</plist>
-"""
-        with open(plist_path, "w", encoding="utf-8") as f:
-            f.write(plist_content)
-            
-        try:
-            subprocess.run(["launchctl", "unload", plist_path], capture_output=True)
-            subprocess.run(["launchctl", "load", plist_path], capture_output=True)
-        except Exception:
-            pass
-            
-        emit_log(f"macOS LaunchAgent registered ({friendly_schedule}) at: {plist_path}")
-        return True, f"macOS LaunchAgent Active: {friendly_schedule}"
+    # Windows Task Scheduler Implementation (macOS / Linux are unsupported and untested)
+    if platform.system().lower() != "windows":
+        emit_log("Non-Windows platforms (macOS/Linux) are unsupported and untested.")
+        return False, "Operating System unsupported. Database Cloud Backup requires Windows."
 
     # Windows Task Scheduler Implementation
     if executable_path.startswith("python "):
@@ -1512,13 +1634,18 @@ def enable_scheduler(executable_path=None, days="MON", time_str="02:00", as_syst
 
     if as_system_service:
         # First remove any user-level task to avoid conflicting double-executions
-        subprocess.run(f'schtasks /delete /tn "{TASK_SCHEDULER_NAME}" /f', shell=True, capture_output=True)
+        subprocess.run(["schtasks", "/delete", "/tn", TASK_SCHEDULER_NAME, "/f"], capture_output=True)
         
         target_task = SYSTEM_SERVICE_TASK_NAME
-        cmd = f'schtasks /create /tn "{target_task}" /tr "{cmd_run}" {schedule_args} /ru "NT AUTHORITY\\SYSTEM" /rl HIGHEST /f'
+        cmd_args = ["schtasks", "/create", "/tn", target_task, "/tr", cmd_run, "/ru", "NT AUTHORITY\\SYSTEM", "/rl", "HIGHEST", "/f"]
+        if days == "EVERYDAY":
+            cmd_args.extend(["/sc", "daily", "/st", time_str])
+        else:
+            cmd_args.extend(["/sc", "weekly", "/d", ",".join(ordered_days), "/st", time_str])
         
         if not is_admin():
-            ok = run_command_elevated(cmd)
+            cmd_str = f'schtasks /create /tn "{target_task}" /tr "{cmd_run}" {schedule_args} /ru "NT AUTHORITY\\SYSTEM" /rl HIGHEST /f'
+            ok = run_command_elevated(cmd_str)
             if ok:
                 emit_log(f"Unattended System Service '{target_task}' configured via elevated prompt.")
                 if on_boot:
@@ -1528,24 +1655,29 @@ def enable_scheduler(executable_path=None, days="MON", time_str="02:00", as_syst
             else:
                 return False, "Administrator elevation was cancelled or denied."
         else:
-            res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            res = subprocess.run(cmd_args, capture_output=True, text=True)
             if res.returncode == 0:
                 emit_log(f"Unattended System Service '{target_task}' created successfully.")
                 if on_boot:
-                    boot_cmd = f'schtasks /create /tn "{DAEMON_SERVICE_TASK_NAME}" /tr "{cmd_run}" /sc ONSTART /ru "NT AUTHORITY\\SYSTEM" /rl HIGHEST /f'
-                    subprocess.run(boot_cmd, shell=True, capture_output=True)
+                    boot_args = ["schtasks", "/create", "/tn", DAEMON_SERVICE_TASK_NAME, "/tr", cmd_run, "/sc", "ONSTART", "/ru", "NT AUTHORITY\\SYSTEM", "/rl", "HIGHEST", "/f"]
+                    subprocess.run(boot_args, capture_output=True)
                 return True, f"Windows System Service Active: {friendly_schedule} (Unattended Session 0)."
             else:
                 err = res.stderr or res.stdout
                 return False, f"Scheduler error: {err}"
     else:
         # First remove any system-level task to avoid double-runs
-        subprocess.run(f'schtasks /delete /tn "{SYSTEM_SERVICE_TASK_NAME}" /f', shell=True, capture_output=True)
-        subprocess.run(f'schtasks /delete /tn "{DAEMON_SERVICE_TASK_NAME}" /f', shell=True, capture_output=True)
+        subprocess.run(["schtasks", "/delete", "/tn", SYSTEM_SERVICE_TASK_NAME, "/f"], capture_output=True)
+        subprocess.run(["schtasks", "/delete", "/tn", DAEMON_SERVICE_TASK_NAME, "/f"], capture_output=True)
         
         target_task = TASK_SCHEDULER_NAME
-        cmd = f'schtasks /create /tn "{target_task}" /tr "{cmd_run}" {schedule_args} /f'
-        res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        user_cmd_args = ["schtasks", "/create", "/tn", target_task, "/tr", cmd_run, "/f"]
+        if days == "EVERYDAY":
+            user_cmd_args.extend(["/sc", "daily", "/st", time_str])
+        else:
+            user_cmd_args.extend(["/sc", "weekly", "/d", ",".join(ordered_days), "/st", time_str])
+            
+        res = subprocess.run(user_cmd_args, capture_output=True, text=True)
         if res.returncode == 0:
             emit_log(f"Standard user task '{target_task}' created successfully ({friendly_schedule}).")
             return True, f"Scheduled successfully: {friendly_schedule}."
@@ -1577,12 +1709,13 @@ def disable_scheduler():
     removed_any = False
     
     for tn in tasks_to_remove:
-        cmd = f'schtasks /delete /tn "{tn}" /f'
-        res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        cmd_args = ["schtasks", "/delete", "/tn", tn, "/f"]
+        res = subprocess.run(cmd_args, capture_output=True, text=True)
         if res.returncode == 0:
             removed_any = True
         elif not is_admin():
-            if run_command_elevated(cmd):
+            cmd_str = f'schtasks /delete /tn "{tn}" /f'
+            if run_command_elevated(cmd_str):
                 removed_any = True
                 
     emit_log("Windows automation schedules removed.")
@@ -1596,11 +1729,6 @@ def disable_scheduler():
 def detect_sql_server_instances():
     """
     Auto-discovers locally installed Microsoft SQL Server instances.
-    
-    Technique:
-    1. Inspects the Windows Registry at:
-       HKLM\\SOFTWARE\\Microsoft\\Microsoft SQL Server\\Instance Names\\SQL
-    2. Falls back to querying the Windows Service Control Manager for MSSQL$* services.
     """
     instances = []
     try:
@@ -1619,7 +1747,7 @@ def detect_sql_server_instances():
         
     if not instances:
         try:
-            res = subprocess.run('sc query state= all | findstr /i "MSSQL$"', shell=True, capture_output=True, text=True)
+            res = subprocess.run(["sc", "query", "state=", "all"], capture_output=True, text=True)
             for line in res.stdout.splitlines():
                 if "SERVICE_NAME: MSSQL$" in line:
                     inst = line.split("MSSQL$")[-1].strip()
@@ -1655,3 +1783,644 @@ def detect_user_databases(sql_server, sql_user="", sql_password=""):
                 lines.append(line_str)
         return lines
     return []
+
+
+# =============================================================================
+# 9. SERVER CLEAN UP — STORAGE MONITORING, SHEET LOGGING & EMAIL ALERTS
+# =============================================================================
+# Scans all storage drives (local fixed, removable, and mapped network/shared),
+# logs the current available capacity to a dedicated "Storage Monitor" worksheet
+# tab in the linked Google Spreadsheet (horizontal layout: drives as columns,
+# daily scans as rows), and sends a High Importance Outlook email alert to
+# support@spillabs.com when any drive breaches its configured threshold.
+#
+# Dual-Threshold Alert Logic:
+#   C: Drive (System): Alert when FREE space falls BELOW a GB limit (default 30 GB)
+#   All Other Drives:  Alert when USAGE exceeds a percentage limit (default 90%)
+# =============================================================================
+
+import smtplib
+import ctypes
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
+
+# Windows drive type constants from kernel32.GetDriveTypeW
+_DRIVE_TYPE_NAMES = {
+    0: "Unknown",
+    1: "No Root",
+    2: "Removable",
+    3: "Fixed",
+    4: "Network",
+    5: "CD-ROM",
+    6: "RAM Disk"
+}
+
+
+def scan_storage_drives(include_network=True, log_cb=None):
+    """
+    Scans all mounted storage drives on the server (local fixed, removable,
+    and optionally mapped network/shared drives).
+
+    Uses built-in Python APIs (shutil.disk_usage + ctypes kernel32) with zero
+    external dependencies.
+
+    Returns a list of drive info dictionaries sorted by drive letter:
+    [
+        {
+            "drive_letter": "C:",
+            "label": "Windows",
+            "total_gb": 237.86,
+            "used_gb": 180.21,
+            "free_gb": 57.65,
+            "usage_percent": 75.8,
+            "drive_type": "Fixed",
+            "drive_type_id": 3
+        },
+        ...
+    ]
+    """
+    drives = []
+    emit_log("Scanning storage drives...", "info", log_cb)
+
+    try:
+        get_drive_type = ctypes.windll.kernel32.GetDriveTypeW
+    except Exception:
+        get_drive_type = None
+
+    for letter_code in range(65, 91):  # A-Z
+        drive_letter = chr(letter_code) + ":"
+        drive_root = drive_letter + "\\"
+
+        if not os.path.exists(drive_root):
+            continue
+
+        # Determine drive type via Windows API
+        drive_type_id = 0
+        if get_drive_type:
+            try:
+                drive_type_id = get_drive_type(drive_root)
+            except Exception:
+                pass
+
+        drive_type_name = _DRIVE_TYPE_NAMES.get(drive_type_id, "Unknown")
+
+        # Skip CD-ROM, RAM Disk, and unknown/no-root drives
+        if drive_type_id in (0, 1, 5, 6):
+            continue
+
+        # Skip network drives if not requested
+        if drive_type_id == 4 and not include_network:
+            continue
+
+        # Get disk usage via shutil (built-in, no dependency)
+        try:
+            usage = shutil.disk_usage(drive_root)
+            total_gb = round(usage.total / (1024 ** 3), 2)
+            used_gb = round(usage.used / (1024 ** 3), 2)
+            free_gb = round(usage.free / (1024 ** 3), 2)
+            usage_pct = round((usage.used / usage.total) * 100, 1) if usage.total > 0 else 0.0
+        except (PermissionError, OSError) as e:
+            emit_log(f"  Skipping {drive_letter} (access denied or unavailable): {e}", "warning", log_cb)
+            continue
+
+        # Get volume label via Windows API
+        label = ""
+        try:
+            vol_name_buf = ctypes.create_unicode_buffer(261)
+            ctypes.windll.kernel32.GetVolumeInformationW(
+                drive_root, vol_name_buf, 261, None, None, None, None, 0
+            )
+            label = vol_name_buf.value or ""
+        except Exception:
+            pass
+
+        drive_info = {
+            "drive_letter": drive_letter,
+            "label": label,
+            "total_gb": total_gb,
+            "used_gb": used_gb,
+            "free_gb": free_gb,
+            "usage_percent": usage_pct,
+            "drive_type": drive_type_name,
+            "drive_type_id": drive_type_id
+        }
+        drives.append(drive_info)
+        emit_log(f"  {drive_letter} [{label or drive_type_name}] — Total: {total_gb:.2f} GB, Free: {free_gb:.2f} GB ({usage_pct}% used)", "info", log_cb)
+
+    # Also detect UNC-mapped network shares from 'net use'
+    if include_network:
+        try:
+            res = subprocess.run(["net", "use"], capture_output=True, text=True, timeout=10)
+            for line in res.stdout.splitlines():
+                parts = line.split()
+                if len(parts) >= 3 and ":" in parts[1] and "\\\\" in line:
+                    mapped_letter = parts[1].strip()
+                    mapped_root = mapped_letter + "\\"
+                    # Skip if already scanned
+                    if any(d["drive_letter"] == mapped_letter for d in drives):
+                        continue
+                    if os.path.exists(mapped_root):
+                        try:
+                            usage = shutil.disk_usage(mapped_root)
+                            total_gb = round(usage.total / (1024 ** 3), 2)
+                            free_gb = round(usage.free / (1024 ** 3), 2)
+                            used_gb = round(usage.used / (1024 ** 3), 2)
+                            usage_pct = round((usage.used / usage.total) * 100, 1) if usage.total > 0 else 0.0
+                            unc_path = ""
+                            for p in parts[2:]:
+                                if "\\\\" in p:
+                                    unc_path = p
+                                    break
+                            drives.append({
+                                "drive_letter": mapped_letter,
+                                "label": unc_path or "Network Share",
+                                "total_gb": total_gb,
+                                "used_gb": used_gb,
+                                "free_gb": free_gb,
+                                "usage_percent": usage_pct,
+                                "drive_type": "Network",
+                                "drive_type_id": 4
+                            })
+                            emit_log(f"  {mapped_letter} [Network: {unc_path}] — Total: {total_gb:.2f} GB, Free: {free_gb:.2f} GB ({usage_pct}% used)", "info", log_cb)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+    emit_log(f"Storage scan complete: {len(drives)} drive(s) detected.", "info", log_cb)
+    return drives
+
+
+def evaluate_drive_alerts(drives, c_drive_alert_gb=30, other_drives_alert_pct=90):
+    """
+    Evaluates which drives have breached their alert thresholds.
+
+    Dual-threshold logic:
+    - C: Drive: Alert if free_gb <= c_drive_alert_gb
+    - All other drives: Alert if usage_percent >= other_drives_alert_pct
+
+    Returns a list of critical drive dicts with an added 'alert_reason' field.
+    """
+    critical = []
+    for d in drives:
+        letter = d["drive_letter"].upper()
+        if letter == "C:":
+            if d["free_gb"] <= c_drive_alert_gb:
+                d_copy = dict(d)
+                d_copy["alert_reason"] = f"Below {c_drive_alert_gb} GB free limit ({d['free_gb']:.2f} GB remaining)"
+                critical.append(d_copy)
+        else:
+            if d["usage_percent"] >= other_drives_alert_pct:
+                d_copy = dict(d)
+                d_copy["alert_reason"] = f"{d['usage_percent']}% full (threshold: {other_drives_alert_pct}%)"
+                critical.append(d_copy)
+    return critical
+
+
+def update_storage_sheet(creds, sheet_id, drives, tab_name="Storage Monitor", log_cb=None):
+    """
+    Logs the drive scan results to a dedicated worksheet tab in the linked
+    Google Spreadsheet using a HORIZONTAL layout:
+
+    Row 1 (Header):     Date & Time | Drive C (237.86 GB) | Drive D (500 GB) | ...
+    Row 2 (Sub-header): <empty>     | currently available storage capacity | ...
+    Row 3+ (Data):      2026-09-29  | 57.65 GB            | 120.00 GB        | ...
+
+    Drives are columns, daily scans are rows. The header includes total capacity.
+    Each data cell contains the currently available (free) storage at scan time.
+
+    Dynamically adds new columns if a new drive appears on subsequent scans.
+    """
+    if not drives:
+        emit_log("No drives to log to Google Sheet.", "warning", log_cb)
+        return False
+
+    emit_log(f"Logging storage scan to Google Sheet (tab: '{tab_name}')...", "info", log_cb)
+
+    try:
+        client = gspread.authorize(creds)
+        spreadsheet = client.open_by_key(sheet_id)
+
+        # Get or create the Storage Monitor worksheet tab
+        worksheet = None
+        for ws in spreadsheet.worksheets():
+            if ws.title.lower() == tab_name.lower():
+                worksheet = ws
+                break
+
+        server_name = socket.gethostname()
+
+        if worksheet is None:
+            # First-time setup: create the tab with header and sub-header
+            worksheet = spreadsheet.add_worksheet(title=tab_name, rows=100, cols=len(drives) + 2)
+            emit_log(f"Created new worksheet tab: '{tab_name}'", "info", log_cb)
+
+            # Build header row: Date & Time | Server | Drive C (237.86 GB) | Drive D (500 GB) | ...
+            header_row = ["Date & Time", "Server"]
+            for d in drives:
+                label_part = f" - {d['label']}" if d['label'] else ""
+                if d["drive_type_id"] == 4:
+                    col_name = f"shared/mapped {d['drive_letter']}{label_part} ({d['total_gb']:.2f} GB)"
+                else:
+                    col_name = f"Drive {d['drive_letter'][0]}{label_part} ({d['total_gb']:.2f} GB)"
+                header_row.append(col_name)
+
+            # Build sub-header row
+            sub_header_row = ["", ""]
+            for _ in drives:
+                sub_header_row.append("currently available storage capacity")
+
+            worksheet.insert_row(header_row, index=1)
+            worksheet.insert_row(sub_header_row, index=2)
+
+            # Append the first data row
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            data_row = [timestamp, server_name]
+            for d in drives:
+                data_row.append(f"{d['free_gb']:.2f} GB")
+            worksheet.append_row(data_row)
+
+        else:
+            # Tab already exists: read existing headers to map columns correctly
+            existing_headers = worksheet.row_values(1)
+
+            # Build a mapping from drive letter to column index
+            drive_col_map = {}  # drive_letter -> column index (0-based)
+            for col_idx, header in enumerate(existing_headers):
+                if col_idx < 2:
+                    continue  # Skip "Date & Time" and "Server"
+                # Extract drive letter from header like "Drive C - Windows (237.86 GB)"
+                header_upper = header.upper()
+                for d in drives:
+                    letter_char = d["drive_letter"][0].upper()
+                    if f"DRIVE {letter_char}" in header_upper or f"SHARED/MAPPED {d['drive_letter'].upper()}" in header_upper:
+                        drive_col_map[d["drive_letter"]] = col_idx
+                        break
+
+            # Check for new drives that need new columns
+            new_drives = [d for d in drives if d["drive_letter"] not in drive_col_map]
+            if new_drives:
+                sub_header_row = worksheet.row_values(2) if len(worksheet.get_all_values()) >= 2 else []
+                for new_d in new_drives:
+                    label_part = f" - {new_d['label']}" if new_d['label'] else ""
+                    if new_d["drive_type_id"] == 4:
+                        col_name = f"shared/mapped {new_d['drive_letter']}{label_part} ({new_d['total_gb']:.2f} GB)"
+                    else:
+                        col_name = f"Drive {new_d['drive_letter'][0]}{label_part} ({new_d['total_gb']:.2f} GB)"
+                    existing_headers.append(col_name)
+                    col_idx = len(existing_headers) - 1
+                    drive_col_map[new_d["drive_letter"]] = col_idx
+
+                # Update header and sub-header rows with new columns
+                worksheet.update(range_name='1:1', values=[existing_headers])
+                full_sub = ["", ""] + ["currently available storage capacity"] * (len(existing_headers) - 2)
+                worksheet.update(range_name='2:2', values=[full_sub])
+                emit_log(f"Added {len(new_drives)} new drive column(s) to storage sheet.", "info", log_cb)
+
+            # Append the data row with values in correct column positions
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            data_row = [""] * len(existing_headers)
+            data_row[0] = timestamp
+            data_row[1] = server_name
+            for d in drives:
+                if d["drive_letter"] in drive_col_map:
+                    data_row[drive_col_map[d["drive_letter"]]] = f"{d['free_gb']:.2f} GB"
+            worksheet.append_row(data_row)
+
+        emit_log(f"Storage scan logged to Google Sheet successfully.", "info", log_cb)
+        return True
+
+    except Exception as e:
+        emit_log(f"Google Sheets storage logging error: {e}", "error", log_cb)
+        return False
+
+
+def save_smtp_password(password):
+    """Encrypts SMTP password via Windows DPAPI (machine scope) and saves to storage_smtp_pass.dat."""
+    path = os.path.join(BASE_DIR, "storage_smtp_pass.dat")
+    data = password.encode('utf-8')
+    try:
+        import win32crypt
+        data = win32crypt.CryptProtectData(data, "BackupSMTPPassword", None, None, None, 0x4)
+    except Exception:
+        pass
+    with open(path, "wb") as f:
+        f.write(data)
+
+
+def load_smtp_password():
+    """Decrypts SMTP password from storage_smtp_pass.dat using Windows DPAPI."""
+    path = os.path.join(BASE_DIR, "storage_smtp_pass.dat")
+    if not os.path.exists(path):
+        return ""
+    with open(path, "rb") as f:
+        data = f.read()
+    try:
+        import win32crypt
+        return win32crypt.CryptUnprotectData(data, None, None, None, 0)[1].decode('utf-8').strip()
+    except Exception:
+        pass
+    return data.decode('utf-8').strip()
+
+
+def send_storage_alert_email(critical_drives, config, log_cb=None):
+    """
+    Sends a HIGH IMPORTANCE HTML email via Outlook SMTP when one or more
+    drives breach their storage alert thresholds.
+    SMTP password is read from DPAPI-protected storage_smtp_pass.dat if not in config.json.
+    """
+    if not critical_drives:
+        return False
+
+    smtp_server = config.get("STORAGE_ALERT_SMTP_SERVER", "smtp-mail.outlook.com")
+    smtp_port = config.get("STORAGE_ALERT_SMTP_PORT", 587)
+    sender_email = config.get("STORAGE_ALERT_SENDER_EMAIL", "")
+    sender_password = config.get("STORAGE_ALERT_SENDER_PASSWORD", "") or load_smtp_password()
+    recipient = config.get("STORAGE_ALERT_EMAIL_RECIPIENT", "support@spillabs.com")
+
+    if not sender_email or not sender_password:
+        emit_log("Storage alert email skipped: Sender email or password not configured.", "warning", log_cb)
+        return False
+
+    server_name = socket.gethostname()
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    drive_count = len(critical_drives)
+
+    subject = f"⚠️ CRITICAL: Storage Alert — {server_name} — {drive_count} Drive{'s' if drive_count > 1 else ''} Almost Full"
+
+    # Build HTML email body with professional table
+    drive_rows_html = ""
+    for d in critical_drives:
+        label_str = f" ({d['label']})" if d.get('label') else ""
+        drive_rows_html += f"""
+        <tr>
+            <td style="padding: 10px 15px; border: 1px solid #374151; font-weight: bold; color: #f87171;">
+                {d['drive_letter']}{label_str}
+            </td>
+            <td style="padding: 10px 15px; border: 1px solid #374151; text-align: center;">
+                {d['total_gb']:.2f} GB
+            </td>
+            <td style="padding: 10px 15px; border: 1px solid #374151; text-align: center; color: #f87171; font-weight: bold;">
+                {d['free_gb']:.2f} GB
+            </td>
+            <td style="padding: 10px 15px; border: 1px solid #374151; text-align: center;">
+                {d['usage_percent']}%
+            </td>
+            <td style="padding: 10px 15px; border: 1px solid #374151; color: #fbbf24;">
+                {d.get('alert_reason', 'Threshold breached')}
+            </td>
+        </tr>"""
+
+    html_body = f"""
+    <html>
+    <body style="font-family: 'Segoe UI', Arial, sans-serif; background-color: #111827; color: #e5e7eb; margin: 0; padding: 20px;">
+        <div style="max-width: 750px; margin: 0 auto; background-color: #1f2937; border-radius: 12px; padding: 30px; border: 1px solid #374151;">
+
+            <div style="text-align: center; margin-bottom: 25px;">
+                <h1 style="color: #f87171; margin: 0; font-size: 24px;">⚠️ Server Storage Alert</h1>
+                <p style="color: #9ca3af; margin-top: 8px; font-size: 14px;">Automated Storage Monitoring System</p>
+            </div>
+
+            <table style="width: 100%; margin-bottom: 20px; font-size: 14px;">
+                <tr>
+                    <td style="padding: 5px 0; color: #9ca3af;">Server Name:</td>
+                    <td style="padding: 5px 0; color: #ffffff; font-weight: bold;">{server_name}</td>
+                </tr>
+                <tr>
+                    <td style="padding: 5px 0; color: #9ca3af;">Scan Time:</td>
+                    <td style="padding: 5px 0; color: #ffffff;">{timestamp}</td>
+                </tr>
+                <tr>
+                    <td style="padding: 5px 0; color: #9ca3af;">Critical Drives:</td>
+                    <td style="padding: 5px 0; color: #f87171; font-weight: bold;">{drive_count}</td>
+                </tr>
+            </table>
+
+            <p style="color: #fbbf24; font-size: 14px; margin-bottom: 15px;">
+                The following drive(s) have critically low available storage:
+            </p>
+
+            <table style="width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 25px;">
+                <thead>
+                    <tr style="background-color: #374151;">
+                        <th style="padding: 10px 15px; border: 1px solid #4b5563; text-align: left; color: #d1d5db;">Drive</th>
+                        <th style="padding: 10px 15px; border: 1px solid #4b5563; text-align: center; color: #d1d5db;">Total Capacity</th>
+                        <th style="padding: 10px 15px; border: 1px solid #4b5563; text-align: center; color: #d1d5db;">Free Space</th>
+                        <th style="padding: 10px 15px; border: 1px solid #4b5563; text-align: center; color: #d1d5db;">Used %</th>
+                        <th style="padding: 10px 15px; border: 1px solid #4b5563; text-align: left; color: #d1d5db;">Alert Reason</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {drive_rows_html}
+                </tbody>
+            </table>
+
+            <div style="background-color: #7f1d1d; border-radius: 8px; padding: 15px; margin-bottom: 20px;">
+                <p style="margin: 0; color: #fca5a5; font-size: 14px;">
+                    ⚡ <strong>Action Required:</strong> Please take immediate action to free disk space
+                    or expand storage on this server to prevent service disruption.
+                </p>
+            </div>
+
+            <hr style="border: 0; border-top: 1px solid #374151; margin: 20px 0;">
+            <p style="color: #6b7280; font-size: 11px; text-align: center;">
+                This is an automated alert from the Enterprise Database Cloud Backup Automation System.<br>
+                Server: {server_name} | Generated: {timestamp}
+            </p>
+        </div>
+    </body>
+    </html>"""
+
+    # Plain text fallback for non-HTML email clients
+    plain_lines = [
+        f"⚠️ SERVER STORAGE ALERT",
+        f"Server: {server_name}",
+        f"Scan Time: {timestamp}",
+        "",
+        "The following drives have critically low storage:",
+        ""
+    ]
+    for d in critical_drives:
+        plain_lines.append(f"  {d['drive_letter']} — Total: {d['total_gb']:.2f} GB, Free: {d['free_gb']:.2f} GB, Used: {d['usage_percent']}%")
+        plain_lines.append(f"    Reason: {d.get('alert_reason', 'Threshold breached')}")
+        plain_lines.append("")
+    plain_lines.append("Please take immediate action to free disk space or expand storage.")
+    plain_text = "\n".join(plain_lines)
+
+    # Compose MIME message
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = sender_email
+    msg["To"] = recipient
+    # HIGH IMPORTANCE headers — ensures top placement in Outlook sorted by Importance
+    msg["X-Priority"] = "1"
+    msg["X-MSMail-Priority"] = "High"
+    msg["Importance"] = "High"
+
+    msg.attach(MIMEText(plain_text, "plain"))
+    msg.attach(MIMEText(html_body, "html"))
+
+    emit_log(f"Sending storage alert email to {recipient} ({drive_count} critical drive(s))...", "info", log_cb)
+
+    try:
+        with smtplib.SMTP(smtp_server, smtp_port, timeout=30) as server:
+            server.starttls()
+            server.login(sender_email, sender_password)
+            server.send_message(msg)
+        emit_log(f"Storage alert email sent successfully to {recipient}.", "info", log_cb)
+        return True
+    except smtplib.SMTPAuthenticationError as e:
+        emit_log(f"SMTP authentication failed: {e}. Check sender email/password or enable App Password.", "error", log_cb)
+        return False
+    except Exception as e:
+        emit_log(f"Failed to send storage alert email: {e}", "error", log_cb)
+        return False
+
+
+def send_test_storage_email(config, log_cb=None):
+    """
+    Sends a test email to verify SMTP connectivity and credentials.
+    Uses the same High Importance headers as real alerts.
+    """
+    smtp_server = config.get("STORAGE_ALERT_SMTP_SERVER", "smtp-mail.outlook.com")
+    smtp_port = config.get("STORAGE_ALERT_SMTP_PORT", 587)
+    sender_email = config.get("STORAGE_ALERT_SENDER_EMAIL", "")
+    sender_password = config.get("STORAGE_ALERT_SENDER_PASSWORD", "")
+    recipient = config.get("STORAGE_ALERT_EMAIL_RECIPIENT", "support@spillabs.com")
+
+    if not sender_email or not sender_password:
+        emit_log("Test email failed: Sender email or password not configured.", "error", log_cb)
+        return False, "Sender email or password not configured."
+
+    server_name = socket.gethostname()
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    msg = MIMEMultipart()
+    msg["Subject"] = f"✅ Storage Monitor Test — {server_name} — Email Configuration Verified"
+    msg["From"] = sender_email
+    msg["To"] = recipient
+    msg["X-Priority"] = "1"
+    msg["X-MSMail-Priority"] = "High"
+    msg["Importance"] = "High"
+
+    body = (
+        f"This is a test email from the Enterprise Database Cloud Backup Automation System.\n\n"
+        f"Server: {server_name}\n"
+        f"Time: {timestamp}\n\n"
+        f"Storage alert emails are now correctly configured.\n"
+        f"Alerts will be sent to: {recipient}\n"
+    )
+    msg.attach(MIMEText(body, "plain"))
+
+    try:
+        with smtplib.SMTP(smtp_server, smtp_port, timeout=30) as server:
+            server.starttls()
+            server.login(sender_email, sender_password)
+            server.send_message(msg)
+        emit_log(f"Test email sent successfully to {recipient}.", "info", log_cb)
+        return True, f"Test email sent to {recipient}."
+    except smtplib.SMTPAuthenticationError as e:
+        err = f"SMTP authentication failed: {e}"
+        emit_log(err, "error", log_cb)
+        return False, err
+    except Exception as e:
+        err = f"Failed to send test email: {e}"
+        emit_log(err, "error", log_cb)
+        return False, err
+
+
+def run_storage_monitor(config=None, log_cb=None, status_cb=None):
+    """
+    Master orchestrator for the Server Clean Up storage monitoring workflow.
+
+    Workflow:
+    1. Scan all storage drives (local + network/shared).
+    2. Log results to the 'Storage Monitor' tab in the linked Google Sheet.
+    3. Evaluate drives against dual-threshold alert rules.
+    4. If any drive is critical → send High Importance email alert.
+
+    Returns: (success, summary_message, drives_list, critical_list)
+    """
+    if not config:
+        config = load_config()
+
+    if not config.get("STORAGE_MONITOR_ENABLED", True):
+        msg = "Storage monitoring is disabled in configuration."
+        emit_log(msg, "info", log_cb)
+        return True, msg, [], []
+
+    emit_log("=" * 60, "info", log_cb)
+    emit_log("STARTING SERVER STORAGE MONITORING SCAN", "info", log_cb)
+    emit_log("=" * 60, "info", log_cb)
+
+    if status_cb:
+        status_cb("Scanning storage drives...")
+
+    # Step 1: Scan all drives
+    include_network = config.get("STORAGE_INCLUDE_NETWORK_DRIVES", True)
+    drives = scan_storage_drives(include_network=include_network, log_cb=log_cb)
+
+    if not drives:
+        msg = "No accessible storage drives found."
+        emit_log(msg, "warning", log_cb)
+        if status_cb:
+            status_cb("No drives detected")
+        return True, msg, [], []
+
+    # Step 2: Log to Google Sheet via Telemetry Broker (No client-side Google OAuth)
+    if status_cb:
+        status_cb("Logging storage data to Google Sheet via Telemetry Broker...")
+
+    telemetry_broker_url = config.get("TELEMETRY_BROKER_URL", config.get("BROKER_URL", ""))
+    token_filename = config.get("BROKER_TOKEN_FILE", "broker_token.dat")
+    token_path = os.path.join(BASE_DIR, token_filename)
+
+    sheet_logged = False
+    if telemetry_broker_url and os.path.exists(token_path):
+        try:
+            from broker_client import load_token, report_storage_telemetry
+            token = load_token(token_path)
+            sheet_logged, msg = report_storage_telemetry(telemetry_broker_url, token, drives)
+            emit_log(f"Telemetry Broker: {msg}", "info" if sheet_logged else "warning", log_cb)
+        except Exception as tel_err:
+            emit_log(f"Notice: Storage telemetry reporting skipped: {tel_err}", "warning", log_cb)
+    else:
+        emit_log("Skipping Google Sheets logging: Telemetry Broker URL or token missing.", "warning", log_cb)
+
+    # Step 3: Evaluate alert thresholds
+    c_drive_gb = config.get("STORAGE_C_DRIVE_ALERT_GB", 30)
+    other_pct = config.get("STORAGE_OTHER_DRIVES_ALERT_PERCENT", 90)
+    critical = evaluate_drive_alerts(drives, c_drive_alert_gb=c_drive_gb, other_drives_alert_pct=other_pct)
+
+    # Step 4: Send email alert if any drive is critical
+    email_sent = False
+    if critical:
+        if status_cb:
+            status_cb(f"⚠️ {len(critical)} drive(s) critical! Sending alert email...")
+        emit_log(f"ALERT: {len(critical)} drive(s) exceeded storage threshold!", "warning", log_cb)
+        for cd in critical:
+            emit_log(f"  🔴 {cd['drive_letter']} — {cd['alert_reason']}", "warning", log_cb)
+        email_sent = send_storage_alert_email(critical, config, log_cb=log_cb)
+    else:
+        emit_log("All drives within safe storage limits. No email alert needed.", "info", log_cb)
+
+    # Build summary
+    summary_parts = [
+        f"Storage scan complete: {len(drives)} drive(s) scanned",
+        f"Sheet logged: {'Yes' if sheet_logged else 'No'}",
+        f"Critical drives: {len(critical)}",
+        f"Alert sent: {'Yes' if email_sent else 'No'}"
+    ]
+    summary = " | ".join(summary_parts)
+    emit_log(summary, "info", log_cb)
+    emit_log("=" * 60, "info", log_cb)
+
+    if status_cb:
+        if critical:
+            status_cb(f"⚠️ {len(critical)} drive(s) critical — Alert sent" if email_sent else f"⚠️ {len(critical)} drive(s) critical")
+        else:
+            status_cb("✅ All drives healthy")
+
+    return (len(critical) == 0), summary, drives, critical
+

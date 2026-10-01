@@ -1,24 +1,39 @@
-# Google API Credentials (CRITICAL TO KEEP SECRET)
+﻿# Google API Credentials (CRITICAL TO KEEP SECRET)
 client_secret.json
 token.json
 client_secret_*.json
 credentials.json
 
+# Machine-Specific Tokens & Passwords
+raw_token.txt
+token.dpapi
+broker_token.dat
+storage_smtp_pass.dat
+*_private.pem
+*.key
+*.pem.key
+
 # Logs
 backup_log.txt
+*.log
 
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
+*.class
+venv/
+.env
 
-# Testing
+# Testing & Scratch
 TestBackups/
+scratch/
+
+# Staging & Backup Files
+*.bak
+*.dbk2
+*.tmp
 
 # PyInstaller builds & distribution
 build/
 dist/
 *.spec
-
-# Scratch & Temporary Testing
-scratch/
