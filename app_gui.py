@@ -1,3 +1,4 @@
+APP_VERSION = "v4.1.0"
 """
 Enterprise Database Cloud Backup Automation - Desktop Graphical Interface
 =============================================================================
@@ -137,7 +138,7 @@ class BackupAutomationApp(ctk.CTk):
 
         self.subtitle_label = ctk.CTkLabel(
             header_title_frame,
-            text="Automated SQL Server Backup with Zero-Trust Cloud Storage & Monitoring",
+            text="Zero-Trust Database Cloud Backup & Multi-Module Monitoring",
             font=ctk.CTkFont(size=12),
             text_color="#9ca3af"
         )
@@ -201,7 +202,7 @@ class BackupAutomationApp(ctk.CTk):
 
         self.footer_version_label = ctk.CTkLabel(
             self.footer_frame,
-            text="v4.0.0",
+            text=APP_VERSION,
             font=ctk.CTkFont(size=11, weight="bold"),
             text_color="#9ca3af"
         )
@@ -716,8 +717,19 @@ class BackupAutomationApp(ctk.CTk):
         ).pack(side="left")
 
         self._create_field_label(sec_box, "Upload Broker URL (Cloud Run Endpoint):", pack_padx=15)
-        self.entry_broker_url = ctk.CTkEntry(sec_box, width=470, placeholder_text="https://backup-broker-xxxx.run.app")
-        self.entry_broker_url.pack(anchor="w", padx=15, pady=(0, 10))
+        broker_row = ctk.CTkFrame(sec_box, fg_color="transparent")
+        broker_row.pack(fill="x", padx=15, pady=(0, 10))
+        self.entry_broker_url = ctk.CTkEntry(broker_row, width=370, placeholder_text="https://backup-broker-xxxx.run.app")
+        self.entry_broker_url.pack(side="left", padx=(0, 10))
+        self.btn_unlock_broker = ctk.CTkButton(
+            broker_row,
+            text="🔒 Locked",
+            width=100,
+            fg_color="#374151",
+            hover_color="#4b5563",
+            command=self._toggle_unlock_broker
+        )
+        self.btn_unlock_broker.pack(side="left")
 
         # Status Badges for Token & Encryption Key
         status_row = ctk.CTkFrame(sec_box, fg_color="transparent")
@@ -992,7 +1004,7 @@ class BackupAutomationApp(ctk.CTk):
         self.entry_backup_folder.insert(0, c.get("BACKUP_FOLDER", "C:\\temp\\backups"))
 
         self.entry_broker_url.delete(0, "end")
-        self.entry_broker_url.insert(0, c.get("BROKER_URL", ""))
+        self.entry_broker_url.delete(0, "end"); self.entry_broker_url.insert(0, c.get("BROKER_URL", "")); self.entry_broker_url.configure(state="disabled") if c.get("BROKER_URL") else None
 
         if hasattr(self, "entry_google_drive"):
             self.entry_google_drive.delete(0, "end")
