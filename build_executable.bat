@@ -42,7 +42,7 @@ if defined ISCC_PATH (
         echo       [SUCCESS] Clean Inno Setup Installer compiled to dist\Setup_DatabaseBackup.exe
     )
 ) else (
-    echo       [NOTICE] Inno Setup (ISCC.exe) not found. PyInstaller onedir outputs placed in dist\
+    echo       [NOTICE] Inno Setup [ISCC.exe] not found. PyInstaller onedir outputs placed in dist\
 )
 
 echo [5/5] Executing Build Secret Guard Audit (Zero-Trust Secret Scanner)...
