@@ -676,7 +676,7 @@ class BackupAutomationApp(ctk.CTk):
         drive_row.pack(fill="x", padx=15, pady=(0, 10))
         self.entry_google_drive = ctk.CTkEntry(drive_row, width=420, placeholder_text="Folder ID or https://drive.google.com/drive/folders/...")
         self.entry_google_drive.pack(side="left", padx=(0, 10))
-        ctk.CTkButton(drive_row, text="Open Folder ↗", width=110, fg_color="#374151", hover_color="#4b5563", command=self._open_google_drive).pack(side="left")
+        ctk.CTkButton(drive_row, text="Open Folder ↗", width=110, fg_color="#059669", hover_color="#047857", command=self._open_drive_folder).pack(side="left")
 
         # Master Google Sheet ID / Link
         self._create_field_label(cloud_box, "Customer Master Google Sheet ID or Link:", pack_padx=15)
@@ -684,7 +684,7 @@ class BackupAutomationApp(ctk.CTk):
         sheet_row.pack(fill="x", padx=15, pady=(0, 10))
         self.entry_google_sheet = ctk.CTkEntry(sheet_row, width=420, placeholder_text="Spreadsheet ID or https://docs.google.com/spreadsheets/d/...")
         self.entry_google_sheet.pack(side="left", padx=(0, 10))
-        ctk.CTkButton(sheet_row, text="Open Sheet ↗", width=110, fg_color="#374151", hover_color="#4b5563", command=self._open_google_sheet).pack(side="left")
+        ctk.CTkButton(sheet_row, text="Open Sheet ↗", width=110, fg_color="#2563eb", hover_color="#1d4ed8", command=self._open_master_sheet).pack(side="left")
 
         # 3 Modules Tabs Display Badges
         tabs_row = ctk.CTkFrame(cloud_box, fg_color="transparent")
@@ -759,71 +759,6 @@ class BackupAutomationApp(ctk.CTk):
         )
         self.lbl_key_status.pack(side="left")
 
-        # Customer Cloud Integration Section (Google Drive Folder & Master Sheet)
-        cloud_box = ctk.CTkFrame(scroll, corner_radius=10, fg_color=("#1f2937", "#111827"), border_width=1, border_color="#10b981")
-        cloud_box.pack(fill="x", padx=20, pady=(0, 15))
-
-        cloud_top = ctk.CTkFrame(cloud_box, fg_color="transparent")
-        cloud_top.pack(fill="x", padx=15, pady=(12, 6))
-
-        ctk.CTkLabel(
-            cloud_top,
-            text="CUSTOMER CLOUD INTEGRATION (GOOGLE DRIVE & SHEETS)",
-            font=ctk.CTkFont(size=11, weight="bold"),
-            text_color="#34d399"
-        ).pack(side="left")
-
-        ctk.CTkLabel(
-            cloud_box,
-            text="Dedicated customer cloud storage and master tracking sheet across all 3 modules.",
-            font=ctk.CTkFont(size=11),
-            text_color="#9ca3af"
-        ).pack(anchor="w", padx=15, pady=(0, 10))
-
-        # Drive Row
-        self._create_field_label(cloud_box, "Customer Google Drive Folder ID / Link:", pack_padx=15)
-        drive_row = ctk.CTkFrame(cloud_box, fg_color="transparent")
-        drive_row.pack(fill="x", padx=15, pady=(0, 10))
-        self.entry_google_drive = ctk.CTkEntry(drive_row, width=370, placeholder_text="e.g. 1LKuo7j4cHvvP0-p0C6PVo6gdkgoVBaQ4 or https://drive.google.com/...")
-        self.entry_google_drive.pack(side="left", padx=(0, 10))
-        ctk.CTkButton(
-            drive_row,
-            text="Open Folder ↗",
-            width=110,
-            fg_color="#059669",
-            hover_color="#047857",
-            command=self._open_drive_folder
-        ).pack(side="left")
-
-        # Sheet Row
-        self._create_field_label(cloud_box, "Customer Master Google Sheet ID / Link:", pack_padx=15)
-        sheet_row = ctk.CTkFrame(cloud_box, fg_color="transparent")
-        sheet_row.pack(fill="x", padx=15, pady=(0, 10))
-        self.entry_google_sheet = ctk.CTkEntry(sheet_row, width=370, placeholder_text="e.g. 1FAnmfTAixeDgwA5f3TvJ9IEtFp1OuFTyw3UpDiOdvwg or https://docs.google.com/...")
-        self.entry_google_sheet.pack(side="left", padx=(0, 10))
-        ctk.CTkButton(
-            sheet_row,
-            text="Open Sheet ↗",
-            width=110,
-            fg_color="#2563eb",
-            hover_color="#1d4ed8",
-            command=self._open_master_sheet
-        ).pack(side="left")
-
-        # Module Badges
-        mod_row = ctk.CTkFrame(cloud_box, fg_color="transparent")
-        mod_row.pack(fill="x", padx=15, pady=(0, 12))
-        for m_name in ["Backup Automation", "Server Cleanup", "Performance Query"]:
-            ctk.CTkLabel(
-                mod_row,
-                text=f"✓ Tab: {m_name}",
-                font=ctk.CTkFont(size=10, weight="bold"),
-                text_color="#6ee7b7",
-                fg_color="#064e3b",
-                corner_radius=6,
-                padx=8,
-                pady=2
-            ).pack(side="left", padx=(0, 8))
 
         # Storage Management / Zero-Footprint Toggle
         self.chk_delete_local = ctk.CTkCheckBox(
@@ -1140,21 +1075,42 @@ class BackupAutomationApp(ctk.CTk):
 
     def _open_drive_folder(self):
         """Opens customer Google Drive folder in default web browser."""
-        val = self.entry_google_drive.get().strip()
+        val = self.entry_google_drive.get().strip() if hasattr(self, "entry_google_drive") else ""
         url = build_google_drive_url(val)
         if url:
             webbrowser.open(url)
         else:
             messagebox.showwarning("Notice", "No Customer Google Drive Folder ID or Link configured.")
 
+    def _open_google_drive(self):
+        self._open_drive_folder()
+
     def _open_master_sheet(self):
         """Opens customer Master Google Sheet in default web browser."""
-        val = self.entry_google_sheet.get().strip()
+        val = self.entry_google_sheet.get().strip() if hasattr(self, "entry_google_sheet") else ""
         url = build_google_sheet_url(val)
         if url:
             webbrowser.open(url)
         else:
             messagebox.showwarning("Notice", "No Customer Master Google Sheet ID or Link configured.")
+
+    def _open_google_sheet(self):
+        self._open_master_sheet()
+
+    def _toggle_unlock_broker(self):
+        """Controls access to the Upload Broker URL to prevent accidental tampering."""
+        if self.entry_broker_url.cget("state") == "disabled":
+            if messagebox.askyesno(
+                "Unlock Upload Broker URL",
+                "The Upload Broker URL connects the application to your secure Cloud Run microservice.\n\n"
+                "Modifying this address may disrupt automated backups and cloud synchronization.\n\n"
+                "Are you sure you want to unlock and edit this endpoint?"
+            ):
+                self.entry_broker_url.configure(state="normal")
+                self.btn_unlock_broker.configure(text="🔓 Unlocked", fg_color="#059669")
+        else:
+            self.entry_broker_url.configure(state="disabled")
+            self.btn_unlock_broker.configure(text="🔒 Locked", fg_color="#374151")
 
     def _browse_backup_folder(self):
         """Displays Windows folder picker for local backup directory."""
