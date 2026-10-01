@@ -150,6 +150,15 @@ class InstallerApp(ctk.CTk):
         )
         self.btn_browse.pack(side="right")
 
+        # Customer Cloud Integration inputs (Optional during install)
+        ctk.CTkLabel(body, text="Customer Google Drive Folder ID / Link (Optional):", font=ctk.CTkFont(size=11, weight="bold")).pack(anchor="w", pady=(8, 2))
+        self.entry_google_drive = ctk.CTkEntry(body, placeholder_text="Optional: Folder ID or https://drive.google.com/...", height=30)
+        self.entry_google_drive.pack(fill="x", pady=(0, 6))
+
+        ctk.CTkLabel(body, text="Customer Master Google Sheet ID / Link (Optional):", font=ctk.CTkFont(size=11, weight="bold")).pack(anchor="w", pady=(2, 2))
+        self.entry_google_sheet = ctk.CTkEntry(body, placeholder_text="Optional: Sheet ID or https://docs.google.com/spreadsheets/...", height=30)
+        self.entry_google_sheet.pack(fill="x", pady=(0, 10))
+
         # Installation preference checkboxes
         self.cb_desktop = ctk.CTkCheckBox(body, text="Create Desktop Shortcut", font=ctk.CTkFont(size=12))
         self.cb_desktop.pack(anchor="w", pady=4)

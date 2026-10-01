@@ -2,11 +2,12 @@
 setlocal EnableDelayedExpansion
 title Database Cloud Backup - Clean Uninstaller
 
-:: 1. Identify Target Installation Directory
+REM 1. Identify Target Installation Directory
 set "TARGET_DIR=%~dp0"
 if "!TARGET_DIR:~-1!"=="\" set "TARGET_DIR=!TARGET_DIR:~0,-1!"
+set "DATA_DIR=%ALLUSERSPROFILE%\DatabaseBackupApp"
 
-:: 2. Interactive Confirmation (only if not silent)
+REM 2. Interactive Confirmation (only if not silent)
 if /i not "%~1"=="/silent" if /i not "%~1"=="/quiet" (
     cls
     echo ============================================================
@@ -29,6 +30,19 @@ if /i not "%~1"=="/silent" if /i not "%~1"=="/quiet" (
         echo Uninstallation cancelled by user.
         ping 127.0.0.1 -n 3 >nul
         exit /b 0
+    )
+    
+    REM Prompt to archive the single unified backup_log.txt
+    set "ARCHIVE_LOG=Y"
+    set /p ARCHIVE_LOG="Preserve single audit log [backup_log.txt] to your Desktop? (Y/N, default Y): "
+    if /i not "!ARCHIVE_LOG!"=="N" (
+        if exist "!DATA_DIR!\backup_log.txt" (
+            copy /y "!DATA_DIR!\backup_log.txt" "%USERPROFILE%\Desktop\backup_log_archive.txt" >nul 2>&1
+            echo       [OK] Audit log exported to %USERPROFILE%\Desktop\backup_log_archive.txt
+        ) else if exist "!TARGET_DIR!\backup_log.txt" (
+            copy /y "!TARGET_DIR!\backup_log.txt" "%USERPROFILE%\Desktop\backup_log_archive.txt" >nul 2>&1
+            echo       [OK] Audit log exported to %USERPROFILE%\Desktop\backup_log_archive.txt
+        )
     )
 )
 
@@ -56,11 +70,11 @@ reg delete "HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\DatabaseBac
 
 echo [5/5] Purging application directory...
 cd /d "%TEMP%"
-start "" /b powershell -NoProfile -WindowStyle Hidden -Command "Start-Sleep -Seconds 1; Remove-Item -LiteralPath '!TARGET_DIR!' -Recurse -Force -ErrorAction SilentlyContinue"
+start "" /b powershell -NoProfile -WindowStyle Hidden -Command "Start-Sleep -Seconds 1; Remove-Item -LiteralPath '!TARGET_DIR!' -Recurse -Force -ErrorAction SilentlyContinue; if (Test-Path '!DATA_DIR!') { Remove-Item -LiteralPath '!DATA_DIR!' -Recurse -Force -ErrorAction SilentlyContinue }"
 
 echo.
 echo ============================================================
-echo   UNINSTALLATION COMPLETE!
+echo   UNINSTALLATION COMPLETE
 echo ============================================================
 echo Database Cloud Backup was completely and cleanly removed.
 echo.

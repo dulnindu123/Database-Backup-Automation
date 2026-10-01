@@ -42,6 +42,10 @@ os.environ['OAUTHLIB_RELAX_TOKEN_SCOPE'] = '1'
 
 # Import headless, thread-safe core engine functions
 from backup_core import (
+    DEFAULT_SHEET_TABS,
+    extract_google_id,
+    build_google_drive_url,
+    build_google_sheet_url,
     BASE_DIR,
     LOG_FILE,
     load_config,
@@ -642,6 +646,61 @@ class BackupAutomationApp(ctk.CTk):
         self.entry_backup_folder.pack(side="left", padx=(0, 10))
         ctk.CTkButton(folder_row, text="Browse...", width=80, command=self._browse_backup_folder).pack(side="left")
 
+        # Customer Cloud Integration (Google Drive & Master Sheet)
+        cloud_box = ctk.CTkFrame(scroll, corner_radius=10, fg_color=("#1f2937", "#111827"), border_width=1, border_color="#374151")
+        cloud_box.pack(fill="x", padx=20, pady=(10, 15))
+
+        cloud_top = ctk.CTkFrame(cloud_box, fg_color="transparent")
+        cloud_top.pack(fill="x", padx=15, pady=(12, 6))
+
+        ctk.CTkLabel(
+            cloud_top,
+            text="CUSTOMER CLOUD INTEGRATION (GOOGLE DRIVE & SHEETS)",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#34d399"
+        ).pack(side="left")
+
+        ctk.CTkLabel(
+            cloud_box,
+            text="Each customer has a dedicated Google Drive folder and Master Google Sheet containing separate tabs for all 3 modules (Backup Automation, Server Cleanup, Performance Query). You can change them at any time.",
+            font=ctk.CTkFont(size=11),
+            text_color="#9ca3af",
+            wraplength=600,
+            justify="left"
+        ).pack(anchor="w", padx=15, pady=(0, 10))
+
+        # Google Drive Folder ID / Link
+        self._create_field_label(cloud_box, "Customer Google Drive Folder ID or Link:", pack_padx=15)
+        drive_row = ctk.CTkFrame(cloud_box, fg_color="transparent")
+        drive_row.pack(fill="x", padx=15, pady=(0, 10))
+        self.entry_google_drive = ctk.CTkEntry(drive_row, width=420, placeholder_text="Folder ID or https://drive.google.com/drive/folders/...")
+        self.entry_google_drive.pack(side="left", padx=(0, 10))
+        ctk.CTkButton(drive_row, text="Open Folder ↗", width=110, fg_color="#374151", hover_color="#4b5563", command=self._open_google_drive).pack(side="left")
+
+        # Master Google Sheet ID / Link
+        self._create_field_label(cloud_box, "Customer Master Google Sheet ID or Link:", pack_padx=15)
+        sheet_row = ctk.CTkFrame(cloud_box, fg_color="transparent")
+        sheet_row.pack(fill="x", padx=15, pady=(0, 10))
+        self.entry_google_sheet = ctk.CTkEntry(sheet_row, width=420, placeholder_text="Spreadsheet ID or https://docs.google.com/spreadsheets/d/...")
+        self.entry_google_sheet.pack(side="left", padx=(0, 10))
+        ctk.CTkButton(sheet_row, text="Open Sheet ↗", width=110, fg_color="#374151", hover_color="#4b5563", command=self._open_google_sheet).pack(side="left")
+
+        # 3 Modules Tabs Display Badges
+        tabs_row = ctk.CTkFrame(cloud_box, fg_color="transparent")
+        tabs_row.pack(fill="x", padx=15, pady=(0, 12))
+        for tag, title in DEFAULT_SHEET_TABS.items():
+            badge = ctk.CTkLabel(
+                tabs_row,
+                text=f"✓ Tab: {title}",
+                font=ctk.CTkFont(size=10, weight="bold"),
+                text_color="#6ee7b7",
+                fg_color="#064e3b",
+                corner_radius=6,
+                padx=8,
+                pady=3
+            )
+            badge.pack(side="left", padx=(0, 8))
+
         # Security Wall & Upload Broker Configuration
         sec_box = ctk.CTkFrame(scroll, corner_radius=10, fg_color=("#1f2937", "#111827"), border_width=1, border_color="#374151")
         sec_box.pack(fill="x", padx=20, pady=(10, 15))
@@ -839,8 +898,19 @@ class BackupAutomationApp(ctk.CTk):
         )
         self.log_textbox.pack(fill="both", expand=True, padx=10, pady=(0, 10))
 
+        # Pre-load recent log entries from the single unified backup_log.txt file
+        if os.path.exists(LOG_FILE):
+            try:
+                with open(LOG_FILE, "r", encoding="utf-8", errors="ignore") as f:
+                    recent_lines = f.readlines()
+                    for line in recent_lines[-250:]:
+                        self.log_textbox.insert("end", line)
+                    self.log_textbox.see("end")
+            except Exception:
+                pass
+
         # Initial startup message
-        self.append_log(f"System ready. Configuration loaded from {BASE_DIR}")
+        self.append_log(f"[SYSTEM] Ready. Single unified log file active: {LOG_FILE}")
 
     # =========================================================================
     # THREAD-SAFE LOGGING CALLBACK
@@ -883,8 +953,8 @@ class BackupAutomationApp(ctk.CTk):
         messagebox.showinfo("Storage Cleanup Complete", f"Successfully cleaned {cleaned} old files.\nFreed space: {freed_str}")
 
     def _open_log_file(self):
-        """Opens the active log file in default text editor / notepad."""
-        log_path = os.path.join(BASE_DIR, LOG_FILE)
+        """Opens the single unified log file in default text editor / notepad."""
+        log_path = LOG_FILE
         if not os.path.exists(log_path):
             with open(log_path, "w", encoding="utf-8") as f:
                 f.write(f"--- Log File Initialized {datetime.datetime.now()} ---\n")
@@ -923,6 +993,14 @@ class BackupAutomationApp(ctk.CTk):
 
         self.entry_broker_url.delete(0, "end")
         self.entry_broker_url.insert(0, c.get("BROKER_URL", ""))
+
+        if hasattr(self, "entry_google_drive"):
+            self.entry_google_drive.delete(0, "end")
+            self.entry_google_drive.insert(0, c.get("GOOGLE_DRIVE_FOLDER_ID", ""))
+
+        if hasattr(self, "entry_google_sheet"):
+            self.entry_google_sheet.delete(0, "end")
+            self.entry_google_sheet.insert(0, c.get("GOOGLE_SHEET_ID", ""))
 
         # Check Token and Key files
         token_filename = c.get("BROKER_TOKEN_FILE", "token.dpapi")
@@ -1018,8 +1096,12 @@ class BackupAutomationApp(ctk.CTk):
             "SCHEDULE_TIME": time_val,
             "DELETE_LOCAL_AFTER_UPLOAD": bool(self.chk_delete_local.get())
         })
-        new_config.pop("GOOGLE_DRIVE_FOLDER_ID", None)
-        new_config.pop("GOOGLE_SHEET_ID", None)
+        # Preserve customer Google Drive & Sheet IDs for multi-module integration
+        drive_val = self.entry_google_drive.get().strip() if hasattr(self, "entry_google_drive") else ""
+        sheet_val = self.entry_google_sheet.get().strip() if hasattr(self, "entry_google_sheet") else ""
+        new_config["GOOGLE_DRIVE_FOLDER_ID"] = extract_google_id(drive_val) if drive_val else ""
+        new_config["GOOGLE_SHEET_ID"] = extract_google_id(sheet_val) if sheet_val else ""
+        new_config["SHEET_TABS"] = DEFAULT_SHEET_TABS
 
         ok, msg = save_config(new_config)
         if ok:

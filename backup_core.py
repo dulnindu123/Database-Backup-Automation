@@ -256,6 +256,123 @@ TOKEN_FILE = os.path.join(DATA_DIR, "token.dpapi")
 if not os.path.exists(TOKEN_FILE) and os.path.exists(os.path.join(BASE_DIR, "token.dpapi")):
     TOKEN_FILE = os.path.join(BASE_DIR, "token.dpapi")
 
+# Default Worksheet Tabs for Customer Master Google Sheet (3 Modules)
+DEFAULT_SHEET_TABS = {
+    "BACKUP": "Backup Automation",
+    "CLEANUP": "Server Cleanup",
+    "PERF_QUERY": "Performance Query"
+}
+
+
+def extract_google_id(url_or_id):
+    """
+    Extracts a clean Google Drive folder ID or Google Spreadsheet ID from either
+    a full Google URL or a raw alphanumeric ID string.
+    """
+    if not url_or_id:
+        return ""
+    s = str(url_or_id).strip()
+    m = re.search(r'/spreadsheets/d/([a-zA-Z0-9_-]+)', s)
+    if m:
+        return m.group(1)
+    m = re.search(r'/folders/([a-zA-Z0-9_-]+)', s)
+    if m:
+        return m.group(1)
+    m = re.search(r'[?&]id=([a-zA-Z0-9_-]+)', s)
+    if m:
+        return m.group(1)
+    if re.match(r'^[a-zA-Z0-9_-]{15,}$', s):
+        return s
+    return s
+
+
+def build_google_drive_url(folder_id_or_url):
+    """Returns a direct browser link to the customer's Google Drive folder."""
+    clean_id = extract_google_id(folder_id_or_url)
+    if clean_id and clean_id.startswith("http"):
+        return clean_id
+    return f"https://drive.google.com/drive/folders/{clean_id}" if clean_id else ""
+
+
+def build_google_sheet_url(sheet_id_or_url):
+    """Returns a direct browser link to the customer's master Google Sheet."""
+    clean_id = extract_google_id(sheet_id_or_url)
+    if clean_id and clean_id.startswith("http"):
+        return clean_id
+    return f"https://docs.google.com/spreadsheets/d/{clean_id}/edit" if clean_id else ""
+
+
+def consolidate_historical_logs(data_dir=None, base_dir=None):
+    """
+    Enforces the single-file logging policy:
+    1. Scans DATA_DIR and BASE_DIR for legacy, rotating, or split log files.
+    2. Sequentially merges unique historical entries into the single primary LOG_FILE (backup_log.txt).
+    3. Safely removes redundant legacy log files so strictly one file is maintained.
+    """
+    d_dir = data_dir or DATA_DIR
+    b_dir = base_dir or BASE_DIR
+    primary_log = LOG_FILE
+    
+    candidate_dirs = list({d_dir, b_dir})
+    legacy_files = []
+    
+    for c_dir in candidate_dirs:
+        if not os.path.exists(c_dir):
+            continue
+        try:
+            for entry in os.listdir(c_dir):
+                full_path = os.path.join(c_dir, entry)
+                if not os.path.isfile(full_path):
+                    continue
+                if os.path.abspath(full_path).lower() == os.path.abspath(primary_log).lower():
+                    continue
+                lower = entry.lower()
+                if (lower.endswith(".log") or 
+                    (lower.startswith("backup_log") and lower.endswith(".txt")) or 
+                    lower.startswith("temp_log") or
+                    lower.startswith("audit_log")):
+                    legacy_files.append(full_path)
+        except Exception:
+            pass
+
+    if not legacy_files:
+        return
+
+    existing_lines = set()
+    if os.path.exists(primary_log):
+        try:
+            with open(primary_log, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    s = line.strip()
+                    if s:
+                        existing_lines.add(s)
+        except Exception:
+            pass
+
+    merged_count = 0
+    try:
+        with open(primary_log, "a", encoding="utf-8", errors="replace") as out_f:
+            for leg_path in sorted(legacy_files, key=lambda p: os.path.getmtime(p)):
+                try:
+                    with open(leg_path, "r", encoding="utf-8", errors="ignore") as in_f:
+                        for line in in_f:
+                            s = line.strip()
+                            if s and s not in existing_lines:
+                                out_f.write(line if line.endswith("\n") else line + "\n")
+                                existing_lines.add(s)
+                                merged_count += 1
+                    os.remove(leg_path)
+                except Exception:
+                    pass
+        if merged_count > 0:
+            print(f"[SYSTEM] Consolidated {merged_count} historical log entries into single log file: {primary_log}")
+    except Exception:
+        pass
+
+
+# Run historical log consolidation on startup
+consolidate_historical_logs(DATA_DIR, BASE_DIR)
+
 # Initialize dedicated application logger with UTF-8 FileHandler
 logger = logging.getLogger("DatabaseBackup")
 logger.setLevel(logging.INFO)
@@ -268,25 +385,28 @@ except Exception:
     pass
 
 
-def emit_log(message, level="info", log_cb=None):
+def emit_log(message, level="info", log_cb=None, module=None):
     """
-    Dual-dispatch logging utility.
-    1. Persists the log record to the local backup_log.txt file on disk with instant flush.
-    2. Prints the message to standard output for CLI sessions.
-    3. Safely invokes the UI log callback (log_cb) if supplied by app_gui.py.
+    Unified dual-dispatch logging utility for all modules.
+    1. Persists the log record to the single local backup_log.txt file on disk with instant flush.
+    2. Standardizes module tag ([BACKUP], [CLEANUP], [PERF_QUERY], [SYSTEM]).
+    3. Prints the message to standard output for CLI sessions.
+    4. Safely invokes the UI log callback (log_cb) if supplied by app_gui.py.
     """
-    ts = datetime.now().strftime("%H:%M:%S")
-    formatted = f"[{ts}] {message}"
+    mod_tag = f"[{module.upper()}] " if module else ""
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    formatted = f"[{ts}] {mod_tag}{message}"
     
+    log_msg = f"{mod_tag}{message}"
     # Write to local file log based on severity
     if level == "critical":
-        logger.critical(message)
+        logger.critical(log_msg)
     elif level == "error":
-        logger.error(message)
+        logger.error(log_msg)
     elif level == "warning":
-        logger.warning(message)
+        logger.warning(log_msg)
     else:
-        logger.info(message)
+        logger.info(log_msg)
         
     # Flush file handlers immediately to ensure real-time disk persistence
     for h in logger.handlers:

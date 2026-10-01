@@ -54,6 +54,8 @@
     - 10.3 [Zero-Trust Telemetry Broker & Google Sheets Horizontal Layout](#103-zero-trust-telemetry-broker--google-sheets-horizontal-layout)
     - 10.4 [High-Priority Outlook/SMTP Alert Engine & DPAPI Password Protection](#104-high-priority-outlooksmtp-alert-engine--dpapi-password-protection)
     - 10.5 [Headless Automated Invocation (`--storage-scan` & Piggyback Triggers)](#105-headless-automated-invocation---storage-scan--piggyback-triggers)
+    - 10.6 [Customer Cloud Integration & 3-Module Master Sheet Layout](#106-customer-cloud-integration--3-module-master-sheet-layout)
+    - 10.7 [Single Unified Persistent Log Architecture (`backup_log.txt`)](#107-single-unified-persistent-log-architecture-backup_logtxt)
 11. [Infrastructure-as-Code & Automated Deployment (`deploy.sh`)](#11-infrastructure-as-code--automated-deployment-deploysh)
 12. [Comprehensive Test Suite & Static Security Auditing](#12-comprehensive-test-suite--static-security-auditing)
 13. [Air-Gapped Disaster Recovery & Emergency Runbook](#13-air-gapped-disaster-recovery--emergency-runbook)
@@ -922,6 +924,49 @@ The storage monitoring pipeline operates seamlessly across multiple operational 
 1. **Interactive Scan:** Click `Scan Now` in Tab 5 (`Server Health`) of `app_gui.py`.
 2. **Piggyback Execution:** Automatically executed at the conclusion of every automated backup run (`auto_backup.py --auto`) if `STORAGE_MONITOR_ENABLED: true`.
 3. **Dedicated Headless Task:** Scheduled independently via Windows Task Scheduler executing `auto_backup.py --storage-scan` on a daily, weekly, or custom cadence.
+
+### 10.6 Customer Cloud Integration & 3-Module Master Sheet Layout
+
+Each customer deployment utilizes a dedicated, client-specific cloud tracking ecosystem consisting of a Google Drive Folder and a Master Google Sheet:
+
+1. **Customer Dedicated Cloud Assets:**
+   - **Customer Google Drive Folder (`GOOGLE_DRIVE_FOLDER_ID`):** A dedicated folder in Google Drive associated with the customer, housing or indexing their backups and archives.
+   - **Customer Master Google Sheet (`GOOGLE_SHEET_ID`):** A single master spreadsheet maintaining separate worksheet tabs for each of the system's three core operational modules:
+     - **Tab 1: `Backup Automation`:**
+       Logs all database backup executions, database names, original uncompressed sizes, encrypted DBK2 sizes, duration, upload timestamps, and completion statuses.
+     - **Tab 2: `Server Cleanup`:**
+       Logs daily drive health telemetry (C: system drive free space in GB, secondary data drives % utilized), automated temporary folder cleanups, and threshold alert statuses.
+     - **Tab 3: `Performance Query` (Architecture In-Progress):**
+       Allocated sheet tab prepared for capturing SQL Server performance metrics, slow query execution telemetry, wait stats, and lock contention analysis.
+2. **Dynamic Installation & In-App Management:**
+   - **Installation Setup:** When missing from `config.json`, `1_Quick_Install.bat` and `installer_gui.py` interactively prompt the installer/technician for both IDs or URLs.
+   - **In-App Modification:** The desktop application (`app_gui.py` Settings tab) contains a dedicated section: **Customer Cloud Integration (Google Drive & Sheets)**. Technicians can view, update, test, or open the Drive Folder or Master Google Sheet in their default browser at any time without requiring application restarts.
+   - **URL / ID Parser:** Built-in `extract_google_id()` handles both raw alphanumeric IDs and full browser URLs (`https://drive.google.com/drive/folders/...` and `https://docs.google.com/spreadsheets/d/...`), extracting the clean identifier while preserving direct browser navigation.
+
+### 10.7 Single Unified Persistent Log Architecture (`backup_log.txt`)
+
+To ensure absolute audit integrity and prevent fragmentation across multiple files:
+
+1. **Strict Single-File Policy:**
+   - All logging from all 3 modules (`Backup Automation`, `Server Cleanup`, `Performance Query`), background workers, Task Scheduler tasks, and desktop GUI actions is recorded into **strictly one persistent text file**:
+     ```
+     %ALLUSERSPROFILE%\DatabaseBackupApp\backup_log.txt
+     ```
+     (falling back to the application base folder if running portable/uninstalled).
+   - Rotating daily logs (e.g. `backup_log_2026-10-01.txt`) and per-module log files are strictly prohibited.
+2. **Automated Historical Log Consolidation:**
+   - On application startup or updater execution, `consolidate_historical_logs()` automatically searches for any legacy log files (`*.log`, `backup_log_*.txt`, `temp_log*.txt`).
+   - Historical entries are sequentially merged into `backup_log.txt` without duplicate line repetition, and obsolete files are safely purged.
+3. **Module-Tagged Audit Formatting:**
+   All log entries adhere to standardized timestamps and module tags:
+   ```text
+   [2026-10-01 14:00:01] [BACKUP]     Database 'SuperForm' DBK2 backup completed (420.50 MB).
+   [2026-10-01 14:05:22] [CLEANUP]    Drive C: health OK (45.2 GB available). Temp storage purged.
+   [2026-10-01 14:10:00] [PERF_QUERY] Query baseline sampled: 0 blocked processes detected.
+   [2026-10-01 14:15:30] [SYSTEM]     Customer Cloud Settings updated by administrator.
+   ```
+4. **Live GUI Visualization:**
+   The `Live Logs` tab in `app_gui.py` pre-loads historical logs from `backup_log.txt` upon launch and provides instant real-time tailing.
 
 ---
 
