@@ -1,11 +1,11 @@
 # 📘 Comprehensive System Architecture & Deep Code Guide
-## Enterprise Database Cloud Backup Automation System (v4.0.0 Zero-Trust Architecture)
+## Enterprise Database Cloud Backup Automation System (v4.1.0 Zero-Trust Architecture)
 
 **Author / Lead Architect:** Dulnindu Saranga  
 **System Target:** Microsoft SQL Server 2012–2022 (SQL Server 2000/2005 marked as legacy/untested), Google Cloud Platform (Cloud Run, Google Cloud Storage, Cloud Firestore, Google Sheets API v4), Windows 10/11 & Windows Server 2016–2025 (Windows 7/8/8.1 & Server 2008 R2/2012 marked as legacy/untested; macOS/Linux unsupported)  
 **Architecture Pattern:** Zero-Trust Security Wall / Decoupled Cloud Run Microservices & Stateless Client Core Engine  
 **Cryptographic Standard:** DBK2 Hybrid Streaming Envelope Encryption (AES-256-GCM + Dual RSA-4096-OAEP Key Wrapping)  
-**Documentation Version:** 4.0.0 Zero-Trust Edition  
+**Documentation Version:** 4.1.0 Zero-Trust & Multi-Module Edition  
 
 ---
 
@@ -68,7 +68,7 @@ In traditional database cloud backup models, client servers are directly provisi
 - If a customer machine is infected with ransomware or an adversary achieves root/administrative privileges, the attacker immediately extracts the local cloud credentials.
 - The attacker then leverages those credentials to enumerate the cloud storage bucket, delete all existing historical backups, wipe object versioning, and hold the enterprise to ransom.
 
-The **Enterprise Database Cloud Backup Automation System (v4.0.0)** resolves this threat through a **Zero-Trust Security Wall Architecture**. The client machine is treated as potentially untrusted and holds **zero Google credentials, zero service account keys, zero OAuth secrets, and zero private encryption keys**.
+The **Enterprise Database Cloud Backup Automation System (v4.1.0)** resolves this threat through a **Zero-Trust Security Wall Architecture**. The client machine is treated as potentially untrusted and holds **zero Google credentials, zero service account keys, zero OAuth secrets, and zero private encryption keys**.
 
 ### Key Architectural Tenets:
 1. **Zero Client Cloud Secrets:** Customer machines possess only an opaque, machine-specific bearer token and RSA-4096 public encryption keys. Even complete compromise of the client PC yields no credentials that can read, list, modify, or delete cloud data.
@@ -100,6 +100,7 @@ BackupAutomation/
 ├── Uninstall.bat              # Detached uninstaller script (Purges tasks, DPAPI tokens, and files)
 │
 ├── admin/                     # Administrative Provisioning Tools
+│   ├── build_customer_package.py # 1-Command Automated Customer Installer & ZIP Generator
 │   ├── provision_pc.py        # Generates per-PC cryptographically random tokens and Secret Manager JSON
 │   └── manage_tokens.py       # Lists, inspects, and revokes PC tokens in Secret Manager
 │
@@ -621,19 +622,28 @@ A comprehensive server infrastructure monitoring console that prevents server cr
 
 A dedicated setup wizard providing an administrative installation experience:
 - Verifies Windows administrative privileges using `ctypes.windll.shell32.IsUserAnAdmin()`.
-- Prompts for installation directory (defaulting to `C:\Program Files\DatabaseBackupApp`).
-- Ingests `raw_token.txt`, validates syntax, and calls `import_and_protect_token()` to seal it into `token.dpapi`.
+- Prompts for installation directory (defaulting to `%LOCALAPPDATA%\Programs\DatabaseBackupApp`).
+- Performs real-time HTTP connectivity health checks against the Cloud Run Upload Broker (`GET /healthz`).
+- Ingests `raw_token.txt` if detected, validates syntax, and calls native Windows `CryptProtectData` (machine scope `0x4`) to seal it into `token.dpapi`, then cryptographically shreds and deletes `raw_token.txt`.
+- Deploys `backup_public.pem` and `escrow_public.pem` to `%ALLUSERSPROFILE%\DatabaseBackupApp`.
 - Hardens folder permissions via `icacls.exe`:
   ```cmd
-  icacls "C:\Program Files\DatabaseBackupApp" /inheritance:r /grant:r "Administrators":(OI)(CI)F "SYSTEM":(OI)(CI)F "Users":(OI)(CI)RX
+  icacls "C:\ProgramData\DatabaseBackupApp" /inheritance:r /grant:r "Administrators":(OI)(CI)F "SYSTEM":(OI)(CI)F "Users":(OI)(CI)RX
   ```
 - Creates Start Menu and Desktop shortcuts pointing to `DatabaseBackupApp.exe`.
 
-### 5.9 `admin/provision_pc.py` & `admin/manage_tokens.py` — Token Provisioning Utility
+### 5.9 `admin/build_customer_package.py` & `admin/provision_pc.py` — One-Command Provisioning Engine
 
-Administrative utilities for customer token provisioning:
-- `provision_pc.py`: Generates a cryptographically secure 32-byte token (`secrets.token_hex(32)`), outputs `raw_token.txt` for secure customer transfer, and updates `pc-tokens` in Google Secret Manager with the SHA-256 hash.
-- `manage_tokens.py`: Allows listing active PC tokens, inspecting metadata (allowed databases, size caps), and immediately revoking compromised tokens.
+Administrative utilities for customer token provisioning and packaging:
+- `admin/build_customer_package.py`: The master one-command automation engine:
+  1. Auto-fetches the live Cloud Run Upload Broker URL from GCP via `gcloud`.
+  2. Generates a cryptographically strong, unique machine token (`<pc_id>.<secret>`).
+  3. Registers the SHA-256 token hash in Google Secret Manager (`pc-tokens`) automatically.
+  4. Clones the master installer package into a tailored customer folder (`Client_Installation_Package_<Customer>`).
+  5. Pre-configures the Broker URL in `config.json` while leaving `GOOGLE_DRIVE_FOLDER_ID` and `GOOGLE_SHEET_ID` empty for customer entry.
+  6. Bundles `raw_token.txt` and compresses the entire package into a ready-to-deliver ZIP file.
+- `admin/provision_pc.py`: Standalone CLI tool to generate token strings and calculate SHA-256 hashes for manual provisioning.
+- `admin/manage_tokens.py`: Allows listing active PC tokens, inspecting metadata, and immediately revoking compromised tokens in Secret Manager.
 
 ### 5.10 `offline/` — Air-Gapped Key Generation & DBK2 Recovery Tools
 
@@ -1099,4 +1109,4 @@ MOVE 'AccountingDB_Log'  TO 'C:\Program Files\Microsoft SQL Server\MSSQL16.MSSQL
 ```
 
 ---
-*End of Comprehensive System Architecture & Deep Code Guide (v4.0.0 Zero-Trust Edition).*
+*End of Comprehensive System Architecture & Deep Code Guide (v4.1.0 Zero-Trust & Multi-Module Edition).*

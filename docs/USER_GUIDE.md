@@ -112,23 +112,36 @@ Launch **Database Cloud Backup** and navigate to the **Settings** tab:
 
 ## 📋 5. Administration & Operational Runbook
 
-### 5.1 Token Generation (Administrator Workstation)
-To provision a new customer PC token:
+### 5.1 Automated Customer Onboarding (Recommended: 1 Single Command)
+On your administrator machine, run:
 ```bash
-python Tools/make_token.py pc-customer-01
+python admin/build_customer_package.py --customer "CustomerName"
+```
+#### Automated Pipeline:
+1. **Auto-Fetches** your live Cloud Run Upload Broker URL via `gcloud`.
+2. **Generates** a cryptographically secure token `<pc_id>.<secret>`.
+3. **Registers** the token hash into Google Secret Manager (`pc-tokens`) automatically.
+4. **Builds** a dedicated customer package: `dist/packages/Client_Installation_Package_CustomerName.zip`.
+5. Pre-configures the Broker URL and bundles `raw_token.txt` (which is encrypted into DPAPI and shredded on customer install).
+6. **Leaves Google Drive & Sheet IDs empty** so the customer can enter their own credentials in the application.
+
+### 5.2 Standalone Token Provisioning (Manual Workstation Fallback)
+If generating tokens manually for an existing installation:
+```bash
+python admin/provision_pc.py --pc-id pc-customer-01
 ```
 Output:
-1. `TOKEN`: `pc-customer-01.a8f9c7e6b5d4...` (give this to the client PC).
+1. `raw_token.txt`: Place next to the customer installer or import in the application GUI.
 2. `HASH`: Add to Secret Manager `pc_tokens.json` in Google Cloud.
 
-### 5.2 Restoring & Decrypting a Backup Offline
+### 5.3 Restoring & Decrypting a Backup Offline
 On an air-gapped recovery machine containing the private decryption key:
 ```bash
-python Tools/decrypt_backup.py backup_20261001_1.dbk2 restored_backup.zip backup_private.pem [password]
+python decrypt_backup.py backup_20261001_1.dbk2 restored_backup.zip backup_private.pem [password]
 ```
 If the primary private key is unavailable, use `escrow_private.pem` with the exact same syntax.
 
-### 5.3 Single Unified Persistent Audit Log
+### 5.4 Single Unified Persistent Audit Log
 - All operations are appended to:
   `C:\ProgramData\DatabaseBackupApp\backup_log.txt`
 - Log format:
