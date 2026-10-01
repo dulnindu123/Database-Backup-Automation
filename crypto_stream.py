@@ -225,6 +225,13 @@ def encrypt_file(src, dst, public_key_paths, cancel_check=None, escrow_key_path=
         if os.path.exists(dst):
             os.remove(dst)
         os.replace(dst_tmp, dst)
+        return {
+            "db": db_bytes.decode("utf-8"),
+            "db_name": db_bytes.decode("utf-8"),
+            "file_name": file_bytes.decode("utf-8"),
+            "host": host_bytes.decode("utf-8"),
+            "utc_time": time_bytes.decode("utf-8")
+        }
 
     except Exception:
         if os.path.exists(dst_tmp):
@@ -382,6 +389,7 @@ def decrypt_file(src, dst, private_key_path, password=None, cancel_check=None):
 
         return {
             "db": db_bytes.decode("utf-8", errors="replace"),
+            "db_name": db_bytes.decode("utf-8", errors="replace"),
             "file_name": file_bytes.decode("utf-8", errors="replace"),
             "host": host_bytes.decode("utf-8", errors="replace"),
             "utc_time": time_bytes.decode("utf-8", errors="replace")

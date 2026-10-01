@@ -5,10 +5,10 @@
     "BACKUP_FOLDER": "C:\\temp\\backups",
     "BACKUP_EXTENSION": ".zip",
     "TARGET_DATABASES": [],
-    "BROKER_URL": "http://127.0.0.1:5000",
-    "TELEMETRY_BROKER_URL": "http://127.0.0.1:5000",
-    "GOOGLE_DRIVE_FOLDER_ID": "1LKuo7j4cHvvP0-p0C6PVo6gdkgoVBaQ4",
-    "GOOGLE_SHEET_ID": "1FAnmfTAixeDgwA5f3TvJ9IEtFp1OuFTyw3UpDiOdvwg",
+    "BROKER_URL": "",
+    "TELEMETRY_BROKER_URL": "",
+    "GOOGLE_DRIVE_FOLDER_ID": "",
+    "GOOGLE_SHEET_ID": "",
     "STRICTLY_MONDAYS_ONLY": true,
     "SCHEDULE_DAYS": [
         "MON"

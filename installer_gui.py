@@ -1,7 +1,7 @@
 """
 Graphical Installation Wizard for Enterprise Database Cloud Backup (v4.1.0)
-Streamlined, zero-friction installer with automated working Broker URL detection
-and connection testing. No manual configuration typing required during setup.
+Streamlined, zero-friction installer with working Cloud Run Broker URL configuration,
+live reachability validation, and automatic zero-trust key/token provisioning.
 """
 import os
 import sys
@@ -9,6 +9,7 @@ import json
 import shutil
 import subprocess
 import urllib.request
+import urllib.error
 import tkinter as tk
 from tkinter import messagebox, filedialog
 import customtkinter as ctk
@@ -33,7 +34,7 @@ class InstallerApp(ctk.CTk):
         super().__init__()
         
         self.title(f"Database Cloud Backup Setup - v{INSTALLER_VERSION}")
-        self.geometry("580, 560")
+        self.geometry("600, 580")
         self.resizable(False, False)
 
         self.bundle_dir = get_bundle_dir()
@@ -55,7 +56,7 @@ class InstallerApp(ctk.CTk):
         self.target_dir = os.path.join(os.environ.get("LOCALAPPDATA", "C:\\"), "Programs", "DatabaseBackupApp")
         self.data_dir = os.path.join(os.environ.get("ALLUSERSPROFILE", "C:\\ProgramData"), "DatabaseBackupApp")
 
-        # Automatically resolve the legit working Upload Broker URL
+        # Automatically resolve existing configured Broker URL (if any)
         self.broker_url = self._auto_resolve_broker_url()
 
         # Apply branding icon if available
@@ -67,23 +68,41 @@ class InstallerApp(ctk.CTk):
                 pass
 
         self._build_ui()
-        self._test_broker_health_async()
+        self.after(300, self._test_broker_health)
 
     def _auto_resolve_broker_url(self):
-        """Automatically discovers the working legit Upload Broker URL."""
-        # 1. Package broker_url.txt in bundle dir or current dir
-        for base in [self.bundle_dir, os.path.join(self.bundle_dir, "AppFiles"), os.getcwd()]:
-            p_txt = os.path.join(base, "broker_url.txt")
-            if os.path.exists(p_txt):
+        """Discovers existing configured Upload Broker URL if deployed or packaged."""
+        # 1. Check existing config on client PC (upgrade scenario)
+        for chk in [os.path.join(self.data_dir, "config.json"), os.path.join(self.target_dir, "config.json")]:
+            if os.path.exists(chk):
                 try:
-                    with open(p_txt, 'r', encoding='utf-8') as f:
-                        u = f.read().strip()
-                        if u and (u.startswith("http://") or u.startswith("https://")):
-                            return u
+                    with open(chk, 'r', encoding='utf-8') as f:
+                        c = json.load(f)
+                        b_url = c.get("BROKER_URL", "").strip()
+                        if b_url and (b_url.startswith("https://") or b_url.startswith("http://")):
+                            return b_url
                 except Exception:
                     pass
 
-        # 2. Query Google Cloud Run CLI if deployed on GCP
+        # 2. Check config in AppFiles package
+        for base in [self.bundle_dir, os.path.join(self.bundle_dir, "AppFiles"), os.getcwd()]:
+            cfg_p = os.path.join(base, "config.json")
+            if os.path.exists(cfg_p):
+                try:
+                    with open(cfg_p, 'r', encoding='utf-8') as f:
+                        c = json.load(f)
+                        b_url = c.get("BROKER_URL", "").strip()
+                        if b_url and (b_url.startswith("https://") or b_url.startswith("http://")):
+                            return b_url
+                except Exception:
+                    pass
+
+        # 3. Environment variable
+        env_url = os.environ.get("BROKER_URL", "").strip() or os.environ.get("CLOUD_RUN_BROKER_URL", "").strip()
+        if env_url:
+            return env_url
+
+        # 4. Check gcloud CLI if installed
         try:
             cmd = ["gcloud.cmd" if sys.platform.startswith("win") else "gcloud", "run", "services", "describe", "upload-broker", "--format=value(status.url)"]
             res = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
@@ -94,39 +113,7 @@ class InstallerApp(ctk.CTk):
         except Exception:
             pass
 
-        # 3. Existing config in AppFiles
-        cfg_appfiles = os.path.join(self.bundle_dir, "AppFiles", "config.json")
-        if os.path.exists(cfg_appfiles):
-            try:
-                with open(cfg_appfiles, 'r', encoding='utf-8') as f:
-                    c = json.load(f)
-                    if c.get("BROKER_URL"):
-                        return c.get("BROKER_URL")
-            except Exception:
-                pass
-
-        # 4. Existing config on client PC
-        for chk in [os.path.join(self.data_dir, "config.json"), os.path.join(self.target_dir, "config.json")]:
-            if os.path.exists(chk):
-                try:
-                    with open(chk, 'r', encoding='utf-8') as f:
-                        c = json.load(f)
-                        if c.get("BROKER_URL"):
-                            return c.get("BROKER_URL")
-                except Exception:
-                    pass
-
-        # 5. Check if local test broker is running
-        for test_local in ["http://127.0.0.1:5000", "http://localhost:8080"]:
-            try:
-                req = urllib.request.Request(f"{test_local}/healthz")
-                with urllib.request.urlopen(req, timeout=1) as resp:
-                    if resp.status in (200, 404, 405):
-                        return test_local
-            except Exception:
-                pass
-
-        return "http://127.0.0.1:5000"
+        return ""
 
     def _build_ui(self):
         # Header Banner
@@ -166,7 +153,7 @@ class InstallerApp(ctk.CTk):
             command=self._browse_directory
         ).pack(side="right")
 
-        # 2. Automated Cloud Run Broker Card (Zero Manual Entry - 100% Legit Auto-Detect)
+        # 2. Cloud Run Broker Card
         broker_card = ctk.CTkFrame(body, corner_radius=8, fg_color=("#1e293b", "#111827"), border_width=1, border_color="#374151")
         broker_card.pack(fill="x", pady=(0, 15))
 
@@ -186,26 +173,27 @@ class InstallerApp(ctk.CTk):
             text="⚡ Auto-Fetch & Test",
             font=ctk.CTkFont(size=10, weight="bold"),
             width=140,
-            height=24,
+            height=26,
             fg_color="#2563eb",
             hover_color="#1d4ed8",
             command=self._refresh_and_test_broker
         ).pack(side="right")
 
-        # Broker URL Display (Read-Only - No manual user typing box)
-        self.lbl_broker_url = ctk.CTkLabel(
+        # Broker URL Entry Field (clean, editable, pre-filled or placeholder)
+        self.broker_url_var = tk.StringVar(value=self.broker_url)
+        self.entry_broker = ctk.CTkEntry(
             broker_card,
-            text=f"Endpoint: {self.broker_url}",
+            textvariable=self.broker_url_var,
+            placeholder_text="Enter Cloud Run Broker URL (e.g. https://upload-broker-xxx.run.app)",
             font=ctk.CTkFont(family="Consolas", size=11),
-            text_color="#e2e8f0",
-            anchor="w"
+            height=32
         )
-        self.lbl_broker_url.pack(anchor="w", padx=12, pady=(2, 4))
+        self.entry_broker.pack(fill="x", padx=12, pady=(2, 4))
 
         # Status indicator badge
         self.lbl_broker_status = ctk.CTkLabel(
             broker_card,
-            text="● Testing connection to Upload Broker...",
+            text="● Probing broker connectivity...",
             font=ctk.CTkFont(size=11, weight="bold"),
             text_color="#f59e0b",
             anchor="w"
@@ -232,7 +220,7 @@ class InstallerApp(ctk.CTk):
         self.cb_launch.select()
 
         # Progress bar & status
-        self.progress = ctk.CTkProgressBar(body, width=530, height=8)
+        self.progress = ctk.CTkProgressBar(body, width=550, height=8)
         self.progress.pack(pady=(12, 4))
         self.progress.set(0)
 
@@ -265,40 +253,52 @@ class InstallerApp(ctk.CTk):
         """Refreshes the auto-detected broker URL and tests its connectivity."""
         self.lbl_broker_status.configure(text="● Auto-detecting working broker...", text_color="#f59e0b")
         self.update()
-        self.broker_url = self._auto_resolve_broker_url()
-        self.lbl_broker_url.configure(text=f"Endpoint: {self.broker_url}")
+        detected = self._auto_resolve_broker_url()
+        if detected:
+            self.broker_url_var.set(detected)
         self._test_broker_health()
-
-    def _test_broker_health_async(self):
-        self.after(300, self._test_broker_health)
 
     def _test_broker_health(self):
         """Pings the Upload Broker /healthz or connection probe."""
+        url = self.broker_url_var.get().strip()
+        if not url:
+            self.lbl_broker_status.configure(
+                text="● No Broker URL entered (can be configured in application Settings later)",
+                text_color="#9ca3af"
+            )
+            return
+
         self.lbl_broker_status.configure(text="● Probing broker connectivity...", text_color="#f59e0b")
         self.update()
-        
-        url = self.broker_url.rstrip("/")
-        # Try /healthz or root
+
         online = False
-        for endpoint in [f"{url}/healthz", url]:
+        err_msg = ""
+        clean_url = url.rstrip("/")
+        for endpoint in [f"{clean_url}/healthz", clean_url]:
             try:
                 req = urllib.request.Request(endpoint, headers={'User-Agent': 'SetupWizard/4.1.0'})
                 with urllib.request.urlopen(req, timeout=3) as resp:
-                    if resp.status in (200, 404, 405):
+                    if resp.status in (200, 204, 301, 302, 401, 403, 404, 405):
                         online = True
                         break
-            except Exception:
-                pass
+            except urllib.error.HTTPError as e:
+                # 401, 403, 404, 405 from the server means the endpoint is live and responding!
+                if e.code in (401, 403, 404, 405):
+                    online = True
+                    break
+                err_msg = f"HTTP {e.code}"
+            except Exception as e:
+                err_msg = str(e)
 
-        if online or "127.0.0.1" in url or "localhost" in url:
+        if online:
             self.lbl_broker_status.configure(
-                text=f"✓ Broker Verified & Active (100% Legit & Ready)",
+                text="✓ Broker Reachable & Active (Endpoint Verified)",
                 text_color="#34d399"
             )
         else:
             self.lbl_broker_status.configure(
-                text=f"● Broker Configured: Ready for Production Deploy",
-                text_color="#60a5fa"
+                text=f"⚠️ Broker Offline / Unreachable ({err_msg[:40]})",
+                text_color="#f87171"
             )
 
     def _do_install(self):
@@ -333,8 +333,55 @@ class InstallerApp(ctk.CTk):
                         shutil.copy2(src_f, os.path.join(temp_safety_dir, save_file))
 
             # 1. Copy application files via Robocopy
-            self.status_lbl.configure(text="Copying updated application binaries...")
+            self.status_lbl.configure(text="Copying application binaries...")
             subprocess.run(["robocopy.exe", self.source_app_dir, self.target_dir, "/E", "/IS", "/IT"], capture_output=True)
+
+            # Ensure public keys are copied to both target_dir and data_dir
+            for k in ["backup_public.pem", "escrow_public.pem"]:
+                for s_base in [self.source_app_dir, self.bundle_dir]:
+                    k_src = os.path.join(s_base, k)
+                    if os.path.exists(k_src):
+                        shutil.copy2(k_src, os.path.join(self.target_dir, k))
+                        shutil.copy2(k_src, os.path.join(self.data_dir, k))
+                        break
+
+            # Check for raw_token.txt to automatically seal into token.dpapi
+            raw_token_found = None
+            for s_base in [self.bundle_dir, os.getcwd(), self.source_app_dir]:
+                t_chk = os.path.join(s_base, "raw_token.txt")
+                if os.path.exists(t_chk):
+                    raw_token_found = t_chk
+                    break
+
+            if raw_token_found:
+                self.status_lbl.configure(text="Importing machine authentication token via DPAPI...")
+                try:
+                    with open(raw_token_found, "r", encoding="utf-8") as tf:
+                        t_str = tf.read().strip()
+                    if t_str and "." in t_str:
+                        ps_protect = (
+                            f"$bytes = [System.Text.Encoding]::UTF8.GetBytes('{t_str}'); "
+                            f"Add-Type -AssemblyName System.Security; "
+                            f"$prot = [System.Security.Cryptography.ProtectedData]::Protect($bytes, $null, [System.Security.Cryptography.DataProtectionScope]::LocalMachine); "
+                            f"[System.IO.File]::WriteAllBytes('{os.path.join(self.target_dir, 'token.dpapi')}', $prot); "
+                            f"[System.IO.File]::WriteAllBytes('{os.path.join(self.data_dir, 'token.dpapi')}', $prot)"
+                        )
+                        subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_protect], capture_output=True)
+                        # Securely wipe raw_token.txt
+                        flen = os.path.getsize(raw_token_found)
+                        with open(raw_token_found, "wb") as wf:
+                            wf.write(os.urandom(max(flen, 64)))
+                        os.remove(raw_token_found)
+                except Exception:
+                    pass
+
+            # Check for existing token.dpapi in bundle
+            for s_base in [self.bundle_dir, self.source_app_dir]:
+                dp_src = os.path.join(s_base, "token.dpapi")
+                if os.path.exists(dp_src):
+                    shutil.copy2(dp_src, os.path.join(self.target_dir, "token.dpapi"))
+                    shutil.copy2(dp_src, os.path.join(self.data_dir, "token.dpapi"))
+                    break
 
             # Restore existing config/tokens if upgrade
             if is_upgrade and os.path.exists(temp_safety_dir):
@@ -342,14 +389,12 @@ class InstallerApp(ctk.CTk):
                     backed_f = os.path.join(temp_safety_dir, save_file)
                     if os.path.exists(backed_f):
                         shutil.copy2(backed_f, os.path.join(self.target_dir, save_file))
-                legacy_dat = os.path.join(temp_safety_dir, "broker_token.dat")
-                target_dpapi = os.path.join(self.target_dir, "token.dpapi")
-                if os.path.exists(legacy_dat) and not os.path.exists(target_dpapi):
-                    shutil.copy2(legacy_dat, target_dpapi)
+                        shutil.copy2(backed_f, os.path.join(self.data_dir, save_file))
                 shutil.rmtree(temp_safety_dir, ignore_errors=True)
 
-            # 2. Update config.json with auto-verified Broker URL & lock state
-            self.status_lbl.configure(text="Configuring Broker URL and module tabs...")
+            # 2. Update config.json with verified Broker URL
+            self.status_lbl.configure(text="Configuring settings and module tabs...")
+            b_url = self.broker_url_var.get().strip()
             cfg_paths = [os.path.join(self.target_dir, "config.json"), os.path.join(self.data_dir, "config.json")]
             for cp in cfg_paths:
                 cfg = {}
@@ -359,30 +404,8 @@ class InstallerApp(ctk.CTk):
                             cfg = json.load(f)
                     except Exception:
                         cfg = {}
-                if self.broker_url:
-                    cfg["BROKER_URL"] = self.broker_url
-                
-                # Check for packaged drive_folder.txt and sheet_id.txt
-                for base_dir in [self.bundle_dir, os.path.join(self.bundle_dir, "AppFiles"), os.getcwd()]:
-                    df_txt = os.path.join(base_dir, "drive_folder.txt")
-                    if os.path.exists(df_txt) and not cfg.get("GOOGLE_DRIVE_FOLDER_ID"):
-                        try:
-                            with open(df_txt, 'r', encoding='utf-8') as f:
-                                dval = f.read().strip()
-                                if dval:
-                                    cfg["GOOGLE_DRIVE_FOLDER_ID"] = dval
-                        except Exception:
-                            pass
-                    sf_txt = os.path.join(base_dir, "sheet_id.txt")
-                    if os.path.exists(sf_txt) and not cfg.get("GOOGLE_SHEET_ID"):
-                        try:
-                            with open(sf_txt, 'r', encoding='utf-8') as f:
-                                sval = f.read().strip()
-                                if sval:
-                                    cfg["GOOGLE_SHEET_ID"] = sval
-                        except Exception:
-                            pass
-
+                if b_url:
+                    cfg["BROKER_URL"] = b_url
                 cfg["SHEET_TABS"] = {
                     "BACKUP": "Backup Automation",
                     "CLEANUP": "Server Cleanup",
@@ -437,7 +460,7 @@ class InstallerApp(ctk.CTk):
             self.status_lbl.configure(text="Installation Complete!", text_color="#10b981")
             self.btn_install.configure(text="Finished", state="normal", command=self.destroy)
 
-            msg = f"Database Cloud Backup v{INSTALLER_VERSION} setup complete!\n\nUpload Broker configured and locked. You can now configure database targets and cloud drive folders in the application."
+            msg = f"Database Cloud Backup v{INSTALLER_VERSION} setup complete!\n\nApplication installed to:\n{self.target_dir}\n\nYou can now configure your database targets and cloud folders in the application."
             messagebox.showinfo("Success", msg)
 
             if self.cb_launch.get() and os.path.exists(target_exe):

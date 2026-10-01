@@ -48,6 +48,7 @@ from backup_core import (
     build_google_drive_url,
     build_google_sheet_url,
     BASE_DIR,
+    DATA_DIR,
     LOG_FILE,
     load_config,
     save_config,
@@ -673,18 +674,26 @@ class BackupAutomationApp(ctk.CTk):
         # Google Drive Folder ID / Link
         self._create_field_label(cloud_box, "Customer Google Drive Folder ID or Link:", pack_padx=15)
         drive_row = ctk.CTkFrame(cloud_box, fg_color="transparent")
-        drive_row.pack(fill="x", padx=15, pady=(0, 10))
+        drive_row.pack(fill="x", padx=15, pady=(0, 2))
         self.entry_google_drive = ctk.CTkEntry(drive_row, width=420, placeholder_text="Folder ID or https://drive.google.com/drive/folders/...")
         self.entry_google_drive.pack(side="left", padx=(0, 10))
         ctk.CTkButton(drive_row, text="Open Folder ->", width=110, fg_color="#059669", hover_color="#047857", command=self._open_drive_folder).pack(side="left")
 
+        self.lbl_drive_val_status = ctk.CTkLabel(cloud_box, text="", font=ctk.CTkFont(size=10, weight="bold"), anchor="w")
+        self.lbl_drive_val_status.pack(anchor="w", padx=15, pady=(0, 6))
+        self.entry_google_drive.bind("<KeyRelease>", self._validate_cloud_inputs)
+
         # Master Google Sheet ID / Link
         self._create_field_label(cloud_box, "Customer Master Google Sheet ID or Link:", pack_padx=15)
         sheet_row = ctk.CTkFrame(cloud_box, fg_color="transparent")
-        sheet_row.pack(fill="x", padx=15, pady=(0, 10))
+        sheet_row.pack(fill="x", padx=15, pady=(0, 2))
         self.entry_google_sheet = ctk.CTkEntry(sheet_row, width=420, placeholder_text="Spreadsheet ID or https://docs.google.com/spreadsheets/d/...")
         self.entry_google_sheet.pack(side="left", padx=(0, 10))
         ctk.CTkButton(sheet_row, text="Open Sheet ->", width=110, fg_color="#2563eb", hover_color="#1d4ed8", command=self._open_master_sheet).pack(side="left")
+
+        self.lbl_sheet_val_status = ctk.CTkLabel(cloud_box, text="", font=ctk.CTkFont(size=10, weight="bold"), anchor="w")
+        self.lbl_sheet_val_status.pack(anchor="w", padx=15, pady=(0, 8))
+        self.entry_google_sheet.bind("<KeyRelease>", self._validate_cloud_inputs)
 
         # 3 Modules Tabs Display Badges
         tabs_row = ctk.CTkFrame(cloud_box, fg_color="transparent")
@@ -745,7 +754,19 @@ class BackupAutomationApp(ctk.CTk):
             padx=10,
             pady=4
         )
-        self.lbl_token_status.pack(side="left", padx=(0, 10))
+        self.lbl_token_status.pack(side="left", padx=(0, 8))
+
+        self.btn_import_token = ctk.CTkButton(
+            status_row,
+            text="🔑 Import Token",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            width=110,
+            height=26,
+            fg_color="#2563eb",
+            hover_color="#1d4ed8",
+            command=self._open_import_token_dialog
+        )
+        self.btn_import_token.pack(side="left", padx=(0, 12))
 
         self.lbl_key_status = ctk.CTkLabel(
             status_row,
@@ -1015,20 +1036,45 @@ class BackupAutomationApp(ctk.CTk):
             self.entry_google_sheet.delete(0, "end")
             self.entry_google_sheet.insert(0, c.get("GOOGLE_SHEET_ID", ""))
 
-        # Check Token and Key files
+        # Check Token and Key files across DATA_DIR and BASE_DIR
         token_filename = c.get("BROKER_TOKEN_FILE", "token.dpapi")
-        token_path = os.path.join(BASE_DIR, token_filename)
-        if os.path.exists(token_path):
-            self.lbl_token_status.configure(text=f"🔑 Token: Present ({token_filename})", text_color="#34d399", fg_color="#064e3b")
+        token_path = None
+        for s_dir in [DATA_DIR, BASE_DIR]:
+            for s_name in [token_filename, "token.dpapi", "broker_token.dat"]:
+                candidate = os.path.join(s_dir, s_name)
+                if os.path.exists(candidate):
+                    token_path = candidate
+                    break
+            if token_path:
+                break
+
+        if token_path:
+            pc_name = "Active"
+            try:
+                from broker_client import load_token
+                t_str = load_token(token_path)
+                if t_str and "." in t_str:
+                    pc_name = t_str.split(".")[0]
+            except Exception:
+                pass
+            self.lbl_token_status.configure(text=f"🔑 Token: Active ({pc_name})", text_color="#34d399", fg_color="#064e3b")
         else:
-            self.lbl_token_status.configure(text=f"🔑 Token: MISSING ({token_filename})", text_color="#f87171", fg_color="#7f1d1d")
+            self.lbl_token_status.configure(text="🔑 Token: MISSING (token.dpapi)", text_color="#f87171", fg_color="#7f1d1d")
 
         key_filename = c.get("PUBLIC_KEY_FILE", "backup_public.pem")
-        pub_key_path = os.path.join(BASE_DIR, key_filename)
-        if os.path.exists(pub_key_path):
+        pub_found = False
+        for s_dir in [DATA_DIR, BASE_DIR]:
+            candidate = os.path.join(s_dir, key_filename)
+            if os.path.exists(candidate):
+                pub_found = True
+                break
+        if pub_found:
             self.lbl_key_status.configure(text=f"🔒 Public Key: Present ({key_filename})", text_color="#34d399", fg_color="#064e3b")
         else:
             self.lbl_key_status.configure(text=f"🔒 Public Key: MISSING ({key_filename})", text_color="#f87171", fg_color="#7f1d1d")
+
+        if hasattr(self, "_validate_cloud_inputs"):
+            self._validate_cloud_inputs()
 
         sched_days = c.get("SCHEDULE_DAYS")
         if not sched_days:
@@ -1096,6 +1142,136 @@ class BackupAutomationApp(ctk.CTk):
 
     def _open_google_sheet(self):
         self._open_master_sheet()
+
+    def _validate_cloud_inputs(self, event=None):
+        """Live format validation for Customer Google Drive and Master Google Sheet."""
+        if hasattr(self, "entry_google_drive") and hasattr(self, "lbl_drive_val_status"):
+            raw_drive = self.entry_google_drive.get().strip()
+            drive_id = extract_google_id(raw_drive)
+            if not raw_drive:
+                self.lbl_drive_val_status.configure(
+                    text="● Required: Customer Google Drive folder for backup storage",
+                    text_color="#9ca3af"
+                )
+            elif len(drive_id) >= 20:
+                self.lbl_drive_val_status.configure(
+                    text=f"✓ Valid Drive Folder ID: {drive_id[:16]}...",
+                    text_color="#34d399"
+                )
+            else:
+                self.lbl_drive_val_status.configure(
+                    text="⚠️ Incomplete Drive ID (must be a valid Drive Folder ID or URL)",
+                    text_color="#f59e0b"
+                )
+
+        if hasattr(self, "entry_google_sheet") and hasattr(self, "lbl_sheet_val_status"):
+            raw_sheet = self.entry_google_sheet.get().strip()
+            sheet_id = extract_google_id(raw_sheet)
+            if not raw_sheet:
+                self.lbl_sheet_val_status.configure(
+                    text="● Required: Customer Master Google Sheet for 3-module monitoring",
+                    text_color="#9ca3af"
+                )
+            elif len(sheet_id) >= 25:
+                self.lbl_sheet_val_status.configure(
+                    text=f"✓ Valid Sheet ID: {sheet_id[:16]}...",
+                    text_color="#34d399"
+                )
+            else:
+                self.lbl_sheet_val_status.configure(
+                    text="⚠️ Incomplete Sheet ID (must be a valid Google Spreadsheet ID or URL)",
+                    text_color="#f59e0b"
+                )
+
+    def _open_import_token_dialog(self):
+        """Opens modal dialog to securely import and encrypt machine authentication token."""
+        dlg = ctk.CTkToplevel(self)
+        dlg.title("Import Machine Broker Token")
+        dlg.geometry("520, 290")
+        dlg.resizable(False, False)
+        dlg.transient(self)
+        dlg.grab_set()
+
+        ctk.CTkLabel(
+            dlg,
+            text="Import PC Authentication Token",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color="#ffffff"
+        ).pack(anchor="w", padx=20, pady=(15, 4))
+
+        ctk.CTkLabel(
+            dlg,
+            text="Paste your <pc_id>.<secret> token or select a raw_token.txt file provided by your administrator. It will be encrypted into machine-scoped Windows DPAPI storage.",
+            font=ctk.CTkFont(size=11),
+            text_color="#9ca3af",
+            wraplength=480,
+            justify="left"
+        ).pack(anchor="w", padx=20, pady=(0, 10))
+
+        token_var = tk.StringVar()
+        entry_tok = ctk.CTkEntry(
+            dlg,
+            textvariable=token_var,
+            placeholder_text="e.g. pc-client-01.a9b8c7d6e5f4...",
+            font=ctk.CTkFont(family="Consolas", size=11),
+            height=34
+        )
+        entry_tok.pack(fill="x", padx=20, pady=(0, 10))
+
+        def _browse_raw_token():
+            chosen = filedialog.askopenfilename(
+                title="Select raw_token.txt",
+                filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+                parent=dlg
+            )
+            if chosen and os.path.exists(chosen):
+                try:
+                    with open(chosen, "r", encoding="utf-8") as rf:
+                        t = rf.read().strip()
+                        if t:
+                            token_var.set(t)
+                except Exception as ex:
+                    messagebox.showerror("Error Reading File", str(ex), parent=dlg)
+
+        btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
+        btn_row.pack(fill="x", padx=20, pady=(0, 15))
+
+        ctk.CTkButton(
+            btn_row,
+            text="📁 Browse raw_token.txt...",
+            font=ctk.CTkFont(size=11),
+            fg_color="#374151",
+            hover_color="#4b5563",
+            command=_browse_raw_token
+        ).pack(side="left")
+
+        def _do_save():
+            val = token_var.get().strip()
+            if not val or "." not in val:
+                messagebox.showerror("Invalid Token", "Please enter a valid token in the format '<pc_id>.<secret>'.", parent=dlg)
+                return
+            try:
+                from broker_client import import_and_protect_token
+                for dest_dir in [DATA_DIR, BASE_DIR]:
+                    os.makedirs(dest_dir, exist_ok=True)
+                    target_file = os.path.join(dest_dir, "token.dpapi")
+                    import_and_protect_token(val, target_file)
+                self.append_log("Authentication token successfully imported and DPAPI protected.", "info")
+                self._load_config_values()
+                messagebox.showinfo("Token Saved", "Token successfully encrypted with Windows DPAPI (LocalMachine)!\nPC is now registered and authenticated.", parent=dlg)
+                dlg.destroy()
+            except Exception as ex:
+                messagebox.showerror("Import Error", f"Failed to save token: {ex}", parent=dlg)
+
+        ctk.CTkButton(
+            dlg,
+            text="🔒  Encrypt & Save Token",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color="#059669",
+            hover_color="#047857",
+            height=38,
+            command=_do_save
+        ).pack(anchor="e", padx=20)
 
     def _toggle_unlock_broker(self):
         """Controls access to the Upload Broker URL to prevent accidental tampering."""

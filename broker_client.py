@@ -8,16 +8,63 @@ CHUNK = 8 * 1024 * 1024  # must be a multiple of 256 KiB for GCS resumable uploa
 RETRYABLE = (429, 500, 502, 503, 504)
 
 
-# ---- token storage (Windows DPAPI, machine scope; plain fallback for dev) ----
+# ---- token storage (Windows DPAPI, machine scope; native crypt32.dll + fallback) ----
 CRYPTPROTECT_LOCAL_MACHINE = 0x4
+CRYPTPROTECT_UI_FORBIDDEN = 0x1
 
 
-def _dpapi():
+def _protect_dpapi_native(data_bytes):
+    """Protects data with Windows DPAPI (LocalMachine scope) using system crypt32.dll."""
+    if os.name != "nt":
+        return data_bytes
     try:
-        import win32crypt
-        return win32crypt
+        import ctypes
+        from ctypes import wintypes
+        class DATA_BLOB(ctypes.Structure):
+            _fields_ = [('cbData', wintypes.DWORD), ('pbData', ctypes.POINTER(ctypes.c_char))]
+        crypt32 = ctypes.windll.crypt32
+        kernel32 = ctypes.windll.kernel32
+        blob_in = DATA_BLOB(len(data_bytes), ctypes.cast(ctypes.c_char_p(data_bytes), ctypes.POINTER(ctypes.c_char)))
+        blob_out = DATA_BLOB()
+        flags = CRYPTPROTECT_LOCAL_MACHINE | CRYPTPROTECT_UI_FORBIDDEN
+        if not crypt32.CryptProtectData(ctypes.byref(blob_in), "BackupBrokerToken", None, None, None, flags, ctypes.byref(blob_out)):
+            raise ctypes.WinError()
+        out = ctypes.string_at(blob_out.pbData, blob_out.cbData)
+        kernel32.LocalFree(blob_out.pbData)
+        return out
     except Exception:
-        return None
+        try:
+            import win32crypt
+            return win32crypt.CryptProtectData(data_bytes, "BackupBrokerToken", None, None, None, CRYPTPROTECT_LOCAL_MACHINE)
+        except Exception:
+            return data_bytes
+
+
+def _unprotect_dpapi_native(cipher_bytes):
+    """Unprotects DPAPI data using system crypt32.dll with win32crypt and plain fallback."""
+    if os.name != "nt":
+        return cipher_bytes.decode(errors="ignore").strip()
+    try:
+        import ctypes
+        from ctypes import wintypes
+        class DATA_BLOB(ctypes.Structure):
+            _fields_ = [('cbData', wintypes.DWORD), ('pbData', ctypes.POINTER(ctypes.c_char))]
+        crypt32 = ctypes.windll.crypt32
+        kernel32 = ctypes.windll.kernel32
+        blob_in = DATA_BLOB(len(cipher_bytes), ctypes.cast(ctypes.c_char_p(cipher_bytes), ctypes.POINTER(ctypes.c_char)))
+        blob_out = DATA_BLOB()
+        flags = CRYPTPROTECT_UI_FORBIDDEN
+        if not crypt32.CryptUnprotectData(ctypes.byref(blob_in), None, None, None, None, flags, ctypes.byref(blob_out)):
+            raise ctypes.WinError()
+        out = ctypes.string_at(blob_out.pbData, blob_out.cbData)
+        kernel32.LocalFree(blob_out.pbData)
+        return out.decode("utf-8", errors="replace").strip()
+    except Exception:
+        try:
+            import win32crypt
+            return win32crypt.CryptUnprotectData(cipher_bytes, None, None, None, 0)[1].decode("utf-8", errors="replace").strip()
+        except Exception:
+            return cipher_bytes.decode("utf-8", errors="ignore").strip()
 
 
 def secure_token_file_acl(path):
@@ -32,32 +79,24 @@ def secure_token_file_acl(path):
         cur_user = os.environ.get("USERNAME", "")
         cmd = ["icacls.exe", path, "/inheritance:r", "/grant:r", "Administrators:F", "SYSTEM:F"]
         if cur_user:
-            cmd.extend([f"{cur_user}:R"])
+            cmd.extend([f"{cur_user}:M"])
         subprocess.run(cmd, capture_output=True, timeout=10)
     except Exception:
         pass
 
 
 def save_token(path, token):
-    w = _dpapi()
-    data = token.encode()
-    if w:
-        data = w.CryptProtectData(data, "BackupBrokerToken", None, None, None, CRYPTPROTECT_LOCAL_MACHINE)
+    data_bytes = token.encode("utf-8") if isinstance(token, str) else token
+    encrypted = _protect_dpapi_native(data_bytes)
     with open(path, "wb") as f:
-        f.write(data)
+        f.write(encrypted)
     secure_token_file_acl(path)
 
 
 def load_token(path):
     with open(path, "rb") as f:
         data = f.read()
-    w = _dpapi()
-    if w:
-        try:
-            return w.CryptUnprotectData(data, None, None, None, 0)[1].decode().strip()
-        except Exception:
-            pass
-    return data.decode().strip()
+    return _unprotect_dpapi_native(data)
 
 
 def validate_broker_url(url):

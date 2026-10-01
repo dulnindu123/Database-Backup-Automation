@@ -104,20 +104,26 @@ def broker_ready(config, base_dir=None):
     token_file = config.get("BROKER_TOKEN_FILE", "token.dpapi")
     token_path = token_file if os.path.isabs(token_file) else os.path.join(b_dir, token_file)
     if not os.path.exists(token_path):
-        data_dir = globals().get("DATA_DIR", b_dir)
-        alt_path = os.path.join(data_dir, os.path.basename(token_file))
-        if os.path.exists(alt_path):
-            token_path = alt_path
+        if base_dir is None:
+            data_dir = globals().get("DATA_DIR", b_dir)
+            alt_path = os.path.join(data_dir, os.path.basename(token_file))
+            if os.path.exists(alt_path):
+                token_path = alt_path
+            else:
+                return False, f"{os.path.basename(token_file)} missing (provision this PC's token)"
         else:
             return False, f"{os.path.basename(token_file)} missing (provision this PC's token)"
 
     pub_file = config.get("PUBLIC_KEY_FILE", "backup_public.pem")
     pub_path = pub_file if os.path.isabs(pub_file) else os.path.join(b_dir, pub_file)
     if not os.path.exists(pub_path):
-        data_dir = globals().get("DATA_DIR", b_dir)
-        alt_pub = os.path.join(data_dir, os.path.basename(pub_file))
-        if os.path.exists(alt_pub):
-            pub_path = alt_pub
+        if base_dir is None:
+            data_dir = globals().get("DATA_DIR", b_dir)
+            alt_pub = os.path.join(data_dir, os.path.basename(pub_file))
+            if os.path.exists(alt_pub):
+                pub_path = alt_pub
+            else:
+                return False, f"{os.path.basename(pub_file)} missing (encryption public key)"
         else:
             return False, f"{os.path.basename(pub_file)} missing (encryption public key)"
 
@@ -125,9 +131,12 @@ def broker_ready(config, base_dir=None):
         escrow_file = config.get("ESCROW_KEY_FILE", "escrow_public.pem")
         escrow_path = escrow_file if os.path.isabs(escrow_file) else os.path.join(b_dir, escrow_file)
         if not os.path.exists(escrow_path):
-            data_dir = globals().get("DATA_DIR", b_dir)
-            alt_escrow = os.path.join(data_dir, os.path.basename(escrow_file))
-            if not os.path.exists(alt_escrow):
+            if base_dir is None:
+                data_dir = globals().get("DATA_DIR", b_dir)
+                alt_escrow = os.path.join(data_dir, os.path.basename(escrow_file))
+                if not os.path.exists(alt_escrow):
+                    return False, f"{os.path.basename(escrow_file)} missing (escrow key required unless ALLOW_NO_ESCROW=true)"
+            else:
                 return False, f"{os.path.basename(escrow_file)} missing (escrow key required unless ALLOW_NO_ESCROW=true)"
 
     return True, ""
@@ -604,16 +613,37 @@ def test_broker_connection(config, log_cb=None):
     }
     broker_url = (config.get("BROKER_URL") or "").rstrip("/")
     if not broker_url:
-        results["errors"].append("BROKER_URL is not configured in settings.")
+        results["errors"].append("BROKER_URL is not configured. Please enter your Cloud Run endpoint in Settings.")
         emit_log("Broker connection test failed: BROKER_URL missing.", "error", log_cb)
         return results
 
-    token_file = config.get("BROKER_TOKEN_FILE", "broker_token.dat")
-    token_path = os.path.join(BASE_DIR, token_file)
-    if not os.path.exists(token_path):
-        results["errors"].append(f"Broker token file ({token_file}) missing on this PC.")
-        emit_log(f"Broker connection test failed: {token_file} missing.", "error", log_cb)
+    token_file = config.get("BROKER_TOKEN_FILE", "token.dpapi")
+    token_path = None
+    search_dirs = [DATA_DIR, BASE_DIR]
+    search_names = [token_file, "token.dpapi", "broker_token.dat"]
+    for s_dir in search_dirs:
+        for s_name in search_names:
+            candidate = os.path.join(s_dir, s_name)
+            if os.path.exists(candidate):
+                token_path = candidate
+                break
+        if token_path:
+            break
+
+    if not token_path:
+        results["errors"].append(
+            "Authentication token (token.dpapi) missing on this PC.\n"
+            "Please click 'Import Token' in Settings to register your PC identity."
+        )
+        emit_log("Broker connection test failed: token.dpapi missing.", "error", log_cb)
         return results
+
+    # Verify public key existence as well
+    pub_file = config.get("PUBLIC_KEY_FILE", "backup_public.pem")
+    pub_found = any(os.path.exists(os.path.join(d, pub_file)) for d in [DATA_DIR, BASE_DIR])
+    if not pub_found:
+        results["errors"].append("Encryption key (backup_public.pem) missing on this PC.")
+        emit_log("Warning: backup_public.pem missing.", "warning", log_cb)
 
     try:
         from broker_client import load_token
@@ -635,7 +665,7 @@ def test_broker_connection(config, log_cb=None):
             results["pc_id"] = data.get("pc", pc_id)
             emit_log(f"Broker connection verified. PC ID: {results['pc_id']}", "info", log_cb)
         elif r.status_code == 401:
-            results["errors"].append("Broker rejected PC Token (Unauthorized/Revoked).")
+            results["errors"].append("Broker rejected PC Token (Unauthorized or Token Revoked by Admin).")
             emit_log("Broker rejected token.", "error", log_cb)
         else:
             results["errors"].append(f"Broker returned HTTP {r.status_code}: {r.text[:100]}")
