@@ -133,7 +133,7 @@ class BackupAutomationApp(ctk.CTk):
 
         self.subtitle_label = ctk.CTkLabel(
             header_title_frame,
-            text="Automated SQL Server Backup to Google Drive & Sheets Sync",
+            text="Automated SQL Server Backup with Zero-Trust Cloud Storage & Monitoring",
             font=ctk.CTkFont(size=12),
             text_color="#9ca3af"
         )
