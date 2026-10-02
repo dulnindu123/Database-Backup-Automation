@@ -177,6 +177,9 @@ class InstallerApp(ctk.CTk):
                         c = json.load(f)
                         b_url = c.get("BROKER_URL", "").strip()
                         if b_url and (b_url.startswith("https://") or b_url.startswith("http://")):
+                            # Round 9 Requirement 1 & 2: Ignore forbidden mock URLs
+                            if "-mock-" in b_url.lower() or "mock-uc" in b_url.lower():
+                                continue
                             return b_url
                 except Exception:
                     pass
@@ -190,6 +193,8 @@ class InstallerApp(ctk.CTk):
                         c = json.load(f)
                         b_url = c.get("BROKER_URL", "").strip()
                         if b_url and (b_url.startswith("https://") or b_url.startswith("http://")):
+                            if "-mock-" in b_url.lower() or "mock-uc" in b_url.lower():
+                                continue
                             return b_url
                 except Exception:
                     pass
@@ -207,7 +212,7 @@ class InstallerApp(ctk.CTk):
             try:
                 with open(raw_token_p, "r", encoding="utf-8") as f:
                     t = f.read().strip()
-                    if t and "." in t:
+                    if t and "." in t and not t.startswith("acme-"):
                         return t
             except Exception:
                 pass
@@ -216,6 +221,12 @@ class InstallerApp(ctk.CTk):
         from preflight import decrypt_token_dpapi
         t_str, _ = decrypt_token_dpapi(data_dir=self.data_dir, target_dir=self.target_dir)
         if t_str:
+            # If the broker URL was absent or rejected as a mock URL, do NOT restore a stale token
+            if not self._auto_resolve_broker_url():
+                return ""
+            # If the token itself is from a mock run, do not restore it
+            if t_str.startswith("acme-"):
+                return ""
             return t_str
 
         return ""
