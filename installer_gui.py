@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import urllib.request
 import urllib.error
+import ctypes
 import tkinter as tk
 from tkinter import messagebox, filedialog
 import customtkinter as ctk
@@ -29,6 +30,36 @@ from broker_client import _protect_dpapi_native
 # Configure theme
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
+
+
+def is_admin() -> bool:
+    """Returns True if process has Administrator privileges on Windows."""
+    if not sys.platform.startswith("win"):
+        return True
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin() != 0
+    except Exception:
+        return False
+
+
+def relaunch_as_admin():
+    """Relaunches the current process with elevated UAC administrator privileges."""
+    if not sys.platform.startswith("win"):
+        return
+    try:
+        if getattr(sys, 'frozen', False):
+            executable = sys.executable
+            params = " ".join([f'"{arg}"' for arg in sys.argv[1:]])
+        else:
+            executable = sys.executable
+            params = f'"{os.path.abspath(__file__)}" ' + " ".join([f'"{arg}"' for arg in sys.argv[1:]])
+        
+        # 1 = SW_SHOWNORMAL
+        ret = ctypes.windll.shell32.ShellExecuteW(None, "runas", executable, params, None, 1)
+        if ret > 32:
+            sys.exit(0)
+    except Exception as e:
+        print(f"UAC elevation failed: {e}")
 
 
 def get_bundle_dir():
@@ -476,6 +507,17 @@ class InstallerApp(ctk.CTk):
         self.update()
 
         try:
+            if sys.platform.startswith("win") and not is_admin():
+                messagebox.showerror(
+                    "Administrator Privileges Required",
+                    f"Installation requires Administrator privileges to write to:\n{self.target_dir}\n\n"
+                    "Please right-click Setup_DatabaseBackup.exe and select 'Run as Administrator'."
+                )
+                self.btn_install.configure(state="normal", text="Install Now")
+                self.btn_cancel.configure(state="normal")
+                self.entry_dir.configure(state="normal")
+                return
+
             if not os.path.exists(self.source_app_dir):
                 messagebox.showerror("Error", f"Source application files not found:\n{self.source_app_dir}")
                 self.destroy()
@@ -660,6 +702,15 @@ class InstallerApp(ctk.CTk):
 
             self.destroy()
 
+        except PermissionError as pe:
+            messagebox.showerror(
+                "Access Denied (Administrator Rights Required)",
+                f"Cannot write to '{self.target_dir}':\n\n{pe}\n\n"
+                "Please right-click Setup_DatabaseBackup.exe and select 'Run as Administrator'."
+            )
+            self.btn_install.configure(state="normal", text="Install Now")
+            self.btn_cancel.configure(state="normal")
+            self.entry_dir.configure(state="normal")
         except Exception as e:
             messagebox.showerror("Installation Failed", str(e))
             self.btn_install.configure(state="normal", text="Install Now")
@@ -668,6 +719,22 @@ class InstallerApp(ctk.CTk):
 
 
 def main():
+    if sys.platform.startswith("win") and not is_admin():
+        relaunch_as_admin()
+        # If user declines UAC prompt:
+        try:
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showerror(
+                "Administrator Rights Required",
+                "Administrator privileges are required to install Database Cloud Backup into 'C:\\Program Files'.\n\n"
+                "Please right-click Setup_DatabaseBackup.exe and select 'Run as Administrator'."
+            )
+            root.destroy()
+        except Exception:
+            pass
+        sys.exit(1)
+
     app = InstallerApp()
     app.mainloop()
 

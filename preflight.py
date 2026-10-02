@@ -450,6 +450,19 @@ def decrypt_token_dpapi(data_dir: Optional[str] = None, target_dir: Optional[str
 
         crypt32 = ctypes.windll.crypt32
         kernel32 = ctypes.windll.kernel32
+        kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+        kernel32.LocalFree.restype = ctypes.c_void_p
+
+        crypt32.CryptUnprotectData.argtypes = [
+            ctypes.POINTER(DATA_BLOB),
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_ulong,
+            ctypes.POINTER(DATA_BLOB)
+        ]
+        crypt32.CryptUnprotectData.restype = ctypes.c_int
 
         in_blob = DATA_BLOB(len(encrypted_bytes), ctypes.cast(ctypes.create_string_buffer(encrypted_bytes), ctypes.c_void_p))
         out_blob = DATA_BLOB()
@@ -825,60 +838,80 @@ def validate_folder_permissions(target_dir: str, data_dir: str = PROGRAM_DATA_DI
 # 6. SCHEDULED TASK VALIDATION (Requirement B & D)
 # =============================================================================
 
-def validate_scheduled_task(task_name: str = DEFAULT_TASK_NAME, expected_exe: Optional[str] = None) -> PreflightCheckResult:
+def validate_scheduled_task(task_name: Optional[str] = None, expected_exe: Optional[str] = None) -> PreflightCheckResult:
     """
     Queries Windows Task Scheduler to verify:
-    - Task exists
+    - Task exists (checks candidates: task_name, DEFAULT_TASK_NAME, system service)
     - Action points to the real installed executable
     - Queries next run time
     """
     import subprocess
-    cmd = ["schtasks.exe", "/query", "/tn", task_name, "/fo", "list", "/v"]
-    try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-        if res.returncode != 0:
-            return PreflightCheckResult(
-                name="Task Scheduler Verification",
-                passed=False,
-                message=f"Scheduled task '{task_name}' is not registered in Windows Task Scheduler",
-                code="ERR_TASK_NOT_REGISTERED"
-            )
+    candidates = []
+    if task_name:
+        candidates.append(task_name)
+    candidates.extend([
+        DEFAULT_TASK_NAME,
+        "Database Cloud Backup",
+        "Database Cloud Backup (System Service)",
+        r"\DatabaseBackupApp\DatabaseBackupAutoTask",
+    ])
+    seen = set()
+    candidate_list = []
+    for c in candidates:
+        if c and c not in seen:
+            seen.add(c)
+            candidate_list.append(c)
 
-        output = res.stdout
-        # Extract Task Action
-        task_action = ""
-        next_run = "Unknown"
-        for line in output.splitlines():
-            line_s = line.strip()
-            if line_s.lower().startswith("task to run:") or line_s.lower().startswith("action:"):
-                task_action = line_s.split(":", 1)[1].strip()
-            elif line_s.lower().startswith("next run time:"):
-                next_run = line_s.split(":", 1)[1].strip()
+    last_error = None
+    for cand in candidate_list:
+        cmd = ["schtasks.exe", "/query", "/tn", cand, "/fo", "list", "/v"]
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            if res.returncode == 0:
+                output = res.stdout
+                task_action = ""
+                next_run = "Unknown"
+                for line in output.splitlines():
+                    line_s = line.strip()
+                    if line_s.lower().startswith("task to run:") or line_s.lower().startswith("action:"):
+                        task_action = line_s.split(":", 1)[1].strip()
+                    elif line_s.lower().startswith("next run time:"):
+                        next_run = line_s.split(":", 1)[1].strip()
 
-        if expected_exe:
-            norm_exp = os.path.normpath(expected_exe).lower()
-            if norm_exp not in task_action.lower():
+                if expected_exe:
+                    norm_exp = os.path.normpath(expected_exe).lower()
+                    if norm_exp not in task_action.lower():
+                        return PreflightCheckResult(
+                            name="Task Scheduler Verification",
+                            passed=False,
+                            message=f"Task action points to unexpected path: '{task_action}' (Expected: '{expected_exe}')",
+                            code="ERR_TASK_EXE_MISMATCH"
+                        )
+
                 return PreflightCheckResult(
                     name="Task Scheduler Verification",
-                    passed=False,
-                    message=f"Task action points to unexpected path: '{task_action}' (Expected: '{expected_exe}')",
-                    code="ERR_TASK_EXE_MISMATCH"
+                    passed=True,
+                    message=f"Task active ('{cand}'): Next Run '{next_run}', Action: '{task_action}'",
+                    code="OK"
                 )
+        except Exception as e:
+            last_error = e
 
-        return PreflightCheckResult(
-            name="Task Scheduler Verification",
-            passed=True,
-            message=f"Task active: Next Run '{next_run}', Action: '{task_action}'",
-            code="OK"
-        )
-    except Exception as e:
+    if last_error:
         return PreflightCheckResult(
             name="Task Scheduler Verification",
             passed=False,
-            message=f"Failed to query Task Scheduler: {e}",
+            message=f"Failed to query Task Scheduler: {last_error}",
             code="ERR_TASK_QUERY_FAIL",
-            error_detail=str(e)
+            error_detail=str(last_error)
         )
+
+    return PreflightCheckResult(
+        name="Task Scheduler Verification",
+        passed=False,
+        message=f"Scheduled task '{task_name or DEFAULT_TASK_NAME}' is not registered in Windows Task Scheduler",
+        code="ERR_TASK_NOT_REGISTERED"
+    )
 
 
 # =============================================================================

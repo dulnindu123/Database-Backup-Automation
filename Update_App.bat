@@ -12,7 +12,7 @@ echo.
 echo This tool safely updates Database Cloud Backup on client
 echo servers and workstations to the Zero-Trust Architecture.
 echo.
-echo ARCHITECTURE CHANGES IN v4.0.0:
+echo ARCHITECTURE CHANGES IN v4.1.0:
 echo   - Zero Google Credentials: All client Google keys removed.
 echo   - Hybrid DBK2 Encryption: AES-256-GCM + RSA-4096 dual key wrap (64 KiB chunks).
 echo   - Upload Broker: Presigned resumable upload sessions to retention-locked bucket.

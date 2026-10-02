@@ -51,10 +51,12 @@ if exist "%PKG_DIR%" (
     if exist "SYSTEM_ARCHITECTURE_AND_CODE_GUIDE.md" copy /y "SYSTEM_ARCHITECTURE_AND_CODE_GUIDE.md" "%PKG_DIR%\SYSTEM_ARCHITECTURE_AND_CODE_GUIDE.md" >nul
     if exist "app_icon.ico" copy /y "app_icon.ico" "%PKG_DIR%\app_icon.ico" >nul
     if exist "app_icon.png" copy /y "app_icon.png" "%PKG_DIR%\app_icon.png" >nul
+    if exist "docs_assets" robocopy.exe "docs_assets" "%PKG_DIR%\docs_assets" /MIR /IS /IT >nul
+    if exist "images" robocopy.exe "images" "%PKG_DIR%\images" /MIR /IS /IT >nul
     if exist "Tools" robocopy.exe "Tools" "%PKG_DIR%\Tools" /MIR /IS /IT >nul
     echo       [OK] Synchronized dist\DatabaseBackupApp to %PKG_DIR%\AppFiles
     echo       [OK] Synchronized Setup_DatabaseBackup.exe to %PKG_DIR%
-    echo       [OK] Synchronized scripts, docs, and tools to %PKG_DIR%
+    echo       [OK] Synchronized scripts, docs, assets, and tools to %PKG_DIR%
 )
 
 :: Also update local test directory

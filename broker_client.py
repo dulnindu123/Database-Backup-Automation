@@ -24,6 +24,8 @@ def _protect_dpapi_native(data_bytes):
             _fields_ = [('cbData', wintypes.DWORD), ('pbData', ctypes.POINTER(ctypes.c_char))]
         crypt32 = ctypes.windll.crypt32
         kernel32 = ctypes.windll.kernel32
+        kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+        kernel32.LocalFree.restype = ctypes.c_void_p
         blob_in = DATA_BLOB(len(data_bytes), ctypes.cast(ctypes.c_char_p(data_bytes), ctypes.POINTER(ctypes.c_char)))
         blob_out = DATA_BLOB()
         flags = CRYPTPROTECT_LOCAL_MACHINE | CRYPTPROTECT_UI_FORBIDDEN
@@ -51,6 +53,8 @@ def _unprotect_dpapi_native(cipher_bytes):
             _fields_ = [('cbData', wintypes.DWORD), ('pbData', ctypes.POINTER(ctypes.c_char))]
         crypt32 = ctypes.windll.crypt32
         kernel32 = ctypes.windll.kernel32
+        kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+        kernel32.LocalFree.restype = ctypes.c_void_p
         blob_in = DATA_BLOB(len(cipher_bytes), ctypes.cast(ctypes.c_char_p(cipher_bytes), ctypes.POINTER(ctypes.c_char)))
         blob_out = DATA_BLOB()
         flags = CRYPTPROTECT_UI_FORBIDDEN
