@@ -99,8 +99,14 @@ BackupAutomation/
 ├── escrow_public.pem          # Production Escrow Public Key (RSA-4096 SubjectPublicKeyInfo)
 ├── Uninstall.bat              # Detached uninstaller script (Purges tasks, DPAPI tokens, and files)
 │
-├── admin/                     # Administrative Provisioning Tools
-│   ├── build_customer_package.py # 1-Command Automated Customer Installer & ZIP Generator
+├── admin/                     # Administrative Provisioning & Fleet Management Tools
+│   ├── manifest_signer.py     # Ed25519 Cryptographic Manifest Signer & Verifier
+│   ├── onboard_customer.py    # Zero-Trust Customer Onboarding Engine (Cloud Run, IAM condition, Signed Package)
+│   ├── release_all.py         # Fleet Release Engine (Rolling container deployment across all customer services)
+│   ├── offboard_customer.py   # Complete Customer Teardown (Revokes tokens, deletes Cloud Run, SA, IAM, registry)
+│   ├── setup_log_alerts.py    # Per-Service Cloud Logging Metrics & Cloud Monitoring Alert Policy Generator
+│   ├── customer_registry.json # Admin-Only Central Registry of Provisioned Customer Services and Metadata
+│   ├── build_customer_package.py # Automated Customer Package Builder
 │   ├── provision_pc.py        # Generates per-PC cryptographically random tokens and Secret Manager JSON
 │   └── manage_tokens.py       # Lists, inspects, and revokes PC tokens in Secret Manager
 │
@@ -108,9 +114,9 @@ BackupAutomation/
 │   ├── generate_keys.py       # Generates Primary & Escrow RSA-4096 key pairs with PKCS#8 password protection
 │   └── decrypt_backup.py      # Standalone duplicate of the offline DBK2 restoration utility
 │
-├── broker/                    # Cloud Run Upload Broker Microservice
+├── broker/                    # Cloud Run Upload Broker Microservice (Per-Customer Isolated)
 │   ├── Dockerfile             # Container build specification (Python 3.11-slim, Gunicorn worker)
-│   ├── main.py                # Upload Broker Flask Application (POST /request-upload, POST /verify)
+│   ├── main.py                # Upload Broker Flask App (Customer binding, strict DB regex, prefix isolation)
 │   └── requirements.txt       # Broker dependencies (Flask, google-cloud-storage, gunicorn)
 │
 ├── telemetry_broker/          # Cloud Run Telemetry Broker Microservice
@@ -118,18 +124,25 @@ BackupAutomation/
 │   ├── main.py                # Telemetry Broker Flask Application (POST /report-storage, 8 KB cap, RAW append)
 │   └── requirements.txt       # Telemetry dependencies (Flask, google-api-python-client, google-cloud-firestore)
 │
+├── preflight.py               # Shared Preflight Diagnostics (Signed manifest check, URL security, DPAPI, SQL)
+├── audit_build.py             # Strict Allowlist & Zero-Stray Package Security Auditor
+├── version.py                 # Application Versioning & Embedded Admin Ed25519 Public Key
 ├── deploy.sh                  # Infrastructure-as-Code bash deployment script for Google Cloud Platform
 ├── build_executable.bat       # Production PyInstaller build script with automated secret guard check
 ├── DatabaseBackupApp.spec     # PyInstaller bundle specification for main desktop application
 ├── Setup_DatabaseBackup.spec  # PyInstaller bundle specification for installer wizard
 │
 ├── tests/                     # Automated Test Suite (Pytest / Unittest)
-│   ├── test_crypto.py         # DBK2 format, minimum key size, dual keys, and tamper resistance tests
-│   ├── test_upload_broker.py  # Upload broker authentication, slot sequence, and 409 conflict tests
-│   ├── test_broker_client.py  # Client URL validation, HTTP rejection, token wipe, and retry tests
-│   ├── test_backup_core.py    # UTF-8 BOM config parsing, broker readiness, and DB name sanitization tests
-│   ├── test_security_audit.py # Static AST scan for zero shell=True, secret leakage, and IAM permissions
-│   └── test_telemetry_broker.py # Telemetry payload limits, schema validation, rate limits, and formula defense
+│   ├── test_customer_onboarding.py # Tests multi-tenant URLs, cross-tenant 401s, tampered manifests, offboarding
+│   ├── test_clean_vm_install.py    # Tests clean VM zero-typing install, permission isolation, and preflight pass
+│   ├── test_failure_matrix.py      # Comprehensive 12-failure simulation test suite
+│   ├── test_stray_files_and_allowlist.py # Strict package allowlist & zero loose .txt enforcement
+│   ├── test_upload_broker.py       # Upload broker auth, customer binding, strict DB regex, 409 conflict
+│   ├── test_broker_client.py       # Client URL validation, HTTP rejection, token wipe, and retry tests
+│   ├── test_crypto.py              # DBK2 format, minimum key size, dual keys, and tamper resistance tests
+│   ├── test_backup_core.py         # UTF-8 BOM config parsing, broker readiness, and DB name sanitization tests
+│   ├── test_security_audit.py      # Static AST scan for zero shell=True, secret leakage, and IAM permissions
+│   └── test_telemetry_broker.py    # Telemetry payload limits, schema validation, rate limits, and formula defense
 │
 ├── README.md                  # Executive overview, features, and quick-start documentation
 ├── SETUP.md                   # Complete cloud deployment and on-premise installation guide
@@ -188,20 +201,24 @@ flowchart TD
 | :--- | :--- | :--- |
 | **Ransomware on Client PC** | Malware compromises Windows machine, gains local administrator privileges, and attempts to wipe cloud backups. | **Mitigated.** Client machine contains zero cloud credentials. The only stored token allows creating a new upload in a server-assigned slot. The broker has no list, read, or delete endpoints. GCS retention lock prevents object overwrite. |
 | **Token Theft & Slot-Burning** | Attacker extracts `token.dpapi` from Windows memory or disk and attempts to exhaust daily upload slots by uploading junk. | **Contained.** Attacker cannot view existing backups. Upload slots are capped at 3 per database per day (`{day}_1`, `_2`, `_3`). The client and broker log HTTP 409 events and issue a critical security alert upon slot exhaustion. Admin immediately revokes token in Secret Manager. |
+| **Cross-Tenant Token Replay** | Attacker from Customer A captures a valid token and attempts to authenticate against Customer B's dedicated Upload Broker. | **Mitigated.** Every Upload Broker microservice enforces `CUSTOMER_SLUG`. During authentication, the broker verifies `pc_id.startswith(f"{CUSTOMER_SLUG}-")`. Cross-tenant tokens are rejected with HTTP 401 Unauthorized, and a security alert event (`customer_mismatch`) is immediately logged. |
+| **Package & Endpoint Tampering** | Attacker modifies `config.json` or `broker_url` in the distribution package to redirect encrypted archives to an adversary endpoint. | **Mitigated.** Installation packages are sealed with an Ed25519 digital signature (`manifest.json` + `manifest.sig`). The installer verifies the signature using an embedded public key (`EMBEDDED_ADMIN_PUBLIC_KEY_PEM`) before writing files. Any modified URL or payload triggers `ERR_MANIFEST_TAMPERED` and halts installation. |
 | **Man-in-the-Middle (MITM)** | Attacker intercepts network traffic between customer server and Google Cloud. | **Mitigated.** `broker_client.py` strictly validates HTTPS. Remote plain HTTP is unconditionally rejected. Local HTTP is rejected in production builds and permitted only with explicit `ALLOW_INSECURE_BROKER=true`. All communications use TLS 1.3 / 1.2 with validated certificates. |
-| **Cloud Broker Compromise** | An attacker compromises the Cloud Run Upload Broker container. | **Contained.** The Upload Broker's service account possesses **strictly** `roles/storage.objectCreator` on the bucket. It cannot read existing backups, cannot list bucket contents, and cannot delete objects. Even a compromised broker cannot exfiltrate or destroy historical archives. |
+| **Cloud Broker Compromise** | An attacker compromises a customer's Cloud Run Upload Broker container. | **Contained.** The service account is partitioned per customer (`broker-<slug>@...`) with an IAM condition limiting `roles/storage.objectCreator` strictly to `projects/_/buckets/<bucket>/objects/<slug>/`. Even if a single customer's broker container is breached, the attacker cannot read, write, or list any other customer's prefix. |
 | **Cryptographic Tampering** | Attacker or corrupted transmission alters bytes in the uploaded `.dbk2` archive. | **Mitigated.** DBK2 uses AES-256-GCM authenticated encryption. Every 1 MiB chunk includes an authentication tag verifying chunk ciphertext, chunk counter, terminal flag, and SHA-256 of the complete header. Any alteration causes decryption to fail immediately. Zero partial output is left on disk. |
 | **Formula Injection (CSV/Sheet Injection)** | Malicious host or drive name containing `=cmd|' /C calc'!A1` or `@SUM(...)` is sent in telemetry to execute code in administrator spreadsheets. | **Mitigated.** `telemetry_broker/main.py` enforces regex validation (`^[A-Z]:\\?$`) and calls `spreadsheets().values().append(valueInputOption='RAW')`. Google Sheets stores all data as literal text strings, completely disabling formula evaluation. |
 
-### 3.3 Strict Least-Privilege IAM Bindings
+### 3.3 Strict Least-Privilege IAM Bindings & Prefix Conditions
 
-To prevent privilege escalation, Google Cloud IAM roles are strictly partitioned across separate service accounts:
+To prevent cross-tenant privilege escalation and isolate storage access, Google Cloud IAM roles are strictly partitioned per customer:
 
 ```text
-Project IAM Configuration:
-├── upload-broker-sa@$PROJECT.iam.gserviceaccount.com
-│   ├── gs://${BUCKET_NAME}               ──> roles/storage.objectCreator (Write-Only)
-│   └── projects/.../secrets/pc-tokens    ──> roles/secretmanager.secretAccessor (Read Token Hashes)
+Project IAM Configuration (Per-Customer Isolated Architecture):
+├── broker-<slug>@$PROJECT.iam.gserviceaccount.com (Dedicated Service Account per Customer)
+│   ├── gs://${BUCKET_NAME}               ──> roles/storage.objectCreator
+│   │                                         CONDITION: resource.type == "storage.googleapis.com/Object" &&
+│   │                                                    resource.name.startsWith("projects/_/buckets/${BUCKET_NAME}/objects/${CUSTOMER_SLUG}/")
+│   └── projects/.../secrets/broker-tokens-<slug> ──> roles/secretmanager.secretAccessor (Read Token Hashes)
 │
 └── telemetry-broker-sa@$PROJECT.iam.gserviceaccount.com
     ├── Firestore Database                ──> roles/datastore.user (Rate Limiting State)
@@ -210,7 +227,7 @@ Project IAM Configuration:
 ```
 
 > [!IMPORTANT]
-> `roles/storage.objectAdmin`, `roles/storage.admin`, and `roles/editor` are **STRICTLY FORBIDDEN** on the Upload Broker service account. `objectCreator` provides the atomic permission required to initialize resumable uploads without permitting read, list, overwrite, or delete actions.
+> `roles/storage.objectAdmin`, `roles/storage.admin`, and `roles/editor` are **STRICTLY FORBIDDEN** on the Upload Broker service account. `objectCreator` provides the atomic permission required to initialize resumable uploads without permitting read, list, overwrite, or delete actions. Furthermore, the IAM CEL condition restricts writes strictly to the customer's dedicated prefix.
 
 ### 3.4 WORM Storage Retention Policies & Bucket Locking
 
@@ -453,22 +470,27 @@ Key Functions:
     └── Never transmits Sheet IDs or tab names (fully abstracted by broker).
 ```
 
-### 5.5 `broker/main.py` — The Cloud Run Upload Broker
+### 5.5 `broker/main.py` — The Cloud Run Upload Broker (Per-Customer Dedicated)
 
-A lightweight Flask microservice deployed on Cloud Run with service account identity `upload-broker@$PROJECT.iam.gserviceaccount.com`.
+A lightweight Flask microservice deployed on Cloud Run with a dedicated per-customer service account identity `broker-<slug>@$PROJECT.iam.gserviceaccount.com`.
 
 ```text
 Endpoints & Logic:
+├── Authentication & Tenant Isolation:
+│   ├── Enforces Bearer <pc_id>.<secret> format against mounted Secret Manager tokens.
+│   ├── Verifies customer binding: pc_id.startswith(f"{CUSTOMER_SLUG}-").
+│   │   └── Cross-tenant tokens rejected with HTTP 401 (Audits "customer_mismatch").
+│   └── Validates token hash via hmac.compare_digest(sha256(secret), stored_hash).
+│
 ├── POST /request-upload:
-│   ├── Authenticates Bearer <pc_id>.<secret> against mounted Secret Manager tokens.
-│   ├── Validates database name against ALLOWED_DBS environment whitelist.
+│   ├── Strict database identifier validation: regex ^[A-Za-z0-9_$-]{1,128}$ (No "all" wildcard).
 │   ├── Validates requested file size: 0 < size <= MAX_BYTES.
 │   ├── Validates sequence slot: seq in (1, 2, 3).
-│   ├── Constructs object name: backups/{pc_id}/{db_name}/{YYYYMMDD}_{seq}.dbk2.
+│   ├── Constructs server-determined object name: {CUSTOMER_SLUG}/{pc_id}/{db_name}/{YYYYMMDD}_{seq}.dbk2.
 │   ├── Calls GCS blob.create_resumable_upload_session(..., if_generation_match=0).
-│   │   ├── If generation match fails: Returns HTTP 409 Conflict.
+│   │   ├── If generation match fails: Returns HTTP 409 Conflict (slot collision).
 │   │   └── If successful: Returns HTTP 200 with session_uri and object name.
-│   └── Emits structured JSON audit log to Cloud Logging.
+│   └── Emits structured JSON audit log to Cloud Logging ("upload_granted").
 │
 ├── POST /verify:
 │   └── Non-consuming endpoint allowing clients to test token validity without starting an upload.
@@ -618,32 +640,69 @@ A comprehensive server infrastructure monitoring console that prevents server cr
    - Dynamic interactive cards generated for each discovered volume (e.g., `C: [Windows]`, `D: [Data]`, `Z: [Shared/Network]`).
    - Displays total capacity, used capacity, available free space (GB), percent utilization, and color-coded progress bars (Green for safe, Red for threshold breach).
 
-### 5.8 `installer_gui.py` — The Hardened Setup Wizard & ACL Provisioner
+### 5.8 `installer_gui.py` — The Zero-Typing Setup Wizard & Cryptographic Verifier
 
-A dedicated setup wizard providing an administrative installation experience:
-- Verifies Windows administrative privileges using `ctypes.windll.shell32.IsUserAnAdmin()`.
-- Prompts for installation directory (defaulting to `%LOCALAPPDATA%\Programs\DatabaseBackupApp`).
-- Performs real-time HTTP connectivity health checks against the Cloud Run Upload Broker (`GET /healthz`).
-- Ingests `raw_token.txt` if detected, validates syntax, and calls native Windows `CryptProtectData` (machine scope `0x4`) to seal it into `token.dpapi`, then cryptographically shreds and deletes `raw_token.txt`.
-- Deploys `backup_public.pem` and `escrow_public.pem` to `%ALLUSERSPROFILE%\DatabaseBackupApp`.
-- Hardens folder permissions via `icacls.exe`:
-  ```cmd
-  icacls "C:\ProgramData\DatabaseBackupApp" /inheritance:r /grant:r "Administrators":(OI)(CI)F "SYSTEM":(OI)(CI)F "Users":(OI)(CI)RX
-  ```
-- Creates Start Menu and Desktop shortcuts pointing to `DatabaseBackupApp.exe`.
+A dedicated setup wizard providing an automated, zero-typing installation experience:
+- **Ed25519 Signed Manifest Verification**:
+  - Automatically discovers `manifest.json` and `manifest.sig` in the installation bundle.
+  - Cryptographically verifies the digital signature against the embedded administrator public key (`EMBEDDED_ADMIN_PUBLIC_KEY_PEM`).
+  - **Tamper Resistance**: If `broker_url`, `customer_slug`, or any metadata has been modified, the wizard halts, displays a red banner (`⚠️ TAMPERED PACKAGE: ERR_MANIFEST_TAMPERED`), and disables installation.
+  - **Verified Package**: Displays green banner: `🔒 AUTHENTIC ED25519 SIGNED PACKAGE (<CUSTOMER_SLUG>) - ZERO TYPING REQUIRED`.
+- **Zero-Typing Parameter Locking**:
+  - Automatically loads `broker_url` from the verified manifest and locks the entry field (`state="disabled"`).
+  - Automatically extracts `initial_token` from the signed manifest envelope and locks the token field (`state="disabled"`).
+- **Direct DPAPI Machine Sealing**:
+  - Calls native Windows `CryptProtectData` (machine scope `0x4`) to seal `initial_token` directly into `C:\ProgramData\DatabaseBackupApp\token.dpapi`.
+  - Zero loose `.txt` files or plaintext credentials are distributed or written to disk.
+- **Permission Hardening**:
+  - Writes `%ProgramFiles%\DatabaseBackupApp\config.json`.
+  - Hardens folder permissions via `icacls.exe`:
+    ```cmd
+    icacls "C:\ProgramData\DatabaseBackupApp" /inheritance:r /grant:r "Administrators":(OI)(CI)F "SYSTEM":(OI)(CI)F "Users":(OI)(CI)RX
+    ```
+- **Shortcut & Task Registration**:
+  - Creates Start Menu and Desktop shortcuts pointing to `DatabaseBackupApp.exe`.
+  - Registers the unattended Monday 02:00 AM backup schedule in Windows Task Scheduler.
 
-### 5.9 `admin/build_customer_package.py` & `admin/provision_pc.py` — One-Command Provisioning Engine
+### 5.9 Admin Provisioning & Fleet Management Suite (`admin/`)
 
-Administrative utilities for customer token provisioning and packaging:
-- `admin/build_customer_package.py`: The master one-command automation engine:
-  1. Auto-fetches the live Cloud Run Upload Broker URL from GCP via `gcloud`.
-  2. Generates a cryptographically strong, unique machine token (`<pc_id>.<secret>`).
-  3. Registers the SHA-256 token hash in Google Secret Manager (`pc-tokens`) automatically.
-  4. Clones the master installer package into a tailored customer folder (`Client_Installation_Package_<Customer>`).
-  5. Pre-configures the Broker URL in `config.json` while leaving `GOOGLE_DRIVE_FOLDER_ID` and `GOOGLE_SHEET_ID` empty for customer entry.
-  6. Bundles `raw_token.txt` and compresses the entire package into a ready-to-deliver ZIP file.
-- `admin/provision_pc.py`: Standalone CLI tool to generate token strings and calculate SHA-256 hashes for manual provisioning.
-- `admin/manage_tokens.py`: Allows listing active PC tokens, inspecting metadata, and immediately revoking compromised tokens in Secret Manager.
+Administrative utilities for customer microservice provisioning, cryptographic signing, fleet rollout, and offboarding:
+
+1. **`admin/onboard_customer.py` — Complete Customer Provisioning Engine**:
+   - Validates customer slug format via `^[a-z0-9]{2,24}$`.
+   - Creates dedicated per-customer Google Service Account: `broker-<slug>@<project>.iam.gserviceaccount.com`.
+   - Creates Secret Manager secret: `broker-tokens-<slug>` containing SHA-256 token hash for `<slug>-pc01`.
+   - Applies IAM CEL condition on the bucket:
+     ```cel
+     resource.type == "storage.googleapis.com/Object" && resource.name.startsWith("projects/_/buckets/<bucket>/objects/<slug>/")
+     ```
+   - Deploys Cloud Run microservice `broker-<slug>` with `--min-instances=0`, `--max-instances=2`, `CUSTOMER_SLUG=<slug>`, and per-customer `MAX_BYTES`.
+   - Verifies service readiness via `/healthz` probe.
+   - Signs deployment manifest with Ed25519 workstation private key.
+   - Stages tailored, zero-typing customer package in `dist/Customer_Packages/<slug>/`.
+   - Records metadata in `admin/customer_registry.json`. **Never prints raw secrets to terminal stdout or logs.**
+
+2. **`admin/manifest_signer.py` — Ed25519 Signing Engine**:
+   - Generates and manages the administrator Ed25519 private key (`admin/keys/admin_ed25519_private.pem`), strictly kept off customer PCs.
+   - Canonicalizes manifest dictionaries (alphabetical keys, compact delimiters) and generates detached base64 signatures (`manifest.sig`).
+   - Verifies manifest envelopes against tampering.
+
+3. **`admin/release_all.py` — Fleet Rollout Engine**:
+   - Reads `admin/customer_registry.json` and iterates through all active customer services.
+   - Executes zero-downtime rolling updates: `gcloud run deploy broker-<slug> --image <image>`, preserving existing environment variables, secrets, and IAM bindings.
+   - Verifies `/healthz` on each customer broker URL and updates release timestamps.
+
+4. **`admin/offboard_customer.py` — Complete Teardown & Deprovisioning Engine**:
+   - Revokes all customer tokens by deleting Secret Manager secret `broker-tokens-<slug>`.
+   - Deletes Cloud Run service `broker-<slug>`.
+   - Removes bucket IAM policy condition binding for the service account.
+   - Deletes service account `broker-<slug>@...`.
+   - Purges customer package from `dist/Customer_Packages/<slug>/`.
+   - Removes customer from `admin/customer_registry.json`.
+
+5. **`admin/setup_log_alerts.py` — Cloud Monitoring Security Alert Generator**:
+   - Configures log-based alert metric descriptors in Cloud Logging for `customer_mismatch` and `auth_rejected` events on `broker-<slug>`.
+   - Attaches Cloud Monitoring alert policies with automated notification dispatch.
 
 ### 5.10 `offline/` — Air-Gapped Key Generation & DBK2 Recovery Tools
 

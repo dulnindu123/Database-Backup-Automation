@@ -43,39 +43,40 @@ gcloud storage buckets update gs://$BUCKET --lifecycle-file=lifecycle.json  # de
 ```
 `lifecycle.json`: `{"rule":[{"action":{"type":"Delete"},"condition":{"age":35}}]}` (lifecycle can only delete after retention has expired).
 
-## Step 3: Broker
+## Step 3: Customer Onboarding (Automated Per-Customer Broker)
+Use the automated customer onboarding engine on your administrator workstation:
+```bash
+python admin/onboard_customer.py --customer <slug> --project $PROJECT --region $REGION --bucket $BUCKET
 ```
-gcloud iam service-accounts create upload-broker
-gcloud storage buckets add-iam-policy-binding gs://$BUCKET \
-  --member=serviceAccount:upload-broker@$PROJECT.iam.gserviceaccount.com --role=roles/storage.objectCreator
+This single command automates the entire cloud and package provisioning lifecycle:
+1. Validates the customer slug (2-24 lowercase alphanumerics, e.g. `acme`).
+2. Creates dedicated service account `broker-<slug>@$PROJECT.iam.gserviceaccount.com`.
+3. Creates Secret Manager secret `broker-tokens-<slug>` with SHA-256 token hash for `<slug>-pc01`.
+4. Binds IAM-conditioned `roles/storage.objectCreator` on `gs://$BUCKET` restricted strictly to `projects/_/buckets/$BUCKET/objects/<slug>/`.
+5. Deploys dedicated Cloud Run microservice `broker-<slug>` with `--min-instances=0`, `--max-instances=2`, `CUSTOMER_SLUG=<slug>`, and per-customer `MAX_BYTES`.
+6. Probes `/healthz` on the deployed URL to verify liveness.
+7. Digitally signs `manifest.json` using the administrator Ed25519 private key (kept strictly off customer PCs).
+8. Builds the customer installation bundle in `dist/Customer_Packages/<slug>/`.
+9. Records service name, URL, and metadata in `admin/customer_registry.json`.
 
-cd admin
-python provision_pc.py --pc-id pc-office-01
-# 1. Generates 'raw_token.txt' for secure transfer to the client PC
-# 2. Prints SHA-256 hash snippet to add to pc_tokens.json
-gcloud secrets create pc-tokens --data-file=pc_tokens.json
-gcloud secrets add-iam-policy-binding pc-tokens \
-  --member=serviceAccount:upload-broker@$PROJECT.iam.gserviceaccount.com --role=roles/secretmanager.secretAccessor
+**Fleet Management & Rollouts:**
+- Roll a new container image across all provisioned customer microservices:
+  ```bash
+  python admin/release_all.py --image us-central1-docker.pkg.dev/$PROJECT/backup-broker/upload-broker:v4.2.0
+  ```
+- Offboard a customer and de-provision all cloud resources (deletes Cloud Run service, secret, service account, bucket IAM binding, package, and registry record):
+  ```bash
+  python admin/offboard_customer.py --customer <slug>
+  ```
 
-cd ../broker
-gcloud run deploy upload-broker --source . --region $REGION --allow-unauthenticated \
-  --service-account upload-broker@$PROJECT.iam.gserviceaccount.com \
-  --set-env-vars BUCKET=$BUCKET,ALLOWED_DBS=UserDB,RGT,MAX_BYTES=107374182400,TOKENS_FILE=/secrets/pc_tokens.json \
-  --set-secrets /secrets/pc_tokens.json=pc-tokens:latest --max-instances 10
-```
-`--allow-unauthenticated` is intentional: the per-PC Bearer token is the auth.
-**Revoke a PC:** delete its entry from `pc_tokens.json`, then upload the new secret version: `gcloud secrets versions add pc-tokens --data-file=pc_tokens.json`.
-Note: Revocation takes a few minutes to propagate across Cloud Run instances as the mounted secret volume refreshes.
-
-## Step 4: Token Provisioning & PC Configuration
-`config.json` add: `"BROKER_URL": "https://upload-broker-xxxx.run.app"`.
-
-**CRITICAL (DPAPI Machine Binding):**
-Windows DPAPI tokens are tied to the local machine's LSA secrets and cannot be moved between machines.
-1. Transfer `raw_token.txt` securely from the admin machine to the customer PC (e.g. encrypted admin USB, SCP/WinSCP).
-2. Place `raw_token.txt` in the installer directory next to `1_Quick_Install.bat` or `Update_App.bat`.
-3. Run the installer script. It encrypts the token locally into `broker_token.dat` using `CryptProtectData` (machine scope), and immediately overwrites and deletes `raw_token.txt`.
-4. Apply Admin-only write ACLs: `icacls "C:\Program Files\DatabaseBackupApp" /grant:r Administrators:(OI)(CI)F /grant:r Users:(OI)(CI)RX`.
+## Step 4: Customer PC Installation (Zero Typing Required)
+Deliver the tailored package from `dist/Customer_Packages/<slug>/` to the customer PC:
+1. The customer runs `Setup_DatabaseBackup.exe` as Administrator (or runs `1_Quick_Install.bat`).
+2. The installer automatically validates the Ed25519 signature on `manifest.json` against the embedded administrator public key.
+3. The customer types nothing:
+   - Unique broker URL is pre-loaded and locked (`state="disabled"`).
+   - Machine token is extracted from the signed manifest and sealed into Windows DPAPI machine storage (`token.dpapi`).
+4. If an attacker modifies the manifest or tamper with binaries, the installer detects the tampering (`ERR_MANIFEST_TAMPERED`), displays a red alert banner, and halts setup.
 
 ## Step 5: Verification & Tests (all must pass before locking)
 1. Backup runs end to end; object appears at `pc-office-01/<DB>/<date>_1.dbk2`.

@@ -16,14 +16,12 @@ The **Enterprise Database Cloud Backup Automation System (v4.1.0)** enforces a s
 
 ### Security Wall Principles
 1. **Zero Client Secrets**: Customer PCs hold **no Google service account keys, cloud credentials, or OAuth secrets**. A compromised client machine cannot read, list, overwrite, or delete backups in Google Cloud Storage.
-2. **DPAPI Machine-Scope Token Authentication**: Client PCs authenticate via a Windows DPAPI-encrypted machine token (`token.dpapi`), protected natively with Windows `CryptProtectData` (LocalMachine scope `0x4`).
-3. **DBK2 Hybrid Envelope Encryption**: SQL Server database dumps are compressed into `.zip` and encrypted into streaming `.dbk2` format using authenticated AES-256-GCM. The ephemeral 256-bit AES symmetric key is wrapped using dual 4096-bit RSA keys (Primary `backup_public.pem` + Escrow `escrow_public.pem`). All RSA private decryption keys remain strictly **offline** on administrative hardware.
-4. **Cloud Run Upload Broker Microservice**: Dedicated Cloud Run service (`upload-broker`) that validates PC tokens, validates database names and size caps, enforces at least 3 daily upload slots per database (`{day}_{seq}.dbk2`), and returns pre-signed GCS resumable upload URIs.
-5. **Customer Multi-Module Telemetry & Tracking**: Customer Master Google Sheet integrates all modules into dedicated tabs:
-   - `Backup Automation`: Logs every backup timestamp, database name, file size, SHA-256 hash, and upload status.
-   - `Server Cleanup`: Storage monitor disk usage, health status, and space reclamation events.
-   - `Performance Query`: High-load query analysis, execution bottlenecks, and indexing diagnostics.
-6. **Single Unified Persistent Log**: All 2 modules log chronologically to a single unified log file (`backup_log.txt`) stored at `C:\ProgramData\DatabaseBackupApp\backup_log.txt`. Historical logs are permanently preserved across updates.
+2. **Dedicated Cloud Run Broker Per Customer**: Each customer is provisioned with an isolated Cloud Run Upload Broker (`broker-<slug>`) and a dedicated service account limited via IAM conditions strictly to `projects/_/buckets/<bucket>/objects/<slug>/`. Cross-tenant token presentation is automatically rejected.
+3. **Ed25519 Signed Manifest & Zero-Typing Installation**: Customer packages are cryptographically signed with an administrative Ed25519 key. The installer verifies the signature against an embedded public key. If verified, the broker URL is locked and the initial token is sealed into Windows DPAPI machine storage (`token.dpapi`) with **zero typing required from the customer**.
+4. **Tamper Resistance**: If any file, endpoint URL, or manifest field is altered, the installer detects the mismatch (`ERR_MANIFEST_TAMPERED`), alerts the operator with a red warning banner, and aborts installation.
+5. **DBK2 Hybrid Envelope Encryption**: SQL Server database dumps are compressed into `.zip` and encrypted into streaming `.dbk2` format using authenticated AES-256-GCM. The ephemeral 256-bit AES symmetric key is wrapped using dual 4096-bit RSA keys (Primary `backup_public.pem` + Escrow `escrow_public.pem`). All RSA private decryption keys remain strictly **offline** on administrative hardware.
+6. **Customer Multi-Module Telemetry & Tracking**: Customer Master Google Sheet integrates all modules into dedicated tabs (`Backup Automation` | `Server Cleanup`).
+7. **Single Unified Persistent Log**: All modules log chronologically to a single unified log file (`backup_log.txt`) stored at `C:\ProgramData\DatabaseBackupApp\backup_log.txt`. Historical logs are permanently preserved across updates.
 
 ---
 
@@ -31,17 +29,19 @@ The **Enterprise Database Cloud Backup Automation System (v4.1.0)** enforces a s
 
 ```mermaid
 flowchart TD
-    subgraph ClientPC["Customer PC (Zero Google Credentials)"]
+    subgraph ClientPC["Customer PC (Zero Google Credentials & Zero Typing)"]
+        Manifest["manifest.json + manifest.sig<br/>(Ed25519 Signed Envelope)"]
         App["BackupApp / auto_backup.py"]
         Token["token.dpapi (Windows DPAPI Machine Scope)"]
         PubKey["backup_public.pem & escrow_public.pem"]
+        Manifest -->|Verified at Install| Token
         App -->|1. Local SQL Backup & AES-256 Encrypt| DBK2["Encrypted Backup (.dbk2)"]
     end
 
-    subgraph GCP["Google Cloud Platform (Admin Controlled)"]
-        UploadBroker["Upload Broker (Cloud Run)<br/>POST /request-upload<br/>roles/storage.objectCreator"]
+    subgraph GCP["Google Cloud Platform (Dedicated Per-Customer Infrastructure)"]
+        UploadBroker["Customer Upload Broker (Cloud Run)<br/>broker-<slug>.run.app<br/>roles/storage.objectCreator (<slug>/)"]
         TelemetryBroker["Telemetry Broker (Cloud Run)<br/>POST /report-storage<br/>roles/datastore.user"]
-        GCS["GCS Bucket<br/>(Retention Locked WORM)"]
+        GCS["GCS Bucket<br/>gs://backupbot-cold-archive/<slug>/<br/>(Retention Locked WORM)"]
         Sheets["Customer Master Google Sheet<br/>(Multi-Module Tabs)"]
         Drive["Customer Google Drive Folder<br/>(Direct Cloud DR Storage)"]
     end
@@ -55,28 +55,33 @@ flowchart TD
 
 ---
 
-## 🚀 3. Installation & Setup Workflows
+## 🚀 3. Installation & Setup Workflows (Zero Typing Required)
 
-### Method 1: Graphical Setup Wizard (`Setup_DatabaseBackup.exe`)
+### Method 1: Graphical Setup Wizard (`Setup_DatabaseBackup.exe`) — Recommended
 1. Run `Setup_DatabaseBackup.exe` as Administrator.
-2. **Installation Destination**: Defaults to `%LOCALAPPDATA%\Programs\DatabaseBackupApp`.
-3. **Cloud Run Broker Endpoint**:
-   - The installer displays the configured Cloud Run endpoint URL.
-   - If not pre-set, enter your organization's Cloud Run Broker URL (e.g. `https://upload-broker-xxxx.run.app`).
-   - Click `[⚡ Auto-Fetch & Test]` to verify live connectivity with the endpoint.
+2. **Automatic Manifest Verification**:
+   - The installer verifies `manifest.json` and `manifest.sig` against the embedded Ed25519 administrator public key.
+   - When verified, a green confirmation badge appears:  
+     `🔒 AUTHENTIC ED25519 SIGNED PACKAGE (<CUSTOMER_SLUG>) - ZERO TYPING REQUIRED`
+   - If tampered, a red alert banner appears (`⚠️ TAMPERED PACKAGE: ERR_MANIFEST_TAMPERED`) and installation is halted.
+3. **Pre-Configured & Locked Parameters**:
+   - **Upload Broker URL**: Pre-populated with your organization's dedicated endpoint (`https://broker-<slug>-...run.app`) and locked against accidental editing.
+   - **Machine Authentication Token**: Automatically sealed from the signed manifest into Windows DPAPI machine-scope storage (`C:\ProgramData\DatabaseBackupApp\token.dpapi`).
+   - The customer types nothing into these fields.
 4. Click `[Install Now]`. The installer:
    - Copies all binaries, dependencies, and public encryption keys (`backup_public.pem`, `escrow_public.pem`).
-   - If `raw_token.txt` is present in the installer directory, automatically encrypts it into `token.dpapi` via Windows DPAPI and securely shreds `raw_token.txt`.
+   - Writes `%ProgramFiles%\DatabaseBackupApp\config.json`.
+   - Hardens folder permissions via `icacls.exe`.
    - Registers Windows Desktop and Start Menu shortcuts.
    - Registers the unattended Monday 02:00 AM backup schedule in Windows Task Scheduler.
 
 ### Method 2: Automated Silent CLI (`1_Quick_Install.bat`)
 - Run `1_Quick_Install.bat` from an elevated Command Prompt.
-- Automatically copies files, imports `raw_token.txt` if present, sets up registry keys, and registers scheduled tasks with 0 user prompts.
+- Automatically verifies package files, seals DPAPI token, applies folder ACLs, and registers scheduled tasks with 0 user prompts.
 
 ---
 
-## ⚙️ 4. Post-Installation Configuration & Token Management
+## ⚙️ 4. Post-Installation Configuration & Verification
 
 Launch **Database Cloud Backup** and navigate to the **Settings** tab:
 
@@ -90,19 +95,14 @@ Launch **Database Cloud Backup** and navigate to the **Settings** tab:
   - The UI displays live validation: `✓ Valid Sheet ID Format`.
   - Click `[Open Sheet ->]` to verify access in your browser.
   - Automatically writes telemetry to separate module tabs:
-    `Backup Automation` | `Server Cleanup` | `Performance Query`.
+    `Backup Automation` | `Server Cleanup`.
 
-### 4.2 Zero-Trust Security Wall & Token Import
+### 4.2 Zero-Trust Security Wall & Verification
 - **Upload Broker URL**:
-  - Displays your verified Cloud Run endpoint.
-  - Locked by default (`🔒 Locked`). Click to confirm and unlock if endpoint changes are required.
-- **Token Status & Import**:
-  - If a token is active: Displays `🔑 Token: Active (<pc_id>)` in green.
-  - If missing: Displays `🔑 Token: MISSING (token.dpapi)` in red.
-  - Click `[🔑 Import Token]` to open the secure import dialog:
-    - Paste your token string (`<pc_id>.<secret>`), OR
-    - Click `[📁 Browse raw_token.txt...]` to select a token file.
-    - Click `[🔒 Encrypt & Save Token]` to immediately seal it into machine-scoped Windows DPAPI storage.
+  - Displays your verified, dedicated Cloud Run endpoint (`https://broker-<slug>-...`).
+  - Pre-configured and locked (`🔒 Locked`).
+- **Token Status**:
+  - Displays `🔑 Token: Active (<slug>-pc01)` in green.
 - **Public Encryption Key**:
   - Displays `🔒 Public Key: Present (backup_public.pem)` in green.
 - **Connection Diagnostics**:
