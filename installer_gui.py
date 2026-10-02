@@ -143,6 +143,42 @@ class InstallerApp(ctk.CTk):
         if env_url:
             return env_url
 
+        # 4. Check local customer registry or customer packages (admin/developer workstation)
+        search_roots = [
+            self.bundle_dir,
+            os.path.join(self.bundle_dir, ".."),
+            os.path.join(self.bundle_dir, "..", "BackupAutomation"),
+            os.getcwd(),
+            os.path.join(os.getcwd(), "..", "BackupAutomation"),
+        ]
+        for r in search_roots:
+            reg_p = os.path.join(r, "admin", "customer_registry.json")
+            if os.path.exists(reg_p):
+                try:
+                    with open(reg_p, "r", encoding="utf-8") as f:
+                        reg_data = json.load(f)
+                        if reg_data:
+                            for _, entry in reg_data.items():
+                                b_url = entry.get("broker_url", "").strip()
+                                if b_url:
+                                    return b_url
+                except Exception:
+                    pass
+
+            cust_pkg_base = os.path.join(r, "dist", "Customer_Packages")
+            if os.path.exists(cust_pkg_base):
+                try:
+                    for sub in os.listdir(cust_pkg_base):
+                        m_chk = os.path.join(cust_pkg_base, sub, "manifest.json")
+                        if os.path.exists(m_chk):
+                            with open(m_chk, "r", encoding="utf-8") as f:
+                                m_obj = json.load(f)
+                                b_url = m_obj.get("broker_url", "").strip()
+                                if b_url:
+                                    return b_url
+                except Exception:
+                    pass
+
         return ""
 
     def _auto_resolve_raw_token(self):
@@ -151,7 +187,33 @@ class InstallerApp(ctk.CTk):
             return self.raw_token
         from preflight import decrypt_token_dpapi
         t_str, _ = decrypt_token_dpapi(data_dir=self.data_dir, target_dir=self.target_dir)
-        return t_str or ""
+        if t_str:
+            return t_str
+
+        # Check local customer packages for initial_token in search roots
+        search_roots = [
+            self.bundle_dir,
+            os.path.join(self.bundle_dir, ".."),
+            os.path.join(self.bundle_dir, "..", "BackupAutomation"),
+            os.getcwd(),
+            os.path.join(os.getcwd(), "..", "BackupAutomation"),
+        ]
+        for r in search_roots:
+            cust_pkg_base = os.path.join(r, "dist", "Customer_Packages")
+            if os.path.exists(cust_pkg_base):
+                try:
+                    for sub in os.listdir(cust_pkg_base):
+                        m_chk = os.path.join(cust_pkg_base, sub, "manifest.json")
+                        if os.path.exists(m_chk):
+                            with open(m_chk, "r", encoding="utf-8") as f:
+                                m_obj = json.load(f)
+                                tok = m_obj.get("initial_token", "").strip()
+                                if tok:
+                                    return tok
+                except Exception:
+                    pass
+
+        return ""
 
     def _build_ui(self):
         # Header Banner
@@ -333,10 +395,32 @@ class InstallerApp(ctk.CTk):
         """Refreshes the auto-detected broker URL and tests its connectivity."""
         self.lbl_broker_status.configure(text="● Auto-detecting working broker...", text_color="#f59e0b")
         self.update()
-        detected = self._auto_resolve_broker_url()
-        if detected:
-            self.broker_url_var.set(detected)
-        self._test_broker_health()
+        detected_url = self._auto_resolve_broker_url()
+        detected_token = self._auto_resolve_raw_token()
+
+        if detected_url:
+            self.broker_url_var.set(detected_url)
+            if detected_token and not self.token_var.get().strip():
+                self.token_var.set(detected_token)
+            self._test_broker_health()
+        else:
+            current_val = self.broker_url_var.get().strip()
+            if current_val:
+                self._test_broker_health()
+            else:
+                self.lbl_broker_status.configure(
+                    text="⚠️ No broker URL found in package. Please enter URL manually.",
+                    text_color="#f59e0b"
+                )
+                messagebox.showinfo(
+                    "Auto-Fetch Broker URL",
+                    "No pre-configured Upload Broker URL was found in this folder.\n\n"
+                    "• Master Template: Client_Installation_Package is a clean, unbranded template.\n\n"
+                    "• Customer Package: To run with Zero-Typing automation (pre-filled URL and token), "
+                    "run Setup from your customer folder:\n"
+                    "  'dist/Customer_Packages/<customer_slug>/Setup_DatabaseBackup.exe'\n\n"
+                    "Alternatively, type your Cloud Run Broker URL directly into the field above."
+                )
 
     def _test_broker_health(self):
         """Pings the Upload Broker /healthz or connection probe using shared preflight."""
