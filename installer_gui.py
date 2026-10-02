@@ -74,6 +74,8 @@ class InstallerApp(ctk.CTk):
         self.manifest_error = ""
         self.customer_slug = ""
         self.telemetry_url = ""
+        self.broker_url = ""
+        self.raw_token = ""
 
         # Check for Ed25519-signed manifest in package (Requirement 2)
         from preflight import validate_signed_manifest

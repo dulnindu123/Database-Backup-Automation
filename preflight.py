@@ -116,6 +116,84 @@ class PreflightReport:
 # 0. SIGNED MANIFEST VALIDATION (Requirement 2: Ed25519 Signed Manifest)
 # =============================================================================
 
+SLUG_RE = re.compile(r"^[a-z0-9]{2,24}$")
+
+
+def verify_manifest(
+    manifest_data: Any,
+    signature_b64: str,
+    public_key: Optional[Any] = None,
+    public_key_pem: Optional[str] = None,
+    expected_slug: Optional[str] = None
+) -> Tuple[bool, str, Dict[str, Any]]:
+    """
+    Cryptographically verifies the Ed25519 signature of a manifest and
+    validates all security constraints (HTTPS URL, slug structure, key fingerprints).
+    Returns (is_valid, reason_or_message, parsed_dict).
+    """
+    import base64
+    from urllib.parse import urlparse
+    from cryptography.exceptions import InvalidSignature
+
+    if isinstance(manifest_data, (str, bytes)):
+        try:
+            raw_bytes = manifest_data.encode("utf-8") if isinstance(manifest_data, str) else manifest_data
+            parsed = json.loads(raw_bytes)
+            canonical_bytes = json.dumps(parsed, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        except Exception as e:
+            return False, f"Manifest JSON parsing failed: {e}", {}
+    elif isinstance(manifest_data, dict):
+        parsed = manifest_data
+        canonical_bytes = json.dumps(parsed, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    else:
+        return False, "Unsupported manifest data format", {}
+
+    # Load public key
+    if public_key is None:
+        pem = public_key_pem or EMBEDDED_ADMIN_PUBLIC_KEY_PEM
+        if pem:
+            try:
+                public_key = serialization.load_pem_public_key(pem.encode("utf-8"))
+            except Exception as e:
+                return False, f"Invalid public key PEM: {e}", {}
+        else:
+            return False, "No public key available for manifest verification", {}
+
+    # 1. Verify Signature
+    try:
+        sig_bytes = base64.b64decode(signature_b64)
+        public_key.verify(sig_bytes, canonical_bytes)
+    except InvalidSignature:
+        return False, "Tampered package: Ed25519 manifest signature is invalid!", parsed
+    except Exception as e:
+        return False, f"Signature verification error: {e}", parsed
+
+    # 2. Validate Schema & Constraints
+    for required_field in ("customer_slug", "broker_url", "version", "expected_key_fingerprints"):
+        if required_field not in parsed:
+            return False, f"Manifest missing mandatory field '{required_field}'", parsed
+
+    slug = parsed.get("customer_slug", "")
+    if not SLUG_RE.match(slug):
+        return False, f"Invalid customer slug format in manifest: '{slug}'", parsed
+
+    if expected_slug and slug != expected_slug:
+        return False, f"Customer slug mismatch: manifest is for '{slug}', expected '{expected_slug}'", parsed
+
+    # 3. HTTPS URL Validation
+    broker_url = parsed.get("broker_url", "")
+    parsed_url = urlparse(broker_url)
+    if parsed_url.scheme.lower() != "https" or not parsed_url.netloc:
+        return False, f"Insecure or invalid broker URL in manifest: '{broker_url}' (HTTPS required)", parsed
+
+    # 4. Key Fingerprints Validation
+    fps = parsed.get("expected_key_fingerprints", [])
+    if not isinstance(fps, list) or len(fps) < 2 or len(set(fps)) < 2:
+        return False, "Manifest must specify at least 2 distinct public key fingerprints", parsed
+
+    return True, "Manifest signature and constraints verified successfully", parsed
+
+
 def validate_signed_manifest(
     package_dir: Optional[str] = None,
     expected_slug: Optional[str] = None,
@@ -125,7 +203,6 @@ def validate_signed_manifest(
     Validates manifest.json and manifest.sig in package_dir using the
     embedded admin Ed25519 public key.
     """
-    from admin.manifest_signer import verify_manifest
 
     dirs_to_check = []
     if package_dir:
