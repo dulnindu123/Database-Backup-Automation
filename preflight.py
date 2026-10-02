@@ -800,36 +800,76 @@ def validate_backup_folder_path(folder_path: str) -> PreflightCheckResult:
 # 5. FOLDER PERMISSIONS & ACLS
 # =============================================================================
 
-def validate_folder_permissions(target_dir: str, data_dir: str = PROGRAM_DATA_DIR) -> PreflightCheckResult:
-    """Verifies write, create, and delete permissions in target and data directories."""
-    for d, label in [(target_dir, "Target Directory"), (data_dir, "ProgramData Directory")]:
-        try:
-            os.makedirs(d, exist_ok=True)
-            test_file = os.path.join(d, ".preflight_write_test")
+def validate_folder_permissions(target_dir: str, data_dir: str = PROGRAM_DATA_DIR, check_target_write: bool = False) -> PreflightCheckResult:
+    """
+    Verifies write, create, and delete permissions:
+    - ProgramData Directory (data_dir): MUST have write/modify permissions for runtime state, logs, and configs.
+    - Target Directory (target_dir): Verifies existence and readability. In installer mode (check_target_write=True),
+      also verifies write access.
+    """
+    # 1. ProgramData directory: must always have write access
+    try:
+        os.makedirs(data_dir, exist_ok=True)
+        test_file = os.path.join(data_dir, ".preflight_write_test")
+        with open(test_file, "w") as f:
+            f.write("test")
+        os.remove(test_file)
+    except PermissionError as pe:
+        return PreflightCheckResult(
+            name="Folder ACL Permissions",
+            passed=False,
+            message=f"ACL Denied: Insufficient permissions in ProgramData Directory '{data_dir}' (WinError 5: Access is denied)",
+            code="ERR_ACL_DENIED",
+            error_detail=str(pe)
+        )
+    except Exception as e:
+        return PreflightCheckResult(
+            name="Folder ACL Permissions",
+            passed=False,
+            message=f"Filesystem access error in ProgramData Directory '{data_dir}': {e}",
+            code="ERR_FS_ACCESS",
+            error_detail=str(e)
+        )
+
+    # 2. Target Directory: Verify existence and readability
+    try:
+        if not os.path.exists(target_dir):
+            return PreflightCheckResult(
+                name="Folder ACL Permissions",
+                passed=False,
+                message=f"Target Directory '{target_dir}' does not exist",
+                code="ERR_TARGET_DIR_MISSING"
+            )
+        # Verify read access
+        os.listdir(target_dir)
+
+        # In installer mode, also test write access
+        if check_target_write:
+            test_file = os.path.join(target_dir, ".preflight_write_test")
             with open(test_file, "w") as f:
                 f.write("test")
             os.remove(test_file)
-        except PermissionError as pe:
-            return PreflightCheckResult(
-                name="Folder ACL Permissions",
-                passed=False,
-                message=f"ACL Denied: Insufficient permissions in {label} '{d}' (WinError 5: Access is denied)",
-                code="ERR_ACL_DENIED",
-                error_detail=str(pe)
-            )
-        except Exception as e:
-            return PreflightCheckResult(
-                name="Folder ACL Permissions",
-                passed=False,
-                message=f"Filesystem access error in {label} '{d}': {e}",
-                code="ERR_FS_ACCESS",
-                error_detail=str(e)
-            )
+    except PermissionError as pe:
+        return PreflightCheckResult(
+            name="Folder ACL Permissions",
+            passed=False,
+            message=f"ACL Denied: Insufficient permissions in Target Directory '{target_dir}' (WinError 5: Access is denied)",
+            code="ERR_ACL_DENIED",
+            error_detail=str(pe)
+        )
+    except Exception as e:
+        return PreflightCheckResult(
+            name="Folder ACL Permissions",
+            passed=False,
+            message=f"Filesystem access error in Target Directory '{target_dir}': {e}",
+            code="ERR_FS_ACCESS",
+            error_detail=str(e)
+        )
 
     return PreflightCheckResult(
         name="Folder ACL Permissions",
         passed=True,
-        message="Full read/write/modify access verified in application and data directories",
+        message="Full read/write access verified in application and data directories",
         code="OK"
     )
 
@@ -1128,7 +1168,7 @@ def run_preflight_suite(
     report.add(validate_backup_folder_path(backup_folder))
 
     # 6. Folder ACL Permissions
-    report.add(validate_folder_permissions(target_dir=t_dir, data_dir=d_dir))
+    report.add(validate_folder_permissions(target_dir=t_dir, data_dir=d_dir, check_target_write=(mode == "installer")))
 
     # 7. SQL Server Reachability, Databases, Permissions & Free Space
     sql_server = config.get("SQL_SERVER_NAME", "").strip()
