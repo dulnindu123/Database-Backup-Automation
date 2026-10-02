@@ -15,22 +15,39 @@ CRYPTPROTECT_UI_FORBIDDEN = 0x1
 
 def _protect_dpapi_native(data_bytes):
     """Protects data with Windows DPAPI (LocalMachine scope) using system crypt32.dll."""
+    if isinstance(data_bytes, str):
+        data_bytes = data_bytes.encode("utf-8")
     if os.name != "nt":
         return data_bytes
     try:
         import ctypes
-        from ctypes import wintypes
         class DATA_BLOB(ctypes.Structure):
-            _fields_ = [('cbData', wintypes.DWORD), ('pbData', ctypes.POINTER(ctypes.c_char))]
+            _fields_ = [("cbData", ctypes.c_ulong), ("pbData", ctypes.c_void_p)]
+
         crypt32 = ctypes.windll.crypt32
         kernel32 = ctypes.windll.kernel32
         kernel32.LocalFree.argtypes = [ctypes.c_void_p]
         kernel32.LocalFree.restype = ctypes.c_void_p
-        blob_in = DATA_BLOB(len(data_bytes), ctypes.cast(ctypes.c_char_p(data_bytes), ctypes.POINTER(ctypes.c_char)))
+
+        crypt32.CryptProtectData.argtypes = [
+            ctypes.POINTER(DATA_BLOB),
+            ctypes.c_wchar_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_ulong,
+            ctypes.POINTER(DATA_BLOB)
+        ]
+        crypt32.CryptProtectData.restype = ctypes.c_int
+
+        in_buf = ctypes.create_string_buffer(data_bytes)
+        blob_in = DATA_BLOB(len(data_bytes), ctypes.cast(in_buf, ctypes.c_void_p))
         blob_out = DATA_BLOB()
         flags = CRYPTPROTECT_LOCAL_MACHINE | CRYPTPROTECT_UI_FORBIDDEN
         if not crypt32.CryptProtectData(ctypes.byref(blob_in), "BackupBrokerToken", None, None, None, flags, ctypes.byref(blob_out)):
-            raise ctypes.WinError()
+            # Fallback to user scope if LocalMachine requires elevation
+            if not crypt32.CryptProtectData(ctypes.byref(blob_in), "BackupBrokerToken", None, None, None, CRYPTPROTECT_UI_FORBIDDEN, ctypes.byref(blob_out)):
+                raise ctypes.WinError()
         out = ctypes.string_at(blob_out.pbData, blob_out.cbData)
         kernel32.LocalFree(blob_out.pbData)
         return out
@@ -43,19 +60,32 @@ def _protect_dpapi_native(data_bytes):
 
 
 def _unprotect_dpapi_native(cipher_bytes):
-    """Unprotects DPAPI data using system crypt32.dll with win32crypt and plain fallback."""
+    """Unprotects DPAPI data using system crypt32.dll with win32crypt fallback."""
     if os.name != "nt":
-        return cipher_bytes.decode(errors="ignore").strip()
+        return cipher_bytes.decode("utf-8", errors="ignore").strip()
     try:
         import ctypes
-        from ctypes import wintypes
         class DATA_BLOB(ctypes.Structure):
-            _fields_ = [('cbData', wintypes.DWORD), ('pbData', ctypes.POINTER(ctypes.c_char))]
+            _fields_ = [("cbData", ctypes.c_ulong), ("pbData", ctypes.c_void_p)]
+
         crypt32 = ctypes.windll.crypt32
         kernel32 = ctypes.windll.kernel32
         kernel32.LocalFree.argtypes = [ctypes.c_void_p]
         kernel32.LocalFree.restype = ctypes.c_void_p
-        blob_in = DATA_BLOB(len(cipher_bytes), ctypes.cast(ctypes.c_char_p(cipher_bytes), ctypes.POINTER(ctypes.c_char)))
+
+        crypt32.CryptUnprotectData.argtypes = [
+            ctypes.POINTER(DATA_BLOB),
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_ulong,
+            ctypes.POINTER(DATA_BLOB)
+        ]
+        crypt32.CryptUnprotectData.restype = ctypes.c_int
+
+        in_buf = ctypes.create_string_buffer(cipher_bytes)
+        blob_in = DATA_BLOB(len(cipher_bytes), ctypes.cast(in_buf, ctypes.c_void_p))
         blob_out = DATA_BLOB()
         flags = CRYPTPROTECT_UI_FORBIDDEN
         if not crypt32.CryptUnprotectData(ctypes.byref(blob_in), None, None, None, None, flags, ctypes.byref(blob_out)):
@@ -68,7 +98,7 @@ def _unprotect_dpapi_native(cipher_bytes):
             import win32crypt
             return win32crypt.CryptUnprotectData(cipher_bytes, None, None, None, 0)[1].decode("utf-8", errors="replace").strip()
         except Exception:
-            return cipher_bytes.decode("utf-8", errors="ignore").strip()
+            return ""
 
 
 def secure_token_file_acl(path):
@@ -116,7 +146,13 @@ def validate_broker_url(url):
     if lower.startswith("https://"):
         return clean
     if lower.startswith("http://127.0.0.1") or lower.startswith("http://localhost"):
-        if os.environ.get("ALLOW_INSECURE_BROKER", "").lower() == "true":
+        is_dev = False
+        try:
+            import version
+            is_dev = getattr(version, "DEV_MODE", False)
+        except Exception:
+            pass
+        if is_dev or os.environ.get("ALLOW_INSECURE_BROKER", "").lower() == "true":
             return clean
         raise ValueError(
             "Insecure HTTP broker URL rejected in production. "

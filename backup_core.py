@@ -73,10 +73,12 @@ SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets"
 ]
 
-# Standard Windows Task Scheduler & Service entry identifiers
-TASK_SCHEDULER_NAME = "Database Cloud Backup"
-SYSTEM_SERVICE_TASK_NAME = "Database Cloud Backup (System Service)"
-DAEMON_SERVICE_TASK_NAME = "Database Cloud Backup Service"
+from version import DEFAULT_TASK_NAME
+
+# Standard Windows Task Scheduler & Service entry identifiers (Round 9 Requirement 3: Single Constant)
+TASK_SCHEDULER_NAME = DEFAULT_TASK_NAME
+SYSTEM_SERVICE_TASK_NAME = DEFAULT_TASK_NAME
+DAEMON_SERVICE_TASK_NAME = DEFAULT_TASK_NAME
 
 
 
@@ -393,6 +395,13 @@ except Exception:
     pass
 
 
+def redact_sensitive_tokens(text: str) -> str:
+    """Masks authentication token secrets: pc-abc.12345678... -> pc-abc.[SEALED_SECRET]"""
+    if not isinstance(text, str):
+        return text
+    return re.sub(r"\b(pc-[a-zA-Z0-9_-]+)\.[a-fA-F0-9]{16,}\b", r"\1.[SEALED_SECRET]", text)
+
+
 def emit_log(message, level="info", log_cb=None, module=None):
     """
     Unified dual-dispatch logging utility for all modules.
@@ -400,7 +409,9 @@ def emit_log(message, level="info", log_cb=None, module=None):
     2. Standardizes module tag ([BACKUP], [CLEANUP], [SYSTEM]).
     3. Prints the message to standard output for CLI sessions.
     4. Safely invokes the UI log callback (log_cb) if supplied by app_gui.py.
+    5. Automatically redacts machine authentication tokens to prevent secret leakage.
     """
+    message = redact_sensitive_tokens(str(message))
     mod_tag = f"[{module.upper()}] " if module else ""
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     formatted = f"[{ts}] {mod_tag}{message}"

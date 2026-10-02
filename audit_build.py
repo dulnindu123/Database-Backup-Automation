@@ -21,6 +21,8 @@ ALLOWED_PACKAGE_ROOT_FILES = {
     "READ_ME_FIRST.txt",
     "app_icon.ico",
     "app_icon.png",
+    "sha256_manifest.json",
+    "build_info.json",
 }
 
 ALLOWED_PACKAGE_ROOT_DIRS = {
@@ -33,6 +35,8 @@ ALLOWED_APPFILES_FILES = {
     "backup_public.pem",
     "escrow_public.pem",
     "config.json",
+    "build_info.json",
+    "sha256_manifest.json",
 }
 
 ALLOWED_APPFILES_DIRS = {

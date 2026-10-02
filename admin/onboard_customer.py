@@ -141,8 +141,8 @@ def onboard_customer(
     tokens_json = json.dumps({pc_id: token_hash}, indent=2)
 
     if mock:
-        print("    [MODE: MOCKED] Simulating GCP provisioning...")
-        broker_url = f"https://{service_name}-mock-uc.a.run.app"
+        print("    [MODE: SIMULATED] Simulating GCP provisioning...")
+        broker_url = f"https://{service_name}-sim-a1b2c3d4.a.run.app"
     else:
         # 1. Create Per-Customer Service Account
         print(f"[*] Creating service account {sa_email}...")

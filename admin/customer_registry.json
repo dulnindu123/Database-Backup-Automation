@@ -3,7 +3,7 @@
     "broker_url": "https://broker-acme-mock-uc.a.run.app",
     "bucket": "backupbot-cold-archive",
     "bucket_prefix": "acme/",
-    "created_at": "2026-10-02T07:22:42.730586+00:00",
+    "created_at": "2026-10-02T07:42:05.984348+00:00",
     "customer_slug": "acme",
     "region": "us-central1",
     "secret_name": "broker-tokens-acme",

@@ -23,6 +23,8 @@ from version import (
     DEFAULT_INSTALL_SUBDIR,
     PROGRAM_DATA_DIR,
     DEFAULT_TASK_NAME,
+    get_build_id,
+    get_build_info,
 )
 from preflight import run_preflight_suite, validate_broker_url_security, probe_broker_health
 from broker_client import _protect_dpapi_native
@@ -74,8 +76,9 @@ class InstallerApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         
-        self.title(f"{APP_NAME} Setup - v{INSTALLER_VERSION}")
-        self.geometry("620x680")
+        self.installer_build_id = get_build_id()
+        self.title(f"{APP_NAME} Setup - {self.installer_build_id}")
+        self.geometry("620x700")
         self.resizable(False, False)
 
         self.bundle_dir = get_bundle_dir()
@@ -93,6 +96,28 @@ class InstallerApp(ctk.CTk):
                 break
         if not self.source_app_dir:
             self.source_app_dir = os.path.join(self.bundle_dir, "AppFiles")
+
+        # Round 9 Requirement 5: Enforce that Installer and Payload Build IDs match!
+        app_build_info_p = os.path.join(self.source_app_dir, "build_info.json")
+        if os.path.exists(app_build_info_p):
+            try:
+                with open(app_build_info_p, "r", encoding="utf-8") as f:
+                    app_binfo = json.load(f)
+                app_bid = app_binfo.get("build_id", "")
+                if app_bid and self.installer_build_id != "4.1.0-dev" and app_bid != "4.1.0-dev":
+                    if self.installer_build_id != app_bid:
+                        messagebox.showerror(
+                            "Mismatched Build Detected",
+                            f"FATAL: Refusing to mix builds!\n\n"
+                            f"Installer Build ID : {self.installer_build_id}\n"
+                            f"AppFiles Build ID  : {app_bid}\n\n"
+                            "The installer executable and application payload binaries come from different builds.\n"
+                            "Please extract and run the complete, unmixed package from your release archive."
+                        )
+                        self.destroy()
+                        sys.exit(1)
+            except Exception:
+                pass
 
         # Standard Production Target: Program Files (Admin) & ProgramData (Requirement D)
         pf = os.environ.get("ProgramFiles", r"C:\Program Files")
@@ -156,8 +181,8 @@ class InstallerApp(ctk.CTk):
                 except Exception:
                     pass
 
-        # 2. Check config in AppFiles package
-        for base in [self.bundle_dir, os.path.join(self.bundle_dir, "AppFiles"), os.getcwd()]:
+        # 2. Check config in AppFiles package inside installer bundle
+        for base in [self.bundle_dir, os.path.join(self.bundle_dir, "AppFiles")]:
             cfg_p = os.path.join(base, "config.json")
             if os.path.exists(cfg_p):
                 try:
@@ -169,80 +194,29 @@ class InstallerApp(ctk.CTk):
                 except Exception:
                     pass
 
-        # 3. Environment variable
-        env_url = os.environ.get("BROKER_URL", "").strip() or os.environ.get("CLOUD_RUN_BROKER_URL", "").strip()
-        if env_url:
-            return env_url
-
-        # 4. Check local customer registry or customer packages (admin/developer workstation)
-        search_roots = [
-            self.bundle_dir,
-            os.path.join(self.bundle_dir, ".."),
-            os.path.join(self.bundle_dir, "..", "BackupAutomation"),
-            os.getcwd(),
-            os.path.join(os.getcwd(), "..", "BackupAutomation"),
-        ]
-        for r in search_roots:
-            reg_p = os.path.join(r, "admin", "customer_registry.json")
-            if os.path.exists(reg_p):
-                try:
-                    with open(reg_p, "r", encoding="utf-8") as f:
-                        reg_data = json.load(f)
-                        if reg_data:
-                            for _, entry in reg_data.items():
-                                b_url = entry.get("broker_url", "").strip()
-                                if b_url:
-                                    return b_url
-                except Exception:
-                    pass
-
-            cust_pkg_base = os.path.join(r, "dist", "Customer_Packages")
-            if os.path.exists(cust_pkg_base):
-                try:
-                    for sub in os.listdir(cust_pkg_base):
-                        m_chk = os.path.join(cust_pkg_base, sub, "manifest.json")
-                        if os.path.exists(m_chk):
-                            with open(m_chk, "r", encoding="utf-8") as f:
-                                m_obj = json.load(f)
-                                b_url = m_obj.get("broker_url", "").strip()
-                                if b_url:
-                                    return b_url
-                except Exception:
-                    pass
-
         return ""
 
     def _auto_resolve_raw_token(self):
-        """Discovers raw token if provided via signed manifest or existing token.dpapi."""
+        """Discovers raw token if provided via signed manifest, raw_token.txt, or existing token.dpapi."""
         if self.manifest_verified and self.raw_token:
             return self.raw_token
+
+        # Check raw_token.txt in bundle directory
+        raw_token_p = os.path.join(self.bundle_dir, "raw_token.txt")
+        if os.path.exists(raw_token_p):
+            try:
+                with open(raw_token_p, "r", encoding="utf-8") as f:
+                    t = f.read().strip()
+                    if t and "." in t:
+                        return t
+            except Exception:
+                pass
+
+        # Check existing DPAPI token on machine (upgrade scenario)
         from preflight import decrypt_token_dpapi
         t_str, _ = decrypt_token_dpapi(data_dir=self.data_dir, target_dir=self.target_dir)
         if t_str:
             return t_str
-
-        # Check local customer packages for initial_token in search roots
-        search_roots = [
-            self.bundle_dir,
-            os.path.join(self.bundle_dir, ".."),
-            os.path.join(self.bundle_dir, "..", "BackupAutomation"),
-            os.getcwd(),
-            os.path.join(os.getcwd(), "..", "BackupAutomation"),
-        ]
-        for r in search_roots:
-            cust_pkg_base = os.path.join(r, "dist", "Customer_Packages")
-            if os.path.exists(cust_pkg_base):
-                try:
-                    for sub in os.listdir(cust_pkg_base):
-                        m_chk = os.path.join(cust_pkg_base, sub, "manifest.json")
-                        if os.path.exists(m_chk):
-                            with open(m_chk, "r", encoding="utf-8") as f:
-                                m_obj = json.load(f)
-                                tok = m_obj.get("initial_token", "").strip()
-                                if tok:
-                                    return tok
-                except Exception:
-                    pass
 
         return ""
 
@@ -318,12 +292,12 @@ class InstallerApp(ctk.CTk):
             text_color="#34d399" if self.manifest_verified else "#60a5fa"
         ).pack(side="left")
 
-        # Auto-detect & Test button
+        # Test Broker Connection button
         ctk.CTkButton(
             card_top,
-            text="⚡ Auto-Fetch & Test",
+            text="🔍 Test Broker Connection",
             font=ctk.CTkFont(size=10, weight="bold"),
-            width=140,
+            width=160,
             height=26,
             fg_color="#2563eb",
             hover_color="#1d4ed8",
@@ -404,6 +378,15 @@ class InstallerApp(ctk.CTk):
         footer = ctk.CTkFrame(self, fg_color="transparent")
         footer.pack(fill="x", side="bottom", padx=25, pady=(0, 15))
 
+        # Build ID watermark (Round 9 Requirement 5)
+        b_info = get_build_info()
+        ctk.CTkLabel(
+            footer,
+            text=f"Build: {self.installer_build_id} • {b_info.get('build_time', '')}",
+            font=ctk.CTkFont(family="Consolas", size=10),
+            text_color="#6b7280"
+        ).pack(side="left")
+
         self.btn_install = ctk.CTkButton(
             footer, text="Install Now", font=ctk.CTkFont(size=13, weight="bold"),
             fg_color="#059669", hover_color="#047857", height=38, width=130, command=self._do_install
@@ -419,39 +402,30 @@ class InstallerApp(ctk.CTk):
     def _browse_directory(self):
         chosen = filedialog.askdirectory(title="Select Installation Directory", initialdir=self.target_dir_var.get())
         if chosen:
-            self.target_dir = os.path.normpath(chosen)
+            norm_chosen = os.path.normpath(chosen)
+            # Round 9 Requirement 4: Strictly refuse cloud-synced folders
+            cloud_keywords = ["onedrive", "dropbox", "google drive", "box sync", "icloud"]
+            for kw in cloud_keywords:
+                if kw in norm_chosen.lower():
+                    messagebox.showerror(
+                        "Forbidden Installation Destination",
+                        f"Installation into cloud-synced folders ({kw.title()}) is strictly forbidden.\n\n"
+                        f"Selected: {norm_chosen}\n\n"
+                        "Cloud-synced folders lock, delete, and corrupt active database files and DPAPI credentials.\n"
+                        "Please select 'C:\\Program Files\\DatabaseBackupApp'."
+                    )
+                    return
+            self.target_dir = norm_chosen
             self.target_dir_var.set(self.target_dir)
 
     def _refresh_and_test_broker(self):
-        """Refreshes the auto-detected broker URL and tests its connectivity."""
-        self.lbl_broker_status.configure(text="● Auto-detecting working broker...", text_color="#f59e0b")
-        self.update()
-        detected_url = self._auto_resolve_broker_url()
-        detected_token = self._auto_resolve_raw_token()
-
-        if detected_url:
-            self.broker_url_var.set(detected_url)
-            if detected_token and not self.token_var.get().strip():
-                self.token_var.set(detected_token)
-            self._test_broker_health()
-        else:
-            current_val = self.broker_url_var.get().strip()
-            if current_val:
-                self._test_broker_health()
-            else:
-                self.lbl_broker_status.configure(
-                    text="⚠️ No broker URL found in package. Please enter URL manually.",
-                    text_color="#f59e0b"
-                )
-                messagebox.showinfo(
-                    "Auto-Fetch Broker URL",
-                    "No pre-configured Upload Broker URL was found in this folder.\n\n"
-                    "• Master Template: Client_Installation_Package is a clean, unbranded template.\n\n"
-                    "• Customer Package: To run with Zero-Typing automation (pre-filled URL and token), "
-                    "run Setup from your customer folder:\n"
-                    "  'dist/Customer_Packages/<customer_slug>/Setup_DatabaseBackup.exe'\n\n"
-                    "Alternatively, type your Cloud Run Broker URL directly into the field above."
-                )
+        """Tests connectivity to the entered or configured Upload Broker URL."""
+        current_val = self.broker_url_var.get().strip()
+        if not current_val:
+            detected_url = self._auto_resolve_broker_url()
+            if detected_url:
+                self.broker_url_var.set(detected_url)
+        self._test_broker_health()
 
     def _test_broker_health(self):
         """Pings the Upload Broker /healthz or connection probe using shared preflight."""
@@ -501,6 +475,38 @@ class InstallerApp(ctk.CTk):
         self.btn_cancel.configure(state="disabled")
         self.entry_dir.configure(state="disabled")
         self.target_dir = os.path.normpath(self.target_dir_var.get().strip())
+
+        # Round 9 Requirement 4: Strictly refuse cloud-synced folders (OneDrive, Dropbox, etc.)
+        cloud_keywords = ["onedrive", "dropbox", "google drive", "box sync", "icloud"]
+        for kw in cloud_keywords:
+            if kw in self.target_dir.lower():
+                messagebox.showerror(
+                    "Forbidden Installation Destination",
+                    f"Installation into cloud-synced folders ({kw.title()}) is strictly forbidden.\n\n"
+                    f"Selected Path: {self.target_dir}\n\n"
+                    "Cloud sync engines lock, delete, and corrupt active database files and DPAPI credentials.\n"
+                    "Please install into 'C:\\Program Files\\DatabaseBackupApp'."
+                )
+                self.btn_install.configure(state="normal", text="Install Now")
+                self.btn_cancel.configure(state="normal")
+                self.entry_dir.configure(state="normal")
+                return
+
+        # Warn if installing outside Program Files
+        pf_std = os.environ.get("ProgramFiles", r"C:\Program Files").lower()
+        pf_x86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)").lower()
+        if not (self.target_dir.lower().startswith(pf_std) or self.target_dir.lower().startswith(pf_x86)):
+            if not messagebox.askyesno(
+                "Non-Standard Installation Location",
+                f"The recommended production location is:\n  C:\\Program Files\\DatabaseBackupApp\n\n"
+                f"You have selected:\n  {self.target_dir}\n\n"
+                "Installing outside Program Files may not be protected by standard Windows security ACLs.\n\n"
+                "Do you want to proceed with this custom location?"
+            ):
+                self.btn_install.configure(state="normal", text="Install Now")
+                self.btn_cancel.configure(state="normal")
+                self.entry_dir.configure(state="normal")
+                return
 
         self.progress.set(0.2)
         self.status_lbl.configure(text="Preparing installation target...")
@@ -651,9 +657,9 @@ class InstallerApp(ctk.CTk):
                 )
                 subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd2], capture_output=True)
 
-            # 4. Register Task Scheduler with real target exe path (Requirement D)
+            # 4. Register Task Scheduler with real target exe path (Round 9 Requirement 3: Single Constant)
             if self.cb_schedule.get():
-                sched_args = ["schtasks.exe", "/create", "/tn", "Database Cloud Backup", "/tr", f'"{target_exe}" --auto', "/sc", "weekly", "/d", "MON", "/st", "02:00", "/f"]
+                sched_args = ["schtasks.exe", "/create", "/tn", DEFAULT_TASK_NAME, "/tr", f'"{target_exe}" --auto', "/sc", "weekly", "/d", "MON", "/st", "02:00", "/f"]
                 subprocess.run(sched_args, capture_output=True)
 
             # 5. Register in Windows Registry

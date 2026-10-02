@@ -38,6 +38,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import hashes
 
+import version
 from version import (
     APP_VERSION,
     APP_NAME,
@@ -289,6 +290,16 @@ def validate_broker_url_security(url: str, allow_insecure: bool = False) -> Pref
             code="ERR_URL_MALFORMED"
         )
 
+    # Strictly reject mock endpoints in release builds (Round 9 Hardening)
+    url_lower = url.lower()
+    if "-mock-" in url_lower or "mock-uc" in url_lower:
+        return PreflightCheckResult(
+            name="Broker URL Security",
+            passed=False,
+            message=f"Mock URLs ('-mock-', 'mock-uc') are strictly forbidden in production release builds: '{url}'. Connect to a valid Cloud Run Broker URL.",
+            code="ERR_MOCK_URL_FORBIDDEN"
+        )
+
     # Insecure HTTP check
     if parsed.scheme.lower() == "http":
         is_loopback = parsed.hostname in ("127.0.0.1", "localhost")
@@ -320,14 +331,6 @@ def probe_broker_health(url: str, timeout: float = 4.0) -> PreflightCheckResult:
             passed=False,
             message="Python requests library not available in environment",
             code="ERR_NO_REQUESTS"
-        )
-
-    if "-mock-" in url.lower() or "mock-uc.a.run.app" in url.lower():
-        return PreflightCheckResult(
-            name="Broker Health (/healthz)",
-            passed=True,
-            message="Endpoint responsive (Mock Development Environment)",
-            code="OK_MOCKED"
         )
 
     health_url = url.rstrip("/") + "/healthz"
@@ -535,15 +538,6 @@ def verify_token_with_broker(url: str, token: str, timeout: float = 4.0) -> Pref
             passed=False,
             message="requests library not available",
             code="ERR_NO_REQUESTS"
-        )
-
-    if "-mock-" in url.lower() or "mock-uc.a.run.app" in url.lower():
-        pc = token.split(".")[0] if "." in token else "verified"
-        return PreflightCheckResult(
-            name="Token Broker Verification (/verify)",
-            passed=True,
-            message=f"Token verified against mock broker profile ({pc})",
-            code="OK_MOCKED"
         )
 
     verify_url = url.rstrip("/") + "/verify"
@@ -881,77 +875,71 @@ def validate_folder_permissions(target_dir: str, data_dir: str = PROGRAM_DATA_DI
 def validate_scheduled_task(task_name: Optional[str] = None, expected_exe: Optional[str] = None) -> PreflightCheckResult:
     """
     Queries Windows Task Scheduler to verify:
-    - Task exists (checks candidates: task_name, DEFAULT_TASK_NAME, system service)
+    - Exact task name matches DEFAULT_TASK_NAME (single constant; no candidate lists)
     - Action points to the real installed executable
+    - Run-As account is configured and active
     - Queries next run time
     """
     import subprocess
-    candidates = []
-    if task_name:
-        candidates.append(task_name)
-    candidates.extend([
-        DEFAULT_TASK_NAME,
-        "Database Cloud Backup",
-        "Database Cloud Backup (System Service)",
-        r"\DatabaseBackupApp\DatabaseBackupAutoTask",
-    ])
-    seen = set()
-    candidate_list = []
-    for c in candidates:
-        if c and c not in seen:
-            seen.add(c)
-            candidate_list.append(c)
+    target_task = task_name or DEFAULT_TASK_NAME
+    cmd = ["schtasks.exe", "/query", "/tn", target_task, "/fo", "list", "/v"]
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        if res.returncode != 0:
+            return PreflightCheckResult(
+                name="Task Scheduler Verification",
+                passed=False,
+                message=f"Scheduled task '{target_task}' is not registered in Windows Task Scheduler",
+                code="ERR_TASK_NOT_REGISTERED"
+            )
 
-    last_error = None
-    for cand in candidate_list:
-        cmd = ["schtasks.exe", "/query", "/tn", cand, "/fo", "list", "/v"]
-        try:
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-            if res.returncode == 0:
-                output = res.stdout
-                task_action = ""
-                next_run = "Unknown"
-                for line in output.splitlines():
-                    line_s = line.strip()
-                    if line_s.lower().startswith("task to run:") or line_s.lower().startswith("action:"):
-                        task_action = line_s.split(":", 1)[1].strip()
-                    elif line_s.lower().startswith("next run time:"):
-                        next_run = line_s.split(":", 1)[1].strip()
+        output = res.stdout
+        task_action = ""
+        run_as_user = ""
+        next_run = "Unknown"
+        for line in output.splitlines():
+            line_s = line.strip()
+            if line_s.lower().startswith("task to run:") or line_s.lower().startswith("action:"):
+                task_action = line_s.split(":", 1)[1].strip()
+            elif line_s.lower().startswith("run as user:") or line_s.lower().startswith("author:"):
+                if not run_as_user or line_s.lower().startswith("run as user:"):
+                    run_as_user = line_s.split(":", 1)[1].strip()
+            elif line_s.lower().startswith("next run time:"):
+                next_run = line_s.split(":", 1)[1].strip()
 
-                if expected_exe:
-                    norm_exp = os.path.normpath(expected_exe).lower()
-                    if norm_exp not in task_action.lower():
-                        return PreflightCheckResult(
-                            name="Task Scheduler Verification",
-                            passed=False,
-                            message=f"Task action points to unexpected path: '{task_action}' (Expected: '{expected_exe}')",
-                            code="ERR_TASK_EXE_MISMATCH"
-                        )
-
+        if expected_exe:
+            norm_exp = os.path.normpath(expected_exe).lower()
+            if norm_exp not in task_action.lower():
                 return PreflightCheckResult(
                     name="Task Scheduler Verification",
-                    passed=True,
-                    message=f"Task active ('{cand}'): Next Run '{next_run}', Action: '{task_action}'",
-                    code="OK"
+                    passed=False,
+                    message=f"Task action points to unexpected path: '{task_action}' (Expected: '{expected_exe}')",
+                    code="ERR_TASK_EXE_MISMATCH"
                 )
-        except Exception as e:
-            last_error = e
 
-    if last_error:
+        if not run_as_user:
+            return PreflightCheckResult(
+                name="Task Scheduler Verification",
+                passed=False,
+                message=f"Task '{target_task}' has no configured Run-As User account",
+                code="ERR_TASK_NO_USER"
+            )
+
+        return PreflightCheckResult(
+            name="Task Scheduler Verification",
+            passed=True,
+            message=f"Task active ('{target_task}'): Run As '{run_as_user}', Next Run '{next_run}', Action: '{task_action}'",
+            code="OK"
+        )
+    except Exception as e:
         return PreflightCheckResult(
             name="Task Scheduler Verification",
             passed=False,
-            message=f"Failed to query Task Scheduler: {last_error}",
+            message=f"Failed to query Task Scheduler for '{target_task}': {e}",
             code="ERR_TASK_QUERY_FAIL",
-            error_detail=str(last_error)
+            error_detail=str(e)
         )
 
-    return PreflightCheckResult(
-        name="Task Scheduler Verification",
-        passed=False,
-        message=f"Scheduled task '{task_name or DEFAULT_TASK_NAME}' is not registered in Windows Task Scheduler",
-        code="ERR_TASK_NOT_REGISTERED"
-    )
 
 
 # =============================================================================
@@ -1013,6 +1001,15 @@ def validate_sql_server(
             message=f"Connected to SQL Server '{server}' ({first_line[:40]}...)",
             code="OK"
         ))
+
+        # Check for discouraged 'sa' account usage (Round 9 Hardening)
+        if sql_user and sql_user.strip().lower() == "sa":
+            results.append(PreflightCheckResult(
+                name="SQL Account Security",
+                passed=False,
+                message="Using 'sa' administrative account for automated backups is strongly discouraged. Recommend Windows Authentication (leave username blank) or a dedicated login with db_backupoperator.",
+                code="WARN_SQL_SA_DISCOURAGED"
+            ))
     except Exception as e:
         results.append(PreflightCheckResult(
             name="SQL Server Reachability",
@@ -1146,7 +1143,8 @@ def run_preflight_suite(
 
     # 1. URL Security & Live Healthz
     if broker_url:
-        report.add(validate_broker_url_security(broker_url, allow_insecure=False))
+        is_dev = getattr(version, "DEV_MODE", False)
+        report.add(validate_broker_url_security(broker_url, allow_insecure=is_dev))
         report.add(probe_broker_health(broker_url))
     else:
         if mode in ("test_button", "scheduled_run"):

@@ -41,6 +41,8 @@ import customtkinter as ctk
 # Allow Google OAuth scope relaxation (prevents ScopeChangedError)
 os.environ['OAUTHLIB_RELAX_TOKEN_SCOPE'] = '1'
 
+from version import get_build_id, get_build_info, DEFAULT_TASK_NAME, APP_VERSION
+
 # Import headless, thread-safe core engine functions
 from backup_core import (
     DEFAULT_SHEET_TABS,
@@ -87,8 +89,9 @@ class BackupAutomationApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
+        self.build_id = get_build_id()
         # Window properties
-        self.title("Database Cloud Backup Automation System")
+        self.title(f"Database Cloud Backup Automation System - {self.build_id}")
         self.geometry("960, 680")
         self.minsize(860, 600)
         
@@ -116,6 +119,7 @@ class BackupAutomationApp(ctk.CTk):
         self._build_layout()
         self._load_config_into_ui()
         self._refresh_schedule_status()
+        emit_log(f"Database Cloud Backup GUI Initialized. Build ID: {self.build_id}")
 
     # =========================================================================
     # MASTER LAYOUT BUILDER
@@ -139,19 +143,19 @@ class BackupAutomationApp(ctk.CTk):
 
         self.subtitle_label = ctk.CTkLabel(
             header_title_frame,
-            text="Zero-Trust Database Cloud Backup & Multi-Module Monitoring",
+            text=f"Zero-Trust Database Cloud Backup & Multi-Module Monitoring ({self.build_id})",
             font=ctk.CTkFont(size=12),
             text_color="#9ca3af"
         )
         self.subtitle_label.pack(anchor="w")
 
-        # Global status pill badge
+        # Global status pill badge - Initialized to UNVERIFIED (Round 9 Requirement 1)
         self.header_badge = ctk.CTkLabel(
             self.header_frame,
-            text="● SYSTEM READY",
+            text="● INITIALIZING / UNTESTED",
             font=ctk.CTkFont(size=12, weight="bold"),
-            text_color="#10b981",
-            fg_color="#064e3b",
+            text_color="#9ca3af",
+            fg_color="#374151",
             corner_radius=12,
             padx=14,
             pady=6
@@ -201,9 +205,11 @@ class BackupAutomationApp(ctk.CTk):
         )
         self.footer_status_label.pack(side="left")
 
+        b_info = get_build_info()
+        b_str = f"v{b_info.get('version', APP_VERSION)} [{b_info.get('short_hash', 'dev')}] • {b_info.get('build_time', '')}"
         self.footer_version_label = ctk.CTkLabel(
             self.footer_frame,
-            text=APP_VERSION,
+            text=b_str,
             font=ctk.CTkFont(size=11, weight="bold"),
             text_color="#9ca3af"
         )
@@ -593,6 +599,19 @@ class BackupAutomationApp(ctk.CTk):
         )
         self.btn_disable_sched.pack(side="left", padx=10)
 
+        # Test via Scheduled Task (Round 9 Requirement 7)
+        self.btn_test_task = ctk.CTkButton(
+            btn_row,
+            text="▶ Test via Scheduled Task",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color="#0284c7",
+            hover_color="#0369a1",
+            height=42,
+            width=210,
+            command=self._test_via_scheduled_task
+        )
+        self.btn_test_task.pack(side="left", padx=10)
+
         ctk.CTkButton(
             btn_row,
             text="🔄 Refresh Status",
@@ -626,7 +645,7 @@ class BackupAutomationApp(ctk.CTk):
 
         # SQL Authentication fields (optional)
         auth_row = ctk.CTkFrame(scroll, fg_color="transparent")
-        auth_row.pack(fill="x", padx=20, pady=(0, 10))
+        auth_row.pack(fill="x", padx=20, pady=(0, 2))
         
         self._create_field_label(auth_row, "SQL Username (optional, leave blank for Windows Auth):", pack_padx=0)
         self.entry_sql_user = ctk.CTkEntry(auth_row, width=240)
@@ -634,6 +653,17 @@ class BackupAutomationApp(ctk.CTk):
         
         self.entry_sql_pass = ctk.CTkEntry(auth_row, width=240, placeholder_text="SQL Password", show="*")
         self.entry_sql_pass.pack(side="left")
+
+        # Warning banner for 'sa' administrative account (Round 9 Requirement 7)
+        self.lbl_sql_sa_warning = ctk.CTkLabel(
+            scroll,
+            text="",
+            font=ctk.CTkFont(size=10, weight="bold"),
+            text_color="#f59e0b",
+            anchor="w"
+        )
+        self.lbl_sql_sa_warning.pack(anchor="w", padx=20, pady=(0, 8))
+        self.entry_sql_user.bind("<KeyRelease>", self._check_sql_sa_warning)
 
         # Target Databases List
         self._create_field_label(scroll, "Target Databases (separated by commas):")
@@ -710,21 +740,23 @@ class BackupAutomationApp(ctk.CTk):
         self.lbl_sheet_val_status.pack(anchor="w", padx=15, pady=(0, 8))
         self.entry_google_sheet.bind("<KeyRelease>", self._validate_cloud_inputs)
 
-        # Active Module Tabs Display Badges (Requirement G: Performance Query removed)
+        # Active Module Tabs Display Badges (Round 9 Requirement 6: Badges must come from real test)
         tabs_row = ctk.CTkFrame(cloud_box, fg_color="transparent")
         tabs_row.pack(fill="x", padx=15, pady=(0, 12))
+        self.sheet_tab_badges = {}
         for tag, title in DEFAULT_SHEET_TABS.items():
             badge = ctk.CTkLabel(
                 tabs_row,
-                text=f"✓ Tab: {title}",
+                text=f"Tab: {title} (Not tested)",
                 font=ctk.CTkFont(size=10, weight="bold"),
-                text_color="#6ee7b7",
-                fg_color="#064e3b",
+                text_color="#9ca3af",
+                fg_color="#374151",
                 corner_radius=6,
                 padx=8,
                 pady=3
             )
             badge.pack(side="left", padx=(0, 8))
+            self.sheet_tab_badges[tag] = badge
 
         # Security Wall & Upload Broker Configuration
         sec_box = ctk.CTkFrame(scroll, corner_radius=10, fg_color=("#1f2937", "#111827"), border_width=1, border_color="#374151")
@@ -1032,6 +1064,7 @@ class BackupAutomationApp(ctk.CTk):
 
         self.entry_sql_pass.delete(0, "end")
         self.entry_sql_pass.insert(0, c.get("SQL_PASSWORD", ""))
+        self._check_sql_sa_warning()
 
         dbs = c.get("TARGET_DATABASES", [])
         self.entry_databases.delete(0, "end")
@@ -1056,7 +1089,7 @@ class BackupAutomationApp(ctk.CTk):
         token_str, t_res = decrypt_token_dpapi(data_dir=DATA_DIR, target_dir=BASE_DIR)
         if t_res.passed and token_str:
             pc_name = token_str.split(".")[0]
-            self.lbl_token_status.configure(text=f"🔑 Token: Active ({pc_name})", text_color="#34d399", fg_color="#064e3b")
+            self.lbl_token_status.configure(text=f"🔑 Token: Loaded ({pc_name}) - Not Verified", text_color="#9ca3af", fg_color="#374151")
         else:
             reason_map = {
                 "ERR_TOKEN_FILE_ABSENT": "File Absent",
@@ -1406,6 +1439,11 @@ class BackupAutomationApp(ctk.CTk):
                     data = resp.json()
                     title = data.get("title", "Master Telemetry Sheet")
                     self.append_log(f"[SHEET] Success: Bound to sheet '{title}' (HTTP 200)")
+                    def _update_success_badges():
+                        for tag, badge in getattr(self, "sheet_tab_badges", {}).items():
+                            title = DEFAULT_SHEET_TABS.get(tag, tag)
+                            badge.configure(text=f"✓ Tab: {title} (Verified)", text_color="#6ee7b7", fg_color="#064e3b")
+                    self.after(0, _update_success_badges)
                     self.after(0, lambda: messagebox.showinfo(
                         "Sheet Verified & Bound",
                         f"SUCCESS!\n\nPC ID is now permanently bound to Google Sheet:\n'{title}'\n\nLive storage telemetry will be appended automatically."
@@ -1413,6 +1451,11 @@ class BackupAutomationApp(ctk.CTk):
                 elif resp.status_code == 403:
                     err_msg = resp.json().get("error", "Access denied")
                     self.append_log(f"[SHEET] Permission error: {err_msg}", "error")
+                    def _update_fail_badges():
+                        for tag, badge in getattr(self, "sheet_tab_badges", {}).items():
+                            title = DEFAULT_SHEET_TABS.get(tag, tag)
+                            badge.configure(text=f"⚠️ Tab: {title} (Unverified)", text_color="#fca5a5", fg_color="#7f1d1d")
+                    self.after(0, _update_fail_badges)
                     self.after(0, lambda: messagebox.showerror(
                         "Permission Denied (HTTP 403)",
                         f"The Telemetry Service Account cannot access this spreadsheet.\n\n"
@@ -1422,6 +1465,11 @@ class BackupAutomationApp(ctk.CTk):
                 else:
                     err_msg = resp.json().get("error", f"HTTP {resp.status_code}")
                     self.append_log(f"[SHEET] Broker error: {err_msg}", "error")
+                    def _update_fail_badges():
+                        for tag, badge in getattr(self, "sheet_tab_badges", {}).items():
+                            title = DEFAULT_SHEET_TABS.get(tag, tag)
+                            badge.configure(text=f"⚠️ Tab: {title} (Unverified)", text_color="#fca5a5", fg_color="#7f1d1d")
+                    self.after(0, _update_fail_badges)
                     self.after(0, lambda: messagebox.showerror("Sheet Verification Failed", err_msg))
             except Exception as ex:
                 self.append_log(f"[SHEET] Network error: {ex}", "error")
@@ -1565,6 +1613,127 @@ class BackupAutomationApp(ctk.CTk):
                 messagebox.showerror("Error", f"Failed to disable automation:\n{msg}")
             self._refresh_schedule_status()
 
+    def _check_sql_sa_warning(self, event=None):
+        """Displays warning if 'sa' account is specified for SQL Server (Round 9 Requirement 7)."""
+        user = ""
+        if hasattr(self, "entry_sql_user"):
+            user = self.entry_sql_user.get().strip().lower()
+        if user == "sa":
+            self.lbl_sql_sa_warning.configure(
+                text="⚠️ WARNING: Using 'sa' is strongly discouraged. Recommend Windows Authentication (leave username blank) or a dedicated login with db_backupoperator."
+            )
+        else:
+            self.lbl_sql_sa_warning.configure(text="")
+
+    def _test_via_scheduled_task(self):
+        """Runs the scheduled task once as its real registered Windows account and reports result (Round 9 Requirement 7)."""
+        active, status_desc, mode = get_scheduler_status()
+        if not active:
+            messagebox.showwarning(
+                "Task Not Registered",
+                f"The scheduled task '{DEFAULT_TASK_NAME}' is not registered in Windows Task Scheduler.\n\n"
+                "Please configure and enable automation first using the buttons above."
+            )
+            return
+
+        def _worker():
+            self.append_log(f"\n[SCHEDULER] Triggering scheduled task '{DEFAULT_TASK_NAME}' as its registered account...")
+            import subprocess
+            import time
+
+            # 1. Query registered task details to determine Run As User
+            run_as_user = "Unknown"
+            try:
+                detail = subprocess.run(
+                    ["schtasks.exe", "/query", "/tn", DEFAULT_TASK_NAME, "/fo", "LIST", "/v"],
+                    capture_output=True, text=True, timeout=10
+                )
+                for line in detail.stdout.splitlines():
+                    if line.strip().startswith("Run As User:"):
+                        run_as_user = line.split(":", 1)[1].strip()
+                        break
+            except Exception as ex:
+                self.append_log(f"[SCHEDULER] Could not query task details: {ex}", "warning")
+
+            self.append_log(f"[SCHEDULER] Executing task under account: '{run_as_user}'")
+
+            # 2. Trigger task run
+            try:
+                run_res = subprocess.run(
+                    ["schtasks.exe", "/run", "/tn", DEFAULT_TASK_NAME],
+                    capture_output=True, text=True, timeout=10
+                )
+                if run_res.returncode != 0:
+                    err = (run_res.stderr or run_res.stdout).strip()
+                    self.append_log(f"[SCHEDULER] Failed to trigger task: {err}", "error")
+                    self.after(0, lambda: messagebox.showerror(
+                        "Task Run Failed",
+                        f"Failed to trigger '{DEFAULT_TASK_NAME}':\n{err}"
+                    ))
+                    return
+
+                self.append_log(f"[SCHEDULER] Task '{DEFAULT_TASK_NAME}' triggered successfully. Waiting for execution result...")
+            except Exception as ex:
+                self.append_log(f"[SCHEDULER] Execution error: {ex}", "error")
+                self.after(0, lambda: messagebox.showerror("Execution Error", str(ex)))
+                return
+
+            # 3. Poll for completion (up to 15 seconds)
+            completed = False
+            last_result_code = "Unknown"
+            for _ in range(15):
+                time.sleep(1)
+                try:
+                    query_res = subprocess.run(
+                        ["schtasks.exe", "/query", "/tn", DEFAULT_TASK_NAME, "/fo", "LIST", "/v"],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    status = ""
+                    for line in query_res.stdout.splitlines():
+                        if line.strip().startswith("Status:"):
+                            status = line.split(":", 1)[1].strip().lower()
+                        elif line.strip().startswith("Last Result:"):
+                            last_result_code = line.split(":", 1)[1].strip()
+
+                    if status != "running":
+                        completed = True
+                        break
+                except Exception:
+                    pass
+
+            if completed:
+                if last_result_code in ("0", "0x0"):
+                    msg = (
+                        f"Scheduled Task Test SUCCESS!\n\n"
+                        f"Task: {DEFAULT_TASK_NAME}\n"
+                        f"Account: {run_as_user}\n"
+                        f"Exit Code: 0 (Success)\n\n"
+                        f"The backup executed successfully under its registered account."
+                    )
+                    self.append_log(f"[SCHEDULER] Task completed successfully with exit code 0 under account '{run_as_user}'.", "info")
+                    self.after(0, lambda: messagebox.showinfo("Scheduled Task Succeeded", msg))
+                else:
+                    msg = (
+                        f"Scheduled Task Completed with Result: {last_result_code}\n\n"
+                        f"Task: {DEFAULT_TASK_NAME}\n"
+                        f"Account: {run_as_user}\n\n"
+                        f"Please check application logs for details."
+                    )
+                    self.append_log(f"[SCHEDULER] Task completed with code: {last_result_code}", "warning")
+                    self.after(0, lambda: messagebox.showwarning("Scheduled Task Completed", msg))
+            else:
+                msg = (
+                    f"Scheduled Task is still running.\n\n"
+                    f"Task: {DEFAULT_TASK_NAME}\n"
+                    f"Account: {run_as_user}\n\n"
+                    f"Check Live Logs or Windows Event Viewer for execution progress."
+                )
+                self.append_log(f"[SCHEDULER] Task is still executing in background.", "info")
+                self.after(0, lambda: messagebox.showinfo("Task Running", msg))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+
     # =========================================================================
     # ASYNCHRONOUS THREADING: TEST BROKER CONNECTION
     # =========================================================================
@@ -1613,14 +1782,43 @@ class BackupAutomationApp(ctk.CTk):
                 self.append_log(f"[PREFLIGHT] {status_icon} {res.name}: {res.message} (Code: {res.code})", level)
 
             if report.passed:
+                self.after(0, lambda: self.header_badge.configure(
+                    text="● SYSTEM READY",
+                    text_color="#10b981",
+                    fg_color="#064e3b"
+                ))
+                token_passed = any(r.name == "Broker Token Authentication" and r.passed for r in report.results)
+                if token_passed and hasattr(self, "lbl_token_status"):
+                    self.after(0, lambda: self.lbl_token_status.configure(
+                        text="🔑 Token: Active (Verified)",
+                        text_color="#34d399",
+                        fg_color="#064e3b"
+                    ))
                 msg = f"SUCCESS! All system preflights passed:\n\n{report.summary()}"
                 self.after(0, lambda: messagebox.showinfo("Preflight Verification Passed", msg))
             else:
+                self.after(0, lambda: self.header_badge.configure(
+                    text="● PREFLIGHT FAILED",
+                    text_color="#fca5a5",
+                    fg_color="#7f1d1d"
+                ))
+                token_res = [r for r in report.results if r.name == "Broker Token Authentication"]
+                if token_res and not token_res[0].passed and hasattr(self, "lbl_token_status"):
+                    self.after(0, lambda: self.lbl_token_status.configure(
+                        text=f"🔑 Token: Unverified ({token_res[0].code})",
+                        text_color="#fca5a5",
+                        fg_color="#7f1d1d"
+                    ))
                 fail_summary = "\n".join([f"• {f.name} ({f.code}): {f.message}" for f in report.failures])
                 msg = f"Preflight Verification Failed ({len(report.failures)} issues):\n\n{fail_summary}"
                 self.after(0, lambda: messagebox.showerror("Preflight Verification Failed", msg))
         except Exception as e:
             self.append_log(f"Preflight error: {e}", "error")
+            self.after(0, lambda: self.header_badge.configure(
+                text="● SYSTEM ERROR",
+                text_color="#fca5a5",
+                fg_color="#7f1d1d"
+            ))
             self.after(0, lambda: messagebox.showerror("Error", str(e)))
         finally:
             self.after(0, lambda: self.btn_test_conn.configure(state="normal", text="🔍  Test Preflights"))
