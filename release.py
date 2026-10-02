@@ -267,11 +267,16 @@ def main():
     print(f"  Target: Client_Installation_Package")
     print("=" * 70)
 
+    skip_compile = "--skip-compile" in sys.argv
+
     # 1. Build metadata
     build_info = generate_build_metadata()
 
     # 2. Compile executables
-    compile_binaries()
+    if not skip_compile:
+        compile_binaries()
+    else:
+        print("[BUILD] Skipping PyInstaller compilation (--skip-compile flag), using existing dist/ binaries.")
 
     # 3. Security audit
     run_security_audit()
