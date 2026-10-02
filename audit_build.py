@@ -1,30 +1,175 @@
 """
-Zero-Trust Build Secret Guard Audit
-Scans dist/ directory to ensure no private keys, tokens, or credentials are leaked.
+Zero-Trust Build & Package Allowlist Security Audit (v4.1.0)
+=============================================================================
+Enforces strict verification on Client_Installation_Package and dist/:
+1. Explicit Allowlist: Fails build if any unexpected file is present.
+2. Zero Stray Configs: Fails build if any unallowed *.txt file is present.
+3. Master Template Integrity: Fails build if master config.json has non-empty
+   BROKER_URL, GOOGLE_DRIVE_FOLDER_ID, or GOOGLE_SHEET_ID.
+4. Secret Guard: Fails build if any private key, OAuth secret, or token is detected.
 """
+
 import os
 import sys
+import json
 
-dist_dir = 'dist'
-forbidden_files = ['client_secret.json', 'credentials.json', 'token.json', 'broker_token.dat', 'backup_log.txt']
-violations = []
+# Strict Allowlist for Distribution Package
+ALLOWED_PACKAGE_ROOT_FILES = {
+    "1_Quick_Install.bat",
+    "Setup_DatabaseBackup.exe",
+    "Update_App.bat",
+    "Uninstall.bat",
+    "USER_GUIDE.md",
+    "READ_ME_FIRST.txt",
+    "SYSTEM_ARCHITECTURE_AND_CODE_GUIDE.md",
+    "app_icon.ico",
+    "app_icon.png",
+}
 
-if not os.path.exists(dist_dir):
-    print('[ERROR] dist directory does not exist.')
-    sys.exit(1)
+ALLOWED_PACKAGE_ROOT_DIRS = {
+    "AppFiles",
+    "docs_assets",
+    "images",
+    "Tools",
+}
 
-for root, dirs, files in os.walk(dist_dir):
-    for f in files:
-        if f in forbidden_files:
-            violations.append(os.path.join(root, f))
-        elif f.endswith('.pem'):
-            path = os.path.join(root, f)
-            with open(path, 'r', encoding='utf-8', errors='ignore') as fp:
-                if 'PRIVATE KEY' in fp.read():
-                    violations.append(path + ' (CONTAINS PRIVATE KEY)')
+ALLOWED_APPFILES_FILES = {
+    "DatabaseBackupApp.exe",
+    "backup_public.pem",
+    "escrow_public.pem",
+    "config.json",
+}
 
-if violations:
-    print('[CRITICAL ERROR] Secret guard failure! Discovered secrets in dist/:', violations)
-    sys.exit(1)
-else:
-    print('[OK] Secret Guard Audit Passed: 0 secret files or private keys present in dist/')
+ALLOWED_APPFILES_DIRS = {
+    "_internal",
+}
+
+FORBIDDEN_SECRET_FILES = [
+    "client_secret.json",
+    "credentials.json",
+    "token.json",
+    "broker_token.dat",
+    "token.dpapi",
+    "raw_token.txt",
+    "broker_url.txt",
+    "drive_folder.txt",
+    "sheet_id.txt",
+    "backup_log.txt",
+]
+
+
+def audit_master_package(pkg_dir):
+    """Audits Client_Installation_Package against explicit allowlists and empty template fields."""
+    errors = []
+    if not os.path.exists(pkg_dir):
+        return [f"Package directory not found: {pkg_dir}"]
+
+    # 1. Inspect Root Entries
+    for entry in os.listdir(pkg_dir):
+        full_p = os.path.join(pkg_dir, entry)
+        if os.path.isdir(full_p):
+            if entry not in ALLOWED_PACKAGE_ROOT_DIRS:
+                errors.append(f"Disallowed directory in package root: '{entry}' (Not on allowlist)")
+        else:
+            if entry not in ALLOWED_PACKAGE_ROOT_FILES:
+                errors.append(f"Disallowed file in package root: '{entry}' (Not on allowlist)")
+
+    # 2. Inspect AppFiles Entries
+    app_files_dir = os.path.join(pkg_dir, "AppFiles")
+    if not os.path.exists(app_files_dir):
+        errors.append("AppFiles directory missing from package")
+    else:
+        for entry in os.listdir(app_files_dir):
+            full_p = os.path.join(app_files_dir, entry)
+            if os.path.isdir(full_p):
+                if entry not in ALLOWED_APPFILES_DIRS:
+                    errors.append(f"Disallowed directory in AppFiles: '{entry}' (Not on allowlist)")
+            else:
+                if entry not in ALLOWED_APPFILES_FILES:
+                    errors.append(f"Disallowed file in AppFiles: '{entry}' (Not on allowlist)")
+
+    # 3. Master config.json verification (BROKER_URL, Drive ID, Sheet ID must be EMPTY)
+    cfg_path = os.path.join(app_files_dir, "config.json")
+    if os.path.exists(cfg_path):
+        try:
+            with open(cfg_path, "r", encoding="utf-8") as fp:
+                cfg = json.load(fp)
+            
+            broker_url = cfg.get("BROKER_URL", "").strip()
+            drive_id = cfg.get("GOOGLE_DRIVE_FOLDER_ID", "").strip()
+            sheet_id = cfg.get("GOOGLE_SHEET_ID", "").strip()
+
+            if broker_url != "":
+                errors.append(f"Master config.json violation: BROKER_URL must be empty (Found: '{broker_url}')")
+            if drive_id != "":
+                errors.append(f"Master config.json violation: GOOGLE_DRIVE_FOLDER_ID must be empty (Found: '{drive_id}')")
+            if sheet_id != "":
+                errors.append(f"Master config.json violation: GOOGLE_SHEET_ID must be empty (Found: '{sheet_id}')")
+        except Exception as e:
+            errors.append(f"Failed to parse AppFiles/config.json: {e}")
+
+    return errors
+
+
+def audit_dist_secrets(dist_dir):
+    """Scans dist/ directory to ensure 0 secret leaks or private keys."""
+    errors = []
+    if not os.path.exists(dist_dir):
+        return []
+
+    for root, dirs, files in os.walk(dist_dir):
+        rel_root = os.path.relpath(root, dist_dir)
+        is_internal = "_internal" in rel_root
+        for f in files:
+            # Check forbidden filenames
+            if f.lower() in [s.lower() for s in FORBIDDEN_SECRET_FILES]:
+                errors.append(f"Forbidden secret file discovered in dist: '{os.path.join(root, f)}'")
+            # Check for stray .txt files outside _internal runtime
+            elif not is_internal and f.endswith(".txt") and f != "READ_ME_FIRST.txt":
+                errors.append(f"Unallowed stray .txt file in dist: '{os.path.join(root, f)}'")
+            # Check for PEM private keys anywhere
+            elif f.endswith(".pem"):
+                p = os.path.join(root, f)
+                try:
+                    with open(p, "r", encoding="utf-8", errors="ignore") as fp:
+                        content = fp.read()
+                        if "PRIVATE KEY" in content:
+                            errors.append(f"Private encryption key leaked in dist: '{p}'")
+                except Exception:
+                    pass
+
+    return errors
+
+
+def main():
+    base_dir = os.path.abspath(os.path.dirname(__file__))
+    pkg_dir = os.path.join(base_dir, "..", "Client_Installation_Package")
+    if not os.path.exists(pkg_dir):
+        pkg_dir = os.path.join(base_dir, "Client_Installation_Package")
+    dist_dir = os.path.join(base_dir, "dist")
+
+    print("=" * 70)
+    print("  ZERO-TRUST BUILD & PACKAGE ALLOWLIST AUDIT")
+    print("=" * 70)
+
+    pkg_errors = audit_master_package(pkg_dir)
+    dist_errors = audit_dist_secrets(dist_dir)
+
+    all_errors = pkg_errors + dist_errors
+
+    if all_errors:
+        print("\n[CRITICAL FAILURE] Build Audit failed with violations:")
+        for err in all_errors:
+            print(f"  [X] {err}")
+        print("\nBuild aborted to prevent leaking unverified or sensitive files.\n")
+        sys.exit(1)
+    else:
+        print("\n[OK] Package Allowlist Audit: All files match strict explicit allowlist.")
+        print("[OK] Master Config Audit: BROKER_URL, Drive ID, and Sheet ID are strictly empty.")
+        print("[OK] Secret Guard Audit: 0 private keys or secret files detected.")
+        print("=" * 70)
+        sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

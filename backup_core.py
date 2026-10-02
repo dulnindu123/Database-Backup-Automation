@@ -265,11 +265,10 @@ TOKEN_FILE = os.path.join(DATA_DIR, "token.dpapi")
 if not os.path.exists(TOKEN_FILE) and os.path.exists(os.path.join(BASE_DIR, "token.dpapi")):
     TOKEN_FILE = os.path.join(BASE_DIR, "token.dpapi")
 
-# Default Worksheet Tabs for Customer Master Google Sheet (3 Modules)
+# Default Worksheet Tabs for Customer Master Google Sheet
 DEFAULT_SHEET_TABS = {
     "BACKUP": "Backup Automation",
-    "CLEANUP": "Server Cleanup",
-    "PERF_QUERY": "Performance Query"
+    "CLEANUP": "Server Cleanup"
 }
 
 
@@ -398,7 +397,7 @@ def emit_log(message, level="info", log_cb=None, module=None):
     """
     Unified dual-dispatch logging utility for all modules.
     1. Persists the log record to the single local backup_log.txt file on disk with instant flush.
-    2. Standardizes module tag ([BACKUP], [CLEANUP], [PERF_QUERY], [SYSTEM]).
+    2. Standardizes module tag ([BACKUP], [CLEANUP], [SYSTEM]).
     3. Prints the message to standard output for CLI sessions.
     4. Safely invokes the UI log callback (log_cb) if supplied by app_gui.py.
     """

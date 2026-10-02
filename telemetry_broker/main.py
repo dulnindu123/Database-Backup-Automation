@@ -161,6 +161,129 @@ def validate_drives_payload(data):
     return True, "", clean_drives
 
 
+# Sheet Bindings Cache & Helper Functions (Requirement F)
+_sheet_bindings_cache = {}
+
+
+def get_bound_sheet(pc_id):
+    """Retrieves the Google Sheet ID bound to this PC ID. Ignores client-supplied ID."""
+    try:
+        from google.cloud import firestore
+        db = firestore.Client()
+        doc = db.collection("pc_sheet_bindings").document(pc_id).get()
+        if doc.exists:
+            bound = doc.to_dict().get("sheet_id")
+            if bound:
+                return bound
+    except Exception:
+        pass
+    return _sheet_bindings_cache.get(pc_id) or SHEET_ID
+
+
+def bind_sheet_to_pc(pc_id, sheet_id):
+    """
+    Binds a Google Sheet ID to a PC ID once (Requirement F).
+    Re-binding to a different sheet is rejected to prevent tampering.
+    """
+    existing = get_bound_sheet(pc_id)
+    if existing and existing != sheet_id and existing != SHEET_ID:
+        return False, f"PC ID '{pc_id}' is already bound to another Sheet ({existing[:8]}...). Re-binding locked.", ""
+
+    # Verify sheet access via Google Sheets API
+    try:
+        service = get_sheets_service()
+        meta = service.spreadsheets().get(spreadsheetId=sheet_id).execute()
+        title = meta.get("properties", {}).get("title", "Master Telemetry Sheet")
+    except Exception as e:
+        sa_email = get_service_account_email()
+        return False, f"Cannot access Sheet. Please ensure '{sa_email}' has Editor access. Error: {str(e)[:150]}", ""
+
+    # Persist binding to Firestore or in-memory cache
+    try:
+        from google.cloud import firestore
+        db = firestore.Client()
+        db.collection("pc_sheet_bindings").document(pc_id).set({
+            "sheet_id": sheet_id,
+            "title": title,
+            "bound_at": datetime.now(timezone.utc).isoformat()
+        })
+    except Exception:
+        pass
+
+    _sheet_bindings_cache[pc_id] = sheet_id
+    audit("sheet_bound", pc=pc_id, sheet_id=sheet_id)
+    return True, "Successfully bound sheet to PC ID", title
+
+
+def get_service_account_email():
+    """Returns the Telemetry Broker service account email."""
+    env_email = os.environ.get("SERVICE_ACCOUNT_EMAIL", "")
+    if env_email:
+        return env_email
+    project = os.environ.get("PROJECT_ID", "your-gcp-project")
+    return f"telemetry-broker@{project}.iam.gserviceaccount.com"
+
+
+@app.get("/telemetry-info")
+def telemetry_info():
+    """Returns telemetry service configuration for client UI display (Requirement F)."""
+    return jsonify(
+        service_account_email=get_service_account_email(),
+        status="ok"
+    )
+
+
+@app.post("/bind-sheet")
+def bind_sheet():
+    """Binds a customer Google Sheet ID to the authenticated PC ID once (Requirement F)."""
+    pc = authenticate(request.headers.get("Authorization", ""))
+    if not pc:
+        audit("auth_rejected", ip=request.remote_addr, endpoint="bind-sheet")
+        return jsonify(error="unauthorized"), 401
+
+    body = request.get_json(silent=True) or {}
+    sheet_id = str(body.get("sheet_id", "")).strip()
+    if not sheet_id or len(sheet_id) < 20:
+        return jsonify(error="Invalid or missing sheet_id"), 400
+
+    ok, msg, title = bind_sheet_to_pc(pc, sheet_id)
+    if not ok:
+        return jsonify(error=msg), 400
+
+    return jsonify(status="ok", message=msg, title=title, bound_sheet_id=sheet_id)
+
+
+@app.post("/test-sheet")
+def test_sheet():
+    """Tests connectivity and permissions to the customer's Google Sheet (Requirement F)."""
+    pc = authenticate(request.headers.get("Authorization", ""))
+    if not pc:
+        audit("auth_rejected", ip=request.remote_addr, endpoint="test-sheet")
+        return jsonify(error="unauthorized"), 401
+
+    body = request.get_json(silent=True) or {}
+    sheet_id = str(body.get("sheet_id", "")).strip() or get_bound_sheet(pc)
+
+    if not sheet_id:
+        return jsonify(error="No sheet_id supplied and none bound for this PC ID"), 400
+
+    try:
+        service = get_sheets_service()
+        meta = service.spreadsheets().get(spreadsheetId=sheet_id).execute()
+        title = meta.get("properties", {}).get("title", "Master Telemetry Sheet")
+        return jsonify(
+            status="ok",
+            message=f"Verified Editor access to '{title}'",
+            title=title,
+            sheet_id=sheet_id
+        )
+    except Exception as e:
+        sa_email = get_service_account_email()
+        return jsonify(
+            error=f"Google Sheets API access failed. Grant Editor permission to '{sa_email}'. Detail: {str(e)[:150]}"
+        ), 403
+
+
 @app.post("/report-storage")
 def report_storage():
     # 1. Enforce 8 KB Payload Size Limit (checking actual raw bytes)
@@ -192,11 +315,13 @@ def report_storage():
         audit("rate_limited", pc=pc)
         return jsonify(error="rate limit exceeded: max 1 report per 15 minutes"), 429
 
-    if not SHEET_ID:
-        audit("sheets_error", pc=pc, err="SHEET_ID env var not configured")
-        return jsonify(error="telemetry service unconfigured"), 502
+    # 5. Resolve Bound Sheet ID (Requirement F: strictly ignores client-supplied sheet ID)
+    target_sheet_id = get_bound_sheet(pc)
+    if not target_sheet_id:
+        audit("sheets_error", pc=pc, err="No sheet bound for PC ID and SHEET_ID unconfigured")
+        return jsonify(error="No Google Sheet bound for this PC ID. Call /bind-sheet first."), 400
 
-    # 5. Append Rows to Google Sheet (Tab named after pc_id)
+    # 6. Append Rows to Google Sheet (Tab named after pc_id)
     # Timestamp set exclusively by Broker (UTC ISO 8601 format)
     server_timestamp = datetime.now(timezone.utc).isoformat()
     rows = []
@@ -220,14 +345,14 @@ def report_storage():
         sheet_range = f"{pc}!A:G"
         # valueInputOption='RAW' prevents formula injection (e.g. =cmd|' /C ...'!A1 is stored as literal string)
         service.spreadsheets().values().append(
-            spreadsheetId=SHEET_ID,
+            spreadsheetId=target_sheet_id,
             range=sheet_range,
             valueInputOption="RAW",
             insertDataOption="INSERT_ROWS",
             body={"values": rows}
         ).execute()
 
-        audit("telemetry_accepted", pc=pc, drives_count=len(clean_drives))
+        audit("telemetry_accepted", pc=pc, drives_count=len(clean_drives), sheet_id=target_sheet_id)
         return jsonify(status="ok", drives_logged=len(clean_drives))
     except Exception as e:
         audit("sheets_error", pc=pc, err=str(e)[:200])
@@ -237,3 +362,4 @@ def report_storage():
 @app.get("/healthz")
 def healthz():
     return "ok"
+

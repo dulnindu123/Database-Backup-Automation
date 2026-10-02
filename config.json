@@ -28,7 +28,6 @@
     "STORAGE_SCAN_FREQUENCY": "Daily",
     "SHEET_TABS": {
         "BACKUP": "Backup Automation",
-        "CLEANUP": "Server Cleanup",
-        "PERF_QUERY": "Performance Query"
+        "CLEANUP": "Server Cleanup"
     }
 }

@@ -14,11 +14,21 @@ import tkinter as tk
 from tkinter import messagebox, filedialog
 import customtkinter as ctk
 
+from version import (
+    APP_VERSION,
+    INSTALLER_VERSION,
+    APP_NAME,
+    EXE_NAME,
+    DEFAULT_INSTALL_SUBDIR,
+    PROGRAM_DATA_DIR,
+    DEFAULT_TASK_NAME,
+)
+from preflight import run_preflight_suite, validate_broker_url_security, probe_broker_health
+from broker_client import _protect_dpapi_native
+
 # Configure theme
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
-
-INSTALLER_VERSION = "4.1.0"
 
 
 def get_bundle_dir():
@@ -33,8 +43,8 @@ class InstallerApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         
-        self.title(f"Database Cloud Backup Setup - v{INSTALLER_VERSION}")
-        self.geometry("600, 580")
+        self.title(f"{APP_NAME} Setup - v{INSTALLER_VERSION}")
+        self.geometry("620x680")
         self.resizable(False, False)
 
         self.bundle_dir = get_bundle_dir()
@@ -47,17 +57,20 @@ class InstallerApp(ctk.CTk):
         ]
         self.source_app_dir = None
         for candidate in candidates:
-            if os.path.exists(os.path.join(candidate, "DatabaseBackupApp.exe")):
+            if os.path.exists(os.path.join(candidate, EXE_NAME)):
                 self.source_app_dir = candidate
                 break
         if not self.source_app_dir:
             self.source_app_dir = os.path.join(self.bundle_dir, "AppFiles")
 
-        self.target_dir = os.path.join(os.environ.get("LOCALAPPDATA", "C:\\"), "Programs", "DatabaseBackupApp")
-        self.data_dir = os.path.join(os.environ.get("ALLUSERSPROFILE", "C:\\ProgramData"), "DatabaseBackupApp")
+        # Standard Production Target: Program Files (Admin) & ProgramData (Requirement D)
+        pf = os.environ.get("ProgramFiles", r"C:\Program Files")
+        self.target_dir = os.path.join(pf, DEFAULT_INSTALL_SUBDIR)
+        self.data_dir = PROGRAM_DATA_DIR
 
-        # Automatically resolve existing configured Broker URL (if any)
+        # Automatically resolve existing configured Broker URL and Token
         self.broker_url = self._auto_resolve_broker_url()
+        self.raw_token = self._auto_resolve_raw_token()
 
         # Apply branding icon if available
         ico = os.path.join(self.bundle_dir, "app_icon.ico")
@@ -114,6 +127,24 @@ class InstallerApp(ctk.CTk):
             pass
 
         return ""
+
+    def _auto_resolve_raw_token(self):
+        """Discovers raw token if provided via raw_token.txt or existing token.dpapi."""
+        for s_base in [self.bundle_dir, os.getcwd(), getattr(self, 'source_app_dir', '')]:
+            if not s_base:
+                continue
+            t_chk = os.path.join(s_base, "raw_token.txt")
+            if os.path.exists(t_chk):
+                try:
+                    with open(t_chk, "r", encoding="utf-8") as f:
+                        t = f.read().strip()
+                        if t and "." in t:
+                            return t
+                except Exception:
+                    pass
+        from preflight import decrypt_token_dpapi
+        t_str, _ = decrypt_token_dpapi(data_dir=self.data_dir, target_dir=self.target_dir)
+        return t_str or ""
 
     def _build_ui(self):
         # Header Banner
@@ -186,9 +217,27 @@ class InstallerApp(ctk.CTk):
             textvariable=self.broker_url_var,
             placeholder_text="Enter Cloud Run Broker URL (e.g. https://upload-broker-xxx.run.app)",
             font=ctk.CTkFont(family="Consolas", size=11),
-            height=32
+            height=30
         )
         self.entry_broker.pack(fill="x", padx=12, pady=(2, 4))
+
+        # Token Entry Field
+        ctk.CTkLabel(
+            broker_card,
+            text="MACHINE AUTHENTICATION TOKEN (DPAPI ENCRYPTED):",
+            font=ctk.CTkFont(size=10, weight="bold"),
+            text_color="#9ca3af"
+        ).pack(anchor="w", padx=12, pady=(2, 1))
+
+        self.token_var = tk.StringVar(value=self.raw_token)
+        self.entry_token = ctk.CTkEntry(
+            broker_card,
+            textvariable=self.token_var,
+            placeholder_text="Enter PC Token (e.g. pc-id.secret) or leave blank if pre-packaged",
+            font=ctk.CTkFont(family="Consolas", size=11),
+            height=30
+        )
+        self.entry_token.pack(fill="x", padx=12, pady=(1, 4))
 
         # Status indicator badge
         self.lbl_broker_status = ctk.CTkLabel(
@@ -259,11 +308,12 @@ class InstallerApp(ctk.CTk):
         self._test_broker_health()
 
     def _test_broker_health(self):
-        """Pings the Upload Broker /healthz or connection probe."""
+        """Pings the Upload Broker /healthz or connection probe using shared preflight."""
         url = self.broker_url_var.get().strip()
+        token = self.token_var.get().strip()
         if not url:
             self.lbl_broker_status.configure(
-                text="● No Broker URL entered (can be configured in application Settings later)",
+                text="● No Broker URL entered (can be configured in Settings later)",
                 text_color="#9ca3af"
             )
             return
@@ -271,34 +321,33 @@ class InstallerApp(ctk.CTk):
         self.lbl_broker_status.configure(text="● Probing broker connectivity...", text_color="#f59e0b")
         self.update()
 
-        online = False
-        err_msg = ""
-        clean_url = url.rstrip("/")
-        for endpoint in [f"{clean_url}/healthz", clean_url]:
-            try:
-                req = urllib.request.Request(endpoint, headers={'User-Agent': 'SetupWizard/4.1.0'})
-                with urllib.request.urlopen(req, timeout=3) as resp:
-                    if resp.status in (200, 204, 301, 302, 401, 403, 404, 405):
-                        online = True
-                        break
-            except urllib.error.HTTPError as e:
-                # 401, 403, 404, 405 from the server means the endpoint is live and responding!
-                if e.code in (401, 403, 404, 405):
-                    online = True
-                    break
-                err_msg = f"HTTP {e.code}"
-            except Exception as e:
-                err_msg = str(e)
+        u_res = validate_broker_url_security(url, allow_insecure=True)
+        if not u_res.passed:
+            self.lbl_broker_status.configure(text=f"⚠️ {u_res.message}", text_color="#f87171")
+            return
 
-        if online:
+        h_res = probe_broker_health(url)
+        if not h_res.passed:
+            self.lbl_broker_status.configure(text=f"⚠️ Broker Offline: {h_res.message}", text_color="#f87171")
+            return
+
+        if token:
+            from preflight import verify_token_with_broker
+            v_res = verify_token_with_broker(url, token)
+            if v_res.passed:
+                self.lbl_broker_status.configure(
+                    text=f"✓ Broker Reachable & Token Verified ({token.split('.')[0]})",
+                    text_color="#34d399"
+                )
+            else:
+                self.lbl_broker_status.configure(
+                    text=f"⚠️ Token Rejected by Broker: {v_res.message}",
+                    text_color="#f87171"
+                )
+        else:
             self.lbl_broker_status.configure(
                 text="✓ Broker Reachable & Active (Endpoint Verified)",
                 text_color="#34d399"
-            )
-        else:
-            self.lbl_broker_status.configure(
-                text=f"⚠️ Broker Offline / Unreachable ({err_msg[:40]})",
-                text_color="#f87171"
             )
 
     def _do_install(self):
@@ -345,7 +394,8 @@ class InstallerApp(ctk.CTk):
                         shutil.copy2(k_src, os.path.join(self.data_dir, k))
                         break
 
-            # Check for raw_token.txt to automatically seal into token.dpapi
+            # Process machine authentication token
+            tok_input = self.token_var.get().strip() if hasattr(self, 'token_var') else ""
             raw_token_found = None
             for s_base in [self.bundle_dir, os.getcwd(), self.source_app_dir]:
                 t_chk = os.path.join(s_base, "raw_token.txt")
@@ -353,27 +403,30 @@ class InstallerApp(ctk.CTk):
                     raw_token_found = t_chk
                     break
 
-            if raw_token_found:
-                self.status_lbl.configure(text="Importing machine authentication token via DPAPI...")
+            if not tok_input and raw_token_found:
                 try:
                     with open(raw_token_found, "r", encoding="utf-8") as tf:
-                        t_str = tf.read().strip()
-                    if t_str and "." in t_str:
-                        ps_protect = (
-                            f"$bytes = [System.Text.Encoding]::UTF8.GetBytes('{t_str}'); "
-                            f"Add-Type -AssemblyName System.Security; "
-                            f"$prot = [System.Security.Cryptography.ProtectedData]::Protect($bytes, $null, [System.Security.Cryptography.DataProtectionScope]::LocalMachine); "
-                            f"[System.IO.File]::WriteAllBytes('{os.path.join(self.target_dir, 'token.dpapi')}', $prot); "
-                            f"[System.IO.File]::WriteAllBytes('{os.path.join(self.data_dir, 'token.dpapi')}', $prot)"
-                        )
-                        subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_protect], capture_output=True)
+                        tok_input = tf.read().strip()
+                except Exception:
+                    pass
+
+            if tok_input and "." in tok_input:
+                self.status_lbl.configure(text="Sealing machine token via native Windows DPAPI (Machine Scope 0x4)...")
+                try:
+                    prot_bytes = _protect_dpapi_native(tok_input.encode("utf-8"))
+                    if prot_bytes:
+                        with open(os.path.join(self.target_dir, "token.dpapi"), "wb") as f:
+                            f.write(prot_bytes)
+                        with open(os.path.join(self.data_dir, "token.dpapi"), "wb") as f:
+                            f.write(prot_bytes)
+                    if raw_token_found and os.path.exists(raw_token_found):
                         # Securely wipe raw_token.txt
                         flen = os.path.getsize(raw_token_found)
                         with open(raw_token_found, "wb") as wf:
                             wf.write(os.urandom(max(flen, 64)))
                         os.remove(raw_token_found)
-                except Exception:
-                    pass
+                except Exception as ex:
+                    print(f"Token DPAPI sealing failed: {ex}")
 
             # Check for existing token.dpapi in bundle
             for s_base in [self.bundle_dir, self.source_app_dir]:
@@ -392,10 +445,11 @@ class InstallerApp(ctk.CTk):
                         shutil.copy2(backed_f, os.path.join(self.data_dir, save_file))
                 shutil.rmtree(temp_safety_dir, ignore_errors=True)
 
-            # 2. Update config.json with verified Broker URL
+            # 2. Update config.json with verified Broker URL (Requirement A & G: PERF_QUERY removed)
             self.status_lbl.configure(text="Configuring settings and module tabs...")
             b_url = self.broker_url_var.get().strip()
             cfg_paths = [os.path.join(self.target_dir, "config.json"), os.path.join(self.data_dir, "config.json")]
+            last_cfg = {}
             for cp in cfg_paths:
                 cfg = {}
                 if os.path.exists(cp):
@@ -408,11 +462,11 @@ class InstallerApp(ctk.CTk):
                     cfg["BROKER_URL"] = b_url
                 cfg["SHEET_TABS"] = {
                     "BACKUP": "Backup Automation",
-                    "CLEANUP": "Server Cleanup",
-                    "PERF_QUERY": "Performance Query"
+                    "CLEANUP": "Server Cleanup"
                 }
                 with open(cp, 'w', encoding='utf-8') as f:
                     json.dump(cfg, f, indent=4)
+                last_cfg = cfg
 
             # 3. Create Shortcuts
             target_exe = os.path.join(self.target_dir, "DatabaseBackupApp.exe")
@@ -440,7 +494,7 @@ class InstallerApp(ctk.CTk):
                 )
                 subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd2], capture_output=True)
 
-            # 4. Register Task Scheduler
+            # 4. Register Task Scheduler with real target exe path (Requirement D)
             if self.cb_schedule.get():
                 sched_args = ["schtasks.exe", "/create", "/tn", "Database Cloud Backup", "/tr", f'"{target_exe}" --auto', "/sc", "weekly", "/d", "MON", "/st", "02:00", "/f"]
                 subprocess.run(sched_args, capture_output=True)
@@ -454,6 +508,29 @@ class InstallerApp(ctk.CTk):
                 ["reg.exe", "add", reg_key, "/v", "InstallLocation", "/d", self.target_dir, "/t", "REG_SZ", "/f"]
             ]:
                 subprocess.run(cmd, capture_output=True)
+
+            # 6. Shared Preflight Validation (Requirement B: Fails installer and names failing check)
+            self.status_lbl.configure(text="Executing preflight validation suite...")
+            self.update()
+            preflight_cfg = dict(last_cfg)
+            preflight_cfg["_ENABLE_SCHEDULE"] = bool(self.cb_schedule.get())
+            report = run_preflight_suite(preflight_cfg, target_dir=self.target_dir, data_dir=self.data_dir, mode="installer")
+            if not report.passed:
+                first_fail = report.failures[0]
+                failures_text = "\n".join([f"• {f.name} ({f.code}): {f.message}" for f in report.failures])
+                error_title = f"Installation Failed: {first_fail.name}"
+                error_msg = (
+                    f"Setup halted because preflight validation failed:\n\n"
+                    f"Failing Check: {first_fail.name} ({first_fail.code})\n\n"
+                    f"All Failures ({len(report.failures)}):\n{failures_text}\n\n"
+                    "Please resolve the issue above and retry installation."
+                )
+                messagebox.showerror(error_title, error_msg)
+                self.status_lbl.configure(text=f"Failed: {first_fail.name} ({first_fail.code})", text_color="#f87171")
+                self.btn_install.configure(state="normal", text="Retry Install")
+                self.btn_cancel.configure(state="normal")
+                self.entry_dir.configure(state="normal")
+                return
 
             # Finalize
             self.progress.set(1.0)

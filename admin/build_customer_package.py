@@ -234,7 +234,7 @@ def build_package(customer_name, pc_id, broker_url, skip_gcp=False, region="us-c
     print("   -> Broker URL is pre-verified and token is automatically imported into Windows DPAPI.")
     print("   -> raw_token.txt is automatically shredded and wiped.")
     print("3. Customer opens the application and enters their own Google Drive Folder ID & Sheet ID.")
-    print("   -> Clicks 'Save Settings' and is 100% operational.")
+    print("   -> Clicks 'Save Settings' and is fully operational.")
     print("=" * 70 + "\n")
 
 

@@ -11,7 +11,7 @@ Key Architectural & Design Decisions:
      are highly I/O intensive.
    - All heavy operations run in dedicated background daemon threads 
      (threading.Thread(target=..., daemon=True)).
-   - This ensures the UI thread remains 100% fluid, responsive, and never enters
+   - This ensures the UI thread remains fully fluid, responsive, and never enters
      Windows' "Not Responding" frozen state.
 
 2. Thread-Safe Event Dispatching:
@@ -664,38 +664,53 @@ class BackupAutomationApp(ctk.CTk):
 
         ctk.CTkLabel(
             cloud_box,
-            text="Each customer has a dedicated Google Drive folder and Master Google Sheet containing separate tabs for all 3 modules (Backup Automation, Server Cleanup, Performance Query). You can change them at any time.",
+            text="Database backups stream encrypted (AES-256-GCM + RSA-4096) to Google Cloud Storage via the Upload Broker. Google Sheets receives live telemetry. (The Google Drive link is an optional browser shortcut for user files; backups do not upload to Drive).",
             font=ctk.CTkFont(size=11),
             text_color="#9ca3af",
             wraplength=600,
             justify="left"
-        ).pack(anchor="w", padx=15, pady=(0, 10))
+        ).pack(anchor="w", padx=15, pady=(0, 8))
 
-        # Google Drive Folder ID / Link
-        self._create_field_label(cloud_box, "Customer Google Drive Folder ID or Link:", pack_padx=15)
+        # Google Drive Folder ID / Link (Optional Shortcut)
+        self._create_field_label(cloud_box, "Customer Google Drive Folder (Optional Quick Link):", pack_padx=15)
         drive_row = ctk.CTkFrame(cloud_box, fg_color="transparent")
         drive_row.pack(fill="x", padx=15, pady=(0, 2))
-        self.entry_google_drive = ctk.CTkEntry(drive_row, width=420, placeholder_text="Folder ID or https://drive.google.com/drive/folders/...")
+        self.entry_google_drive = ctk.CTkEntry(drive_row, width=420, placeholder_text="Folder ID or https://drive.google.com/drive/folders/... (Optional)")
         self.entry_google_drive.pack(side="left", padx=(0, 10))
-        ctk.CTkButton(drive_row, text="Open Folder ->", width=110, fg_color="#059669", hover_color="#047857", command=self._open_drive_folder).pack(side="left")
+        ctk.CTkButton(drive_row, text="Open Folder ->", width=110, fg_color="#374151", hover_color="#4b5563", command=self._open_drive_folder).pack(side="left")
 
         self.lbl_drive_val_status = ctk.CTkLabel(cloud_box, text="", font=ctk.CTkFont(size=10, weight="bold"), anchor="w")
         self.lbl_drive_val_status.pack(anchor="w", padx=15, pady=(0, 6))
         self.entry_google_drive.bind("<KeyRelease>", self._validate_cloud_inputs)
 
+        # Telemetry Service Account Email Banner (Requirement F)
+        sa_card = ctk.CTkFrame(cloud_box, fg_color=("#1e293b", "#0f172a"), corner_radius=6, border_width=1, border_color="#334155")
+        sa_card.pack(fill="x", padx=15, pady=(4, 8))
+        ctk.CTkLabel(
+            sa_card,
+            text="📋 Share your Google Sheet with Editor permission to this Telemetry Service Account:\ntelemetry-broker@backupbot-506604.iam.gserviceaccount.com",
+            font=ctk.CTkFont(family="Consolas", size=10, weight="bold"),
+            text_color="#93c5fd",
+            justify="left",
+            padx=10,
+            pady=6
+        ).pack(anchor="w")
+
         # Master Google Sheet ID / Link
         self._create_field_label(cloud_box, "Customer Master Google Sheet ID or Link:", pack_padx=15)
         sheet_row = ctk.CTkFrame(cloud_box, fg_color="transparent")
         sheet_row.pack(fill="x", padx=15, pady=(0, 2))
-        self.entry_google_sheet = ctk.CTkEntry(sheet_row, width=420, placeholder_text="Spreadsheet ID or https://docs.google.com/spreadsheets/d/...")
-        self.entry_google_sheet.pack(side="left", padx=(0, 10))
-        ctk.CTkButton(sheet_row, text="Open Sheet ->", width=110, fg_color="#2563eb", hover_color="#1d4ed8", command=self._open_master_sheet).pack(side="left")
+        self.entry_google_sheet = ctk.CTkEntry(sheet_row, width=320, placeholder_text="Spreadsheet ID or https://docs.google.com/spreadsheets/d/...")
+        self.entry_google_sheet.pack(side="left", padx=(0, 8))
+        ctk.CTkButton(sheet_row, text="Open Sheet ->", width=105, fg_color="#2563eb", hover_color="#1d4ed8", command=self._open_master_sheet).pack(side="left", padx=(0, 6))
+        self.btn_test_sheet = ctk.CTkButton(sheet_row, text="🔍 Test Sheet", width=95, fg_color="#059669", hover_color="#047857", command=self._test_customer_sheet)
+        self.btn_test_sheet.pack(side="left")
 
         self.lbl_sheet_val_status = ctk.CTkLabel(cloud_box, text="", font=ctk.CTkFont(size=10, weight="bold"), anchor="w")
         self.lbl_sheet_val_status.pack(anchor="w", padx=15, pady=(0, 8))
         self.entry_google_sheet.bind("<KeyRelease>", self._validate_cloud_inputs)
 
-        # 3 Modules Tabs Display Badges
+        # Active Module Tabs Display Badges (Requirement G: Performance Query removed)
         tabs_row = ctk.CTkFrame(cloud_box, fg_color="transparent")
         tabs_row.pack(fill="x", padx=15, pady=(0, 12))
         for tag, title in DEFAULT_SHEET_TABS.items():
@@ -1036,42 +1051,42 @@ class BackupAutomationApp(ctk.CTk):
             self.entry_google_sheet.delete(0, "end")
             self.entry_google_sheet.insert(0, c.get("GOOGLE_SHEET_ID", ""))
 
-        # Check Token and Key files across DATA_DIR and BASE_DIR
-        token_filename = c.get("BROKER_TOKEN_FILE", "token.dpapi")
-        token_path = None
-        for s_dir in [DATA_DIR, BASE_DIR]:
-            for s_name in [token_filename, "token.dpapi", "broker_token.dat"]:
-                candidate = os.path.join(s_dir, s_name)
-                if os.path.exists(candidate):
-                    token_path = candidate
-                    break
-            if token_path:
-                break
-
-        if token_path:
-            pc_name = "Active"
-            try:
-                from broker_client import load_token
-                t_str = load_token(token_path)
-                if t_str and "." in t_str:
-                    pc_name = t_str.split(".")[0]
-            except Exception:
-                pass
+        # Check Token and Key files using shared preflight module (Requirement C)
+        from preflight import decrypt_token_dpapi, validate_public_keys
+        token_str, t_res = decrypt_token_dpapi(data_dir=DATA_DIR, target_dir=BASE_DIR)
+        if t_res.passed and token_str:
+            pc_name = token_str.split(".")[0]
             self.lbl_token_status.configure(text=f"🔑 Token: Active ({pc_name})", text_color="#34d399", fg_color="#064e3b")
         else:
-            self.lbl_token_status.configure(text="🔑 Token: MISSING (token.dpapi)", text_color="#f87171", fg_color="#7f1d1d")
+            reason_map = {
+                "ERR_TOKEN_FILE_ABSENT": "File Absent",
+                "ERR_TOKEN_ACL_DENIED": "ACL Denied",
+                "ERR_TOKEN_ZERO_BYTES": "Empty (0 bytes)",
+                "ERR_TOKEN_FORMAT_INVALID": "Format Invalid",
+            }
+            if t_res.code.startswith("ERR_WIN32_"):
+                reason = f"Decrypt Failed ({t_res.code.replace('ERR_WIN32_', '')})"
+            else:
+                reason = reason_map.get(t_res.code, t_res.code)
+            self.lbl_token_status.configure(text=f"🔑 Token: {reason}", text_color="#f87171", fg_color="#7f1d1d")
+            self.append_log(f"[PREFLIGHT] Token check: {t_res.message} (Code: {t_res.code})")
 
-        key_filename = c.get("PUBLIC_KEY_FILE", "backup_public.pem")
-        pub_found = False
-        for s_dir in [DATA_DIR, BASE_DIR]:
-            candidate = os.path.join(s_dir, key_filename)
-            if os.path.exists(candidate):
-                pub_found = True
-                break
-        if pub_found:
-            self.lbl_key_status.configure(text=f"🔒 Public Key: Present ({key_filename})", text_color="#34d399", fg_color="#064e3b")
+        k_res = validate_public_keys(data_dir=DATA_DIR, target_dir=BASE_DIR)
+        if k_res.passed:
+            self.lbl_key_status.configure(text="🔒 Public Keys: Valid (>=3072-bit)", text_color="#34d399", fg_color="#064e3b")
         else:
-            self.lbl_key_status.configure(text=f"🔒 Public Key: MISSING ({key_filename})", text_color="#f87171", fg_color="#7f1d1d")
+            key_reason_map = {
+                "ERR_PRIMARY_KEY_ABSENT": "Primary Key Absent",
+                "ERR_ESCROW_KEY_ABSENT": "Escrow Key Absent",
+                "ERR_PRIMARY_KEY_TOO_SHORT": "Primary <3072b",
+                "ERR_ESCROW_KEY_TOO_SHORT": "Escrow <3072b",
+                "ERR_KEYS_NOT_DISTINCT": "Keys Identical!",
+                "ERR_PRIMARY_KEY_CORRUPT": "Primary Corrupt",
+                "ERR_ESCROW_KEY_CORRUPT": "Escrow Corrupt",
+            }
+            reason = key_reason_map.get(k_res.code, k_res.code)
+            self.lbl_key_status.configure(text=f"🔒 Public Keys: {reason}", text_color="#f87171", fg_color="#7f1d1d")
+            self.append_log(f"[PREFLIGHT] Public keys check: {k_res.message} (Code: {k_res.code})")
 
         if hasattr(self, "_validate_cloud_inputs"):
             self._validate_cloud_inputs()
@@ -1298,10 +1313,25 @@ class BackupAutomationApp(ctk.CTk):
             grant_sql_folder_permissions(norm_folder)
 
     def _save_settings(self):
-        """Validates and persists updated settings to config.json."""
+        """Validates and persists updated settings to config.json (Requirement E)."""
         dbs_str = self.entry_databases.get().strip()
         db_list = [d.strip() for d in dbs_str.split(",") if d.strip()]
         backup_dir = os.path.normpath(self.entry_backup_folder.get().strip())
+
+        # Validate backup destination folder (Requirement E: strictly block OneDrive/Dropbox/Google Drive/etc.)
+        from preflight import validate_backup_folder_path, validate_broker_url_security
+        f_res = validate_backup_folder_path(backup_dir)
+        if not f_res.passed:
+            messagebox.showerror("Invalid Backup Destination", f_res.message)
+            return
+
+        b_url = self.entry_broker_url.get().strip()
+        if b_url:
+            u_res = validate_broker_url_security(b_url, allow_insecure=True)
+            if not u_res.passed:
+                messagebox.showerror("Invalid Broker URL", u_res.message)
+                return
+
         if backup_dir:
             grant_sql_folder_permissions(backup_dir)
         selected_days = [d for d in ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"] if self.day_vars[d].get()]
@@ -1318,7 +1348,7 @@ class BackupAutomationApp(ctk.CTk):
             "BACKUP_FOLDER": backup_dir,
             "BACKUP_EXTENSION": ".zip",
             "TARGET_DATABASES": db_list,
-            "BROKER_URL": self.entry_broker_url.get().strip(),
+            "BROKER_URL": b_url,
             "STRICTLY_MONDAYS_ONLY": (selected_days == ["MON"]),
             "SCHEDULE_DAYS": selected_days,
             "SCHEDULE_TIME": time_val,
@@ -1340,6 +1370,66 @@ class BackupAutomationApp(ctk.CTk):
             messagebox.showinfo("Saved", "Configuration saved successfully!")
         else:
             messagebox.showerror("Error", f"Failed to save configuration:\n{msg}")
+
+    def _test_customer_sheet(self):
+        """Tests Google Sheets connectivity and binds PC ID to Sheet via Broker (Requirement F)."""
+        sheet_val = self.entry_google_sheet.get().strip() if hasattr(self, "entry_google_sheet") else ""
+        sheet_id = extract_google_id(sheet_val)
+        if not sheet_id:
+            messagebox.showwarning("Sheet ID Required", "Please enter a valid Google Spreadsheet ID or URL first.")
+            return
+
+        broker_url = self.entry_broker_url.get().strip() or self.config_data.get("BROKER_URL", "").strip()
+        if not broker_url:
+            messagebox.showwarning("Broker URL Required", "Please configure the Upload/Telemetry Broker URL first.")
+            return
+
+        from preflight import decrypt_token_dpapi
+        tok_str, tok_res = decrypt_token_dpapi(data_dir=DATA_DIR, target_dir=BASE_DIR)
+        if not tok_res.passed or not tok_str:
+            messagebox.showerror("Token Missing", f"Cannot authenticate with broker: {tok_res.message}")
+            return
+
+        self.btn_test_sheet.configure(state="disabled", text="Testing...")
+        self.append_log(f"[SHEET] Testing Google Sheet '{sheet_id[:16]}...' via broker...")
+
+        def _worker():
+            try:
+                import requests
+                endpoint = broker_url.rstrip("/") + "/bind-sheet"
+                headers = {
+                    "Authorization": f"Bearer {tok_str}",
+                    "Content-Type": "application/json"
+                }
+                resp = requests.post(endpoint, json={"sheet_id": sheet_id}, headers=headers, timeout=8)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    title = data.get("title", "Master Telemetry Sheet")
+                    self.append_log(f"[SHEET] Success: Bound to sheet '{title}' (HTTP 200)")
+                    self.after(0, lambda: messagebox.showinfo(
+                        "Sheet Verified & Bound",
+                        f"SUCCESS!\n\nPC ID is now permanently bound to Google Sheet:\n'{title}'\n\nLive storage telemetry will be appended automatically."
+                    ))
+                elif resp.status_code == 403:
+                    err_msg = resp.json().get("error", "Access denied")
+                    self.append_log(f"[SHEET] Permission error: {err_msg}", "error")
+                    self.after(0, lambda: messagebox.showerror(
+                        "Permission Denied (HTTP 403)",
+                        f"The Telemetry Service Account cannot access this spreadsheet.\n\n"
+                        f"Please open your Google Sheet, click 'Share', and grant 'Editor' access to:\n"
+                        f"telemetry-broker@backupbot-506604.iam.gserviceaccount.com\n\nDetail: {err_msg}"
+                    ))
+                else:
+                    err_msg = resp.json().get("error", f"HTTP {resp.status_code}")
+                    self.append_log(f"[SHEET] Broker error: {err_msg}", "error")
+                    self.after(0, lambda: messagebox.showerror("Sheet Verification Failed", err_msg))
+            except Exception as ex:
+                self.append_log(f"[SHEET] Network error: {ex}", "error")
+                self.after(0, lambda: messagebox.showerror("Connection Error", str(ex)))
+            finally:
+                self.after(0, lambda: self.btn_test_sheet.configure(state="normal", text="🔍 Test Sheet"))
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     # =========================================================================
     # SCHEDULE & AUTOMATION CONTROLLERS
@@ -1487,21 +1577,28 @@ class BackupAutomationApp(ctk.CTk):
         threading.Thread(target=self._run_test_connection, daemon=True).start()
 
     def _run_test_connection(self):
-        """Background worker validating Upload Broker and PC Authentication Token."""
+        """Background worker executing unified preflight validation suite (Requirement B)."""
         try:
-            res = test_broker_connection(self.config_data, log_cb=self.append_log)
-            if res.get("verified"):
-                pc_id = res.get("pc_id", "unknown")
-                msg = f"SUCCESS!\n\nUpload Broker: Connected\nAuthenticated PC ID: {pc_id}\nEncryption: RSA-4096 Hybrid AES-256"
-                self.after(0, lambda: messagebox.showinfo("Broker Connection OK", msg))
+            from preflight import run_preflight_suite
+            self.append_log("[PREFLIGHT] Running unified preflight validation suite...")
+            report = run_preflight_suite(self.config_data, target_dir=BASE_DIR, data_dir=DATA_DIR, mode="test_button")
+            for res in report.results:
+                status_icon = "✓" if res.passed else "⚠️"
+                level = "info" if res.passed else "error"
+                self.append_log(f"[PREFLIGHT] {status_icon} {res.name}: {res.message} (Code: {res.code})", level)
+
+            if report.passed:
+                msg = f"SUCCESS! All system preflights passed:\n\n{report.summary()}"
+                self.after(0, lambda: messagebox.showinfo("Preflight Verification Passed", msg))
             else:
-                err_text = "\n".join(res.get("errors", ["Unknown connection error"]))
-                self.after(0, lambda: messagebox.showerror("Connection Failed", f"Issues detected:\n\n{err_text}"))
+                fail_summary = "\n".join([f"• {f.name} ({f.code}): {f.message}" for f in report.failures])
+                msg = f"Preflight Verification Failed ({len(report.failures)} issues):\n\n{fail_summary}"
+                self.after(0, lambda: messagebox.showerror("Preflight Verification Failed", msg))
         except Exception as e:
-            self.append_log(f"Test error: {e}", "error")
+            self.append_log(f"Preflight error: {e}", "error")
             self.after(0, lambda: messagebox.showerror("Error", str(e)))
         finally:
-            self.after(0, lambda: self.btn_test_conn.configure(state="normal", text="🔍  Test Broker Connection"))
+            self.after(0, lambda: self.btn_test_conn.configure(state="normal", text="🔍  Test Preflights"))
 
     # =========================================================================
     # ASYNCHRONOUS THREADING: FULL BACKUP WORKFLOW

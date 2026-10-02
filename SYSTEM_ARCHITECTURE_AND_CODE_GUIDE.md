@@ -54,7 +54,7 @@
     - 10.3 [Zero-Trust Telemetry Broker & Google Sheets Horizontal Layout](#103-zero-trust-telemetry-broker--google-sheets-horizontal-layout)
     - 10.4 [High-Priority Outlook/SMTP Alert Engine & DPAPI Password Protection](#104-high-priority-outlooksmtp-alert-engine--dpapi-password-protection)
     - 10.5 [Headless Automated Invocation (`--storage-scan` & Piggyback Triggers)](#105-headless-automated-invocation---storage-scan--piggyback-triggers)
-    - 10.6 [Customer Cloud Integration & 3-Module Master Sheet Layout](#106-customer-cloud-integration--3-module-master-sheet-layout)
+    - 10.6 [Customer Cloud Integration & 3-Module Master Sheet Layout](#106-customer-cloud-integration--2-module-master-sheet-layout)
     - 10.7 [Single Unified Persistent Log Architecture (`backup_log.txt`)](#107-single-unified-persistent-log-architecture-backup_logtxt)
 11. [Infrastructure-as-Code & Automated Deployment (`deploy.sh`)](#11-infrastructure-as-code--automated-deployment-deploysh)
 12. [Comprehensive Test Suite & Static Security Auditing](#12-comprehensive-test-suite--static-security-auditing)
@@ -256,7 +256,7 @@ Cloud Storage buckets are protected by Write-Once-Read-Many (WORM) retention pol
 2. CONFIGURATION INGESTION & BROKER READINESS CHECK
    ├── Read config.json (UTF-8, BOM-tolerant loading)
    ├── Validate BROKER_URL format (enforce HTTPS; reject plain HTTP)
-   ├── Verify broker_token.dat exists and can be decrypted via Windows DPAPI
+   ├── Verify token.dpapi exists and can be decrypted via Windows DPAPI
    └── Verify backup_public.pem (and optional escrow_public.pem) exists and >= 3072 bits
   │
   ▼
@@ -369,7 +369,7 @@ Key Modules & Helper Functions:
 ├── Configuration & Environment Management:
 │   ├── load_config(config_path): Loads JSON config safely, handling UTF-8 with and without BOM.
 │   ├── save_config(config, config_path): Writes formatted JSON atomically.
-│   └── broker_ready(config, base_dir): Validates BROKER_URL, broker_token.dat, and backup_public.pem.
+│   └── broker_ready(config, base_dir): Validates BROKER_URL, token.dpapi, and backup_public.pem.
 │
 ├── SQL Discovery & Execution Pipeline:
 │   ├── is_safe_db_name(db_name): Strict regex validation preventing command injection.
@@ -537,7 +537,7 @@ The primary operational hub designed for daily monitoring and emergency manual b
      - `⏹ STOP BACKUP` (Red `#dc2626`): Instantly triggers `BackupCancellationController.request_stop()`, terminating child `sqlcmd.exe` processes and aborting active streams without leaving orphaned temporary files.
    - **Progress & Telemetry Engine:**
      - Dynamic status label: Tracks stage (`Ready to execute backup`, `Generating SQL Backup...`, `DBK2 Encrypting...`, `Streaming to Cloud...`).
-     - Animated progress bar (0% to 100%).
+     - Animated progress bar (0% to complete).
      - Telemetry status strip: `⚡ Upload Speed: X.XX MB/s • ⌛ ETA: MM:SS • ☁️ Target: Zero-Trust Upload Broker`.
 3. **Bottom Utility Action Tray:**
    - `📂 Open Backups`: Opens the configured local backup folder in Windows File Explorer.
@@ -551,7 +551,7 @@ Provides deep integration with Windows Task Scheduler (`schtasks.exe`) to config
 1. **Execution Security Context (Service Level):**
    - **`Unattended Windows System Service (Recommended for Windows Server & RDP)`:**
      - Configures the task under `NT AUTHORITY\SYSTEM` in Session 0 (`/ru "NT AUTHORITY\SYSTEM" /rl HIGHEST`).
-     - Operates 100% unattended before any user logs in, survives host reboots, and is never disrupted by Remote Desktop (RDP) logoffs.
+     - Operates complete unattended before any user logs in, survives host reboots, and is never disrupted by Remote Desktop (RDP) logoffs.
    - **`Standard User Task (Interactive Desktop Only)`:**
      - Configures the task under the currently logged-in user account with limited privileges (`/rl LIMITED`).
      - Requires no administrator elevation, but executes only while the user maintain an active Windows desktop session.
@@ -941,13 +941,11 @@ Each customer deployment utilizes a dedicated, client-specific cloud tracking ec
 
 1. **Customer Dedicated Cloud Assets:**
    - **Customer Google Drive Folder (`GOOGLE_DRIVE_FOLDER_ID`):** A dedicated folder in Google Drive associated with the customer, housing or indexing their backups and archives.
-   - **Customer Master Google Sheet (`GOOGLE_SHEET_ID`):** A single master spreadsheet maintaining separate worksheet tabs for each of the system's three core operational modules:
+   - **Customer Master Google Sheet (`GOOGLE_SHEET_ID`):** A single master spreadsheet maintaining separate worksheet tabs for each of the system's core operational modules:
      - **Tab 1: `Backup Automation`:**
        Logs all database backup executions, database names, original uncompressed sizes, encrypted DBK2 sizes, duration, upload timestamps, and completion statuses.
      - **Tab 2: `Server Cleanup`:**
        Logs daily drive health telemetry (C: system drive free space in GB, secondary data drives % utilized), automated temporary folder cleanups, and threshold alert statuses.
-     - **Tab 3: `Performance Query` (Architecture In-Progress):**
-       Allocated sheet tab prepared for capturing SQL Server performance metrics, slow query execution telemetry, wait stats, and lock contention analysis.
 2. **Dynamic Installation & In-App Management:**
    - **Installation Setup:** When missing from `config.json`, `1_Quick_Install.bat` and `installer_gui.py` interactively prompt the installer/technician for both IDs or URLs.
    - **In-App Modification:** The desktop application (`app_gui.py` Settings tab) contains a dedicated section: **Customer Cloud Integration (Google Drive & Sheets)**. Technicians can view, update, test, or open the Drive Folder or Master Google Sheet in their default browser at any time without requiring application restarts.
@@ -958,7 +956,7 @@ Each customer deployment utilizes a dedicated, client-specific cloud tracking ec
 To ensure absolute audit integrity and prevent fragmentation across multiple files:
 
 1. **Strict Single-File Policy:**
-   - All logging from all 3 modules (`Backup Automation`, `Server Cleanup`, `Performance Query`), background workers, Task Scheduler tasks, and desktop GUI actions is recorded into **strictly one persistent text file**:
+   - All logging from all modules (`Backup Automation`, `Server Cleanup`, `Performance Query`), background workers, Task Scheduler tasks, and desktop GUI actions is recorded into **strictly one persistent text file**:
      ```
      %ALLUSERSPROFILE%\DatabaseBackupApp\backup_log.txt
      ```
@@ -972,7 +970,6 @@ To ensure absolute audit integrity and prevent fragmentation across multiple fil
    ```text
    [2026-10-01 14:00:01] [BACKUP]     Database 'SuperForm' DBK2 backup completed (420.50 MB).
    [2026-10-01 14:05:22] [CLEANUP]    Drive C: health OK (45.2 GB available). Temp storage purged.
-   [2026-10-01 14:10:00] [PERF_QUERY] Query baseline sampled: 0 blocked processes detected.
    [2026-10-01 14:15:30] [SYSTEM]     Customer Cloud Settings updated by administrator.
    ```
 4. **Live GUI Visualization:**

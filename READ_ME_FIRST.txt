@@ -7,7 +7,7 @@ Welcome to the Enterprise Database Cloud Backup system (v4.1.0 Multi-Module Edit
 This package delivers an air-gapped, zero-trust disaster recovery solution that
 encrypts Microsoft SQL Server database backups with AES-256-GCM + RSA-4096 (DBK2 format),
 transfers them via a Cloud Run Upload Broker to retention-locked GCS cloud storage,
-and logs multi-module telemetry (Backup, Server Cleanup, Performance Query) to a dedicated
+and logs multi-module telemetry (Backup Automation, Server Cleanup) to a dedicated
 Customer Master Google Sheet and Customer Google Drive folder.
 
 --------------------------------------------------------------------------------

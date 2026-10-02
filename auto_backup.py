@@ -119,11 +119,13 @@ def run_automated_mode():
 
     emit_log(f"Schedule day check passed (Today is {today_name}). Running automated backup...")
     
-    # Authenticate non-interactively (uses cached refresh token from credentials.json).
-    # interactive=False prevents the engine from trying to launch a web browser on an unattended server.
-    ok, why = broker_ready(config)
-    if not ok:
-        emit_log(f"Task Scheduler failed: secure upload not configured: {why}", "critical")
+    # Validate system state using shared preflight module (Requirement B)
+    from preflight import run_preflight_suite
+    report = run_preflight_suite(config, mode="scheduled_run")
+    if not report.passed:
+        first_fail = report.failures[0]
+        failures_summary = " | ".join([f"{f.name} ({f.code}): {f.message}" for f in report.failures])
+        emit_log(f"Preflight validation failed before scheduled run. Failing: {first_fail.name} ({first_fail.code}). All errors: {failures_summary}", "critical")
         sys.exit(1)
 
     # Run the full automated backup pipeline across all target databases

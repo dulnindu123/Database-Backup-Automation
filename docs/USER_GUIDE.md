@@ -19,11 +19,11 @@ The **Enterprise Database Cloud Backup Automation System (v4.1.0)** enforces a s
 2. **DPAPI Machine-Scope Token Authentication**: Client PCs authenticate via a Windows DPAPI-encrypted machine token (`token.dpapi`), protected natively with Windows `CryptProtectData` (LocalMachine scope `0x4`).
 3. **DBK2 Hybrid Envelope Encryption**: SQL Server database dumps are compressed into `.zip` and encrypted into streaming `.dbk2` format using authenticated AES-256-GCM. The ephemeral 256-bit AES symmetric key is wrapped using dual 4096-bit RSA keys (Primary `backup_public.pem` + Escrow `escrow_public.pem`). All RSA private decryption keys remain strictly **offline** on administrative hardware.
 4. **Cloud Run Upload Broker Microservice**: Dedicated Cloud Run service (`upload-broker`) that validates PC tokens, validates database names and size caps, enforces at least 3 daily upload slots per database (`{day}_{seq}.dbk2`), and returns pre-signed GCS resumable upload URIs.
-5. **Customer Multi-Module Telemetry & Tracking**: Customer Master Google Sheet integrates all 3 modules into dedicated tabs:
+5. **Customer Multi-Module Telemetry & Tracking**: Customer Master Google Sheet integrates all modules into dedicated tabs:
    - `Backup Automation`: Logs every backup timestamp, database name, file size, SHA-256 hash, and upload status.
    - `Server Cleanup`: Storage monitor disk usage, health status, and space reclamation events.
    - `Performance Query`: High-load query analysis, execution bottlenecks, and indexing diagnostics.
-6. **Single Unified Persistent Log**: All 3 modules log chronologically to a single unified log file (`backup_log.txt`) stored at `C:\ProgramData\DatabaseBackupApp\backup_log.txt`. Historical logs are permanently preserved across updates.
+6. **Single Unified Persistent Log**: All 2 modules log chronologically to a single unified log file (`backup_log.txt`) stored at `C:\ProgramData\DatabaseBackupApp\backup_log.txt`. Historical logs are permanently preserved across updates.
 
 ---
 
