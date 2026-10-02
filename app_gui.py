@@ -1569,19 +1569,44 @@ class BackupAutomationApp(ctk.CTk):
     # ASYNCHRONOUS THREADING: TEST BROKER CONNECTION
     # =========================================================================
     def _start_test_connection_thread(self):
-        """Spawns non-blocking daemon thread to test Upload Broker connection."""
+        """Spawns non-blocking daemon thread to test Upload Broker connection and preflights."""
         if self.is_running:
             return
-        self.btn_test_conn.configure(state="disabled", text="Testing...")
-        self.append_log("\n--- Testing Zero-Trust Upload Broker Connection ---")
-        threading.Thread(target=self._run_test_connection, daemon=True).start()
 
-    def _run_test_connection(self):
+        # Dynamically read current UI form values so test preflights validates what is typed
+        test_cfg = dict(self.config_data)
+        try:
+            if hasattr(self, 'entry_sql_server') and self.entry_sql_server.get().strip():
+                test_cfg["SQL_SERVER_NAME"] = self.entry_sql_server.get().strip()
+            if hasattr(self, 'entry_sql_user'):
+                test_cfg["SQL_USERNAME"] = self.entry_sql_user.get().strip()
+            if hasattr(self, 'entry_sql_pass'):
+                test_cfg["SQL_PASSWORD"] = self.entry_sql_pass.get().strip()
+            if hasattr(self, 'entry_databases') and self.entry_databases.get().strip():
+                dbs_str = self.entry_databases.get().strip()
+                test_cfg["TARGET_DATABASES"] = [d.strip() for d in dbs_str.split(",") if d.strip()]
+            if hasattr(self, 'entry_backup_folder') and self.entry_backup_folder.get().strip():
+                test_cfg["BACKUP_FOLDER"] = self.entry_backup_folder.get().strip()
+            if hasattr(self, 'entry_broker_url') and self.entry_broker_url.get().strip():
+                test_cfg["BROKER_URL"] = self.entry_broker_url.get().strip()
+            if hasattr(self, 'entry_google_drive') and self.entry_google_drive.get().strip():
+                test_cfg["GOOGLE_DRIVE_FOLDER_ID"] = extract_google_id(self.entry_google_drive.get().strip())
+            if hasattr(self, 'entry_google_sheet') and self.entry_google_sheet.get().strip():
+                test_cfg["GOOGLE_SHEET_ID"] = extract_google_id(self.entry_google_sheet.get().strip())
+        except Exception:
+            pass
+
+        self.btn_test_conn.configure(state="disabled", text="Testing...")
+        self.append_log("\n--- Testing Zero-Trust System Preflights ---")
+        threading.Thread(target=self._run_test_connection, args=(test_cfg,), daemon=True).start()
+
+    def _run_test_connection(self, test_cfg=None):
         """Background worker executing unified preflight validation suite (Requirement B)."""
         try:
             from preflight import run_preflight_suite
             self.append_log("[PREFLIGHT] Running unified preflight validation suite...")
-            report = run_preflight_suite(self.config_data, target_dir=BASE_DIR, data_dir=DATA_DIR, mode="test_button")
+            cfg_to_test = test_cfg if test_cfg is not None else self.config_data
+            report = run_preflight_suite(cfg_to_test, target_dir=BASE_DIR, data_dir=DATA_DIR, mode="test_button")
             for res in report.results:
                 status_icon = "✓" if res.passed else "⚠️"
                 level = "info" if res.passed else "error"
