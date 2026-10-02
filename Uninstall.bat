@@ -3,8 +3,47 @@ setlocal EnableDelayedExpansion
 title Database Cloud Backup - Clean Uninstaller
 
 REM 1. Identify Target Installation Directory
-set "TARGET_DIR=%~dp0"
-if "!TARGET_DIR:~-1!"=="\" set "TARGET_DIR=!TARGET_DIR:~0,-1!"
+set "TARGET_DIR="
+
+REM Check registry for InstallLocation
+for /f "tokens=2*" %%A in ('reg.exe query "HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\DatabaseBackupApp" /v "InstallLocation" 2^>nul') do (
+    set "TARGET_DIR=%%B"
+)
+if "!TARGET_DIR!"=="" (
+    for /f "tokens=2*" %%A in ('reg.exe query "HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\DatabaseBackupApp" /v "InstallLocation" 2^>nul') do (
+        set "TARGET_DIR=%%B"
+    )
+)
+
+REM If not found in registry, check standard Program Files
+if "!TARGET_DIR!"=="" (
+    if exist "%ProgramFiles%\DatabaseBackupApp\DatabaseBackupApp.exe" (
+        set "TARGET_DIR=%ProgramFiles%\DatabaseBackupApp"
+    )
+)
+
+REM If running directly inside the installed application directory (not installer package)
+if "!TARGET_DIR!"=="" (
+    set "CURR_DIR=%~dp0"
+    if "!CURR_DIR:~-1!"=="\" set "CURR_DIR=!CURR_DIR:~0,-1!"
+    if exist "!CURR_DIR!\DatabaseBackupApp.exe" if not exist "!CURR_DIR!\Setup_DatabaseBackup.exe" (
+        set "TARGET_DIR=!CURR_DIR!"
+    )
+)
+
+REM Safety check: Never delete the installer package directory itself!
+set "SCRIPT_DIR=%~dp0"
+if "!SCRIPT_DIR:~-1!"=="\" set "SCRIPT_DIR=!SCRIPT_DIR:~0,-1!"
+if exist "!SCRIPT_DIR!\Setup_DatabaseBackup.exe" (
+    if /i "!TARGET_DIR!"=="!SCRIPT_DIR!" (
+        set "TARGET_DIR=%ProgramFiles%\DatabaseBackupApp"
+    )
+)
+
+if not "!TARGET_DIR!"=="" (
+    if "!TARGET_DIR:~-1!"=="\" set "TARGET_DIR=!TARGET_DIR:~0,-1!"
+)
+
 set "DATA_DIR=%ALLUSERSPROFILE%\DatabaseBackupApp"
 
 REM 2. Interactive Confirmation (only if not silent)
