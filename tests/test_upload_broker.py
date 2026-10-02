@@ -69,10 +69,13 @@ class TestUploadBroker(unittest.TestCase):
 
         broker_main.TOKENS_FILE = self.tokens_path
         broker_main.BUCKET = "test-backup-bucket"
-        broker_main.ALLOWED_DBS = {"all"}
+        broker_main.ALLOWED_DBS = set()
+        broker_main.CUSTOMER_SLUG = ""
         broker_main.MAX_BYTES = 50 * 1024 * 1024 * 1024  # 50 GB
 
     def tearDown(self):
+        broker_main.ALLOWED_DBS = set()
+        broker_main.CUSTOMER_SLUG = ""
         if os.path.exists(self.tokens_path):
             try:
                 os.remove(self.tokens_path)
@@ -129,6 +132,7 @@ class TestUploadBroker(unittest.TestCase):
                                json={"db": "SecretAdminDB", "size": 1024, "seq": 1})
         self.assertEqual(res.status_code, 400)
         self.assertIn("db not allowed", res.get_json().get("error", ""))
+        broker_main.ALLOWED_DBS = set()
 
     def test_04_size_validation(self):
         """Rejects zero, negative, boolean, non-integer, or oversized payloads."""
@@ -204,6 +208,40 @@ class TestUploadBroker(unittest.TestCase):
 
         res_bad = self.client.post("/verify", headers=self.auth_header(secret="wrong"))
         self.assertEqual(res_bad.status_code, 401)
+
+    def test_09_customer_mismatch(self):
+        """Rejects token if pc_id does not start with CUSTOMER_SLUG-."""
+        broker_main.CUSTOMER_SLUG = "acme"
+        # Token pc_id is 'pc-cust-01', which does not start with 'acme-'
+        res = self.client.post("/verify", headers=self.auth_header())
+        self.assertEqual(res.status_code, 401)
+
+        # Token matching customer slug 'acme-pc01'
+        acme_pc = "acme-pc01"
+        secret_hash = hashlib.sha256(self.secret.encode("utf-8")).hexdigest()
+        with open(self.tokens_path, "w", encoding="utf-8") as f:
+            json.dump({acme_pc: secret_hash}, f)
+
+        res_ok = self.client.post("/verify", headers=self.auth_header(pc_id=acme_pc))
+        self.assertEqual(res_ok.status_code, 200)
+
+    def test_10_strict_db_regex(self):
+        """Rejects empty, path traversal, or special characters in database name."""
+        # Path traversal
+        res = self.client.post("/request-upload", headers=self.auth_header(),
+                               json={"db": "../../etc/passwd", "size": 1024, "seq": 1})
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("invalid database name", res.get_json().get("error", ""))
+
+        # Spaces in db name
+        res = self.client.post("/request-upload", headers=self.auth_header(),
+                               json={"db": "DB With Spaces", "size": 1024, "seq": 1})
+        self.assertEqual(res.status_code, 400)
+
+        # Empty string
+        res = self.client.post("/request-upload", headers=self.auth_header(),
+                               json={"db": "", "size": 1024, "seq": 1})
+        self.assertEqual(res.status_code, 400)
 
 
 if __name__ == "__main__":

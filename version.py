@@ -15,3 +15,10 @@ INSTALLER_EXE_NAME = "Setup_DatabaseBackup.exe"
 DEFAULT_INSTALL_SUBDIR = "DatabaseBackupApp"
 PROGRAM_DATA_DIR = r"C:\ProgramData\DatabaseBackupApp"
 DEFAULT_TASK_NAME = r"\DatabaseBackupApp\DatabaseBackupAutoTask"
+
+# Embedded Admin Ed25519 Public Key for Zero-Trust Manifest Verification
+EMBEDDED_ADMIN_PUBLIC_KEY_PEM = (
+    "-----BEGIN PUBLIC KEY-----\n"
+    "MCowBQYDK2VwAyEAUwmpkX+0AVBJiRNUfd7tm65krqq30q7ngVYVgFzmGYk=\n"
+    "-----END PUBLIC KEY-----"
+)

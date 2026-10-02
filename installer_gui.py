@@ -68,9 +68,32 @@ class InstallerApp(ctk.CTk):
         self.target_dir = os.path.join(pf, DEFAULT_INSTALL_SUBDIR)
         self.data_dir = PROGRAM_DATA_DIR
 
-        # Automatically resolve existing configured Broker URL and Token
-        self.broker_url = self._auto_resolve_broker_url()
-        self.raw_token = self._auto_resolve_raw_token()
+        self.manifest_data = None
+        self.manifest_verified = False
+        self.manifest_tampered = False
+        self.manifest_error = ""
+        self.customer_slug = ""
+        self.telemetry_url = ""
+
+        # Check for Ed25519-signed manifest in package (Requirement 2)
+        from preflight import validate_signed_manifest
+        m_data, m_res = validate_signed_manifest(package_dir=self.bundle_dir)
+        if m_res.code == "ERR_MANIFEST_TAMPERED":
+            self.manifest_tampered = True
+            self.manifest_error = m_res.message
+        elif m_res.passed and m_data:
+            self.manifest_data = m_data
+            self.manifest_verified = True
+            self.customer_slug = m_data.get("customer_slug", "")
+            self.broker_url = m_data.get("broker_url", "")
+            self.telemetry_url = m_data.get("telemetry_url", "")
+            self.raw_token = m_data.get("initial_token", "")
+
+        # Automatically resolve existing configured Broker URL and Token if not in manifest
+        if not self.broker_url:
+            self.broker_url = self._auto_resolve_broker_url()
+        if not self.raw_token:
+            self.raw_token = self._auto_resolve_raw_token()
 
         # Apply branding icon if available
         ico = os.path.join(self.bundle_dir, "app_icon.ico")
@@ -85,6 +108,9 @@ class InstallerApp(ctk.CTk):
 
     def _auto_resolve_broker_url(self):
         """Discovers existing configured Upload Broker URL if deployed or packaged."""
+        if self.manifest_verified and self.broker_url:
+            return self.broker_url
+
         # 1. Check existing config on client PC (upgrade scenario)
         for chk in [os.path.join(self.data_dir, "config.json"), os.path.join(self.target_dir, "config.json")]:
             if os.path.exists(chk):
@@ -115,33 +141,12 @@ class InstallerApp(ctk.CTk):
         if env_url:
             return env_url
 
-        # 4. Check gcloud CLI if installed
-        try:
-            cmd = ["gcloud.cmd" if sys.platform.startswith("win") else "gcloud", "run", "services", "describe", "upload-broker", "--format=value(status.url)"]
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
-            if res.returncode == 0:
-                cloud_url = res.stdout.strip()
-                if cloud_url.startswith("https://"):
-                    return cloud_url
-        except Exception:
-            pass
-
         return ""
 
     def _auto_resolve_raw_token(self):
-        """Discovers raw token if provided via raw_token.txt or existing token.dpapi."""
-        for s_base in [self.bundle_dir, os.getcwd(), getattr(self, 'source_app_dir', '')]:
-            if not s_base:
-                continue
-            t_chk = os.path.join(s_base, "raw_token.txt")
-            if os.path.exists(t_chk):
-                try:
-                    with open(t_chk, "r", encoding="utf-8") as f:
-                        t = f.read().strip()
-                        if t and "." in t:
-                            return t
-                except Exception:
-                    pass
+        """Discovers raw token if provided via signed manifest or existing token.dpapi."""
+        if self.manifest_verified and self.raw_token:
+            return self.raw_token
         from preflight import decrypt_token_dpapi
         t_str, _ = decrypt_token_dpapi(data_dir=self.data_dir, target_dir=self.target_dir)
         return t_str or ""
@@ -169,6 +174,26 @@ class InstallerApp(ctk.CTk):
         body = ctk.CTkFrame(self, fg_color="transparent")
         body.pack(fill="both", expand=True, padx=25, pady=15)
 
+        # Tampered or Verified Manifest Status Banner
+        if self.manifest_tampered:
+            err_frame = ctk.CTkFrame(body, fg_color="#7f1d1d", corner_radius=6)
+            err_frame.pack(fill="x", pady=(0, 10))
+            ctk.CTkLabel(
+                err_frame,
+                text=f"⚠️ TAMPERED PACKAGE: {self.manifest_error}",
+                font=ctk.CTkFont(size=11, weight="bold"),
+                text_color="#fca5a5"
+            ).pack(padx=10, pady=8)
+        elif self.manifest_verified:
+            v_frame = ctk.CTkFrame(body, fg_color="#064e3b", corner_radius=6)
+            v_frame.pack(fill="x", pady=(0, 10))
+            ctk.CTkLabel(
+                v_frame,
+                text=f"🔒 AUTHENTIC ED25519 SIGNED PACKAGE ({self.customer_slug.upper()}) - ZERO TYPING REQUIRED",
+                font=ctk.CTkFont(size=11, weight="bold"),
+                text_color="#6ee7b7"
+            ).pack(padx=10, pady=6)
+
         # 1. Target Directory Section
         ctk.CTkLabel(body, text="Installation Destination:", font=ctk.CTkFont(size=12, weight="bold")).pack(anchor="w", pady=(0, 4))
         dir_frame = ctk.CTkFrame(body, fg_color="transparent")
@@ -193,9 +218,9 @@ class InstallerApp(ctk.CTk):
 
         ctk.CTkLabel(
             card_top,
-            text="CLOUD RUN UPLOAD BROKER ENDPOINT",
+            text="CLOUD RUN UPLOAD BROKER ENDPOINT" + (" (LOCKED BY SIGNED MANIFEST)" if self.manifest_verified else ""),
             font=ctk.CTkFont(size=11, weight="bold"),
-            text_color="#60a5fa"
+            text_color="#34d399" if self.manifest_verified else "#60a5fa"
         ).pack(side="left")
 
         # Auto-detect & Test button
@@ -210,7 +235,7 @@ class InstallerApp(ctk.CTk):
             command=self._refresh_and_test_broker
         ).pack(side="right")
 
-        # Broker URL Entry Field (clean, editable, pre-filled or placeholder)
+        # Broker URL Entry Field (clean, editable or locked)
         self.broker_url_var = tk.StringVar(value=self.broker_url)
         self.entry_broker = ctk.CTkEntry(
             broker_card,
@@ -220,11 +245,13 @@ class InstallerApp(ctk.CTk):
             height=30
         )
         self.entry_broker.pack(fill="x", padx=12, pady=(2, 4))
+        if self.manifest_verified and self.broker_url:
+            self.entry_broker.configure(state="disabled")
 
         # Token Entry Field
         ctk.CTkLabel(
             broker_card,
-            text="MACHINE AUTHENTICATION TOKEN (DPAPI ENCRYPTED):",
+            text="MACHINE AUTHENTICATION TOKEN (DPAPI ENCRYPTED):" + (" (PRE-SEALED)" if self.manifest_verified and self.raw_token else ""),
             font=ctk.CTkFont(size=10, weight="bold"),
             text_color="#9ca3af"
         ).pack(anchor="w", padx=12, pady=(2, 1))
@@ -238,6 +265,8 @@ class InstallerApp(ctk.CTk):
             height=30
         )
         self.entry_token.pack(fill="x", padx=12, pady=(1, 4))
+        if self.manifest_verified and self.raw_token:
+            self.entry_token.configure(state="disabled")
 
         # Status indicator badge
         self.lbl_broker_status = ctk.CTkLabel(

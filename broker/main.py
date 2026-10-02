@@ -14,9 +14,12 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 BUCKET = os.environ.get("BUCKET", "")
 TOKENS_FILE = os.environ.get("TOKENS_FILE", "/secrets/pc_tokens.json")  # Secret Manager volume
-ALLOWED_DBS = {d.strip() for d in os.environ.get("ALLOWED_DBS", "all").split(",") if d.strip()}
+CUSTOMER_SLUG = os.environ.get("CUSTOMER_SLUG", "").strip().lower()
+raw_dbs = os.environ.get("ALLOWED_DBS", "").strip()
+ALLOWED_DBS = {d.strip() for d in raw_dbs.split(",") if d.strip() and d.strip().lower() != "all"}
 MAX_BYTES = int(os.environ.get("MAX_BYTES", str(100 * 1024 ** 3)))
 PC_ID_RE = re.compile(r"^[a-z0-9-]{3,40}$")
+DB_NAME_RE = re.compile(r"^[A-Za-z0-9_$-]{1,128}$")
 
 _client = None
 
@@ -38,6 +41,10 @@ def authenticate(header):
         scheme, cred = header.split(" ", 1)
         pc_id, secret = cred.split(".", 1)
         if scheme != "Bearer" or not PC_ID_RE.match(pc_id):
+            return None
+        # Enforce customer binding: pc_id prefix must match customer slug
+        if CUSTOMER_SLUG and not pc_id.startswith(f"{CUSTOMER_SLUG}-"):
+            audit("customer_mismatch", pc=pc_id, expected_customer=CUSTOMER_SLUG)
             return None
         if not os.path.exists(TOKENS_FILE):
             return None
@@ -62,16 +69,26 @@ def request_upload():
     body = request.get_json(silent=True) or {}
     db, size, seq = body.get("db"), body.get("size"), body.get("seq", 1)
 
-    if "all" not in ALLOWED_DBS and db not in ALLOWED_DBS:
-        audit("bad_db", pc=pc, db=str(db)[:50]); return jsonify(error="db not allowed"), 400
+    # Strict Database Name Validation (No 'all' wildcard, strictly sanitized SQL identifiers)
+    if not isinstance(db, str) or not DB_NAME_RE.match(db):
+        audit("bad_db", pc=pc, db=str(db)[:50])
+        return jsonify(error="invalid database name"), 400
+    if ALLOWED_DBS and db not in ALLOWED_DBS:
+        audit("db_not_allowed", pc=pc, db=str(db)[:50])
+        return jsonify(error="db not allowed"), 400
+
     if not isinstance(size, int) or isinstance(size, bool) or not (0 < size <= MAX_BYTES):
         audit("bad_size", pc=pc, size=str(size)[:20]); return jsonify(error="bad size"), 400
     if seq not in (1, 2, 3):
         audit("bad_seq", pc=pc); return jsonify(error="bad seq"), 400
 
     # The BROKER chooses the object name. Client input cannot influence the path.
+    # Prefixed with customer slug to satisfy IAM-conditioned objectCreator
     day = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d")
-    name = f"{pc}/{db}/{day}_{seq}.dbk2"
+    if CUSTOMER_SLUG:
+        name = f"{CUSTOMER_SLUG}/{pc}/{db}/{day}_{seq}.dbk2"
+    else:
+        name = f"{pc}/{db}/{day}_{seq}.dbk2"
     blob = get_storage_client().bucket(BUCKET).blob(name)
     try:
         # if_generation_match=0 => fail if object already exists (no overwrite).

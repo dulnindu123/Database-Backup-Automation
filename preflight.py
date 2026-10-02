@@ -45,6 +45,7 @@ from version import (
     DEFAULT_INSTALL_SUBDIR,
     PROGRAM_DATA_DIR,
     DEFAULT_TASK_NAME,
+    EMBEDDED_ADMIN_PUBLIC_KEY_PEM,
 )
 
 # Known Cloud Sync Directory Markers & Env Vars
@@ -109,6 +110,83 @@ class PreflightReport:
             status = "PASS" if r.passed else "FAIL"
             lines.append(f"[{status}] {r.name}: {r.message} (Code: {r.code})")
         return "\n".join(lines)
+
+
+# =============================================================================
+# 0. SIGNED MANIFEST VALIDATION (Requirement 2: Ed25519 Signed Manifest)
+# =============================================================================
+
+def validate_signed_manifest(
+    package_dir: Optional[str] = None,
+    expected_slug: Optional[str] = None,
+    public_key_pem: Optional[str] = None
+) -> Tuple[Optional[Dict[str, Any]], PreflightCheckResult]:
+    """
+    Validates manifest.json and manifest.sig in package_dir using the
+    embedded admin Ed25519 public key.
+    """
+    from admin.manifest_signer import verify_manifest
+
+    dirs_to_check = []
+    if package_dir:
+        dirs_to_check.append(package_dir)
+    dirs_to_check.extend([os.getcwd(), os.path.join(os.getcwd(), "AppFiles")])
+
+    manifest_path = None
+    sig_path = None
+
+    for d in dirs_to_check:
+        m = os.path.join(d, "manifest.json")
+        s = os.path.join(d, "manifest.sig")
+        if os.path.exists(m) and os.path.exists(s):
+            manifest_path = m
+            sig_path = s
+            break
+
+    if not manifest_path or not sig_path:
+        return None, PreflightCheckResult(
+            name="Signed Manifest Integrity",
+            passed=False,
+            message="Customer manifest or signature absent (manifest.json / manifest.sig not found)",
+            code="ERR_MANIFEST_ABSENT"
+        )
+
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest_data = json.load(f)
+        with open(sig_path, "r", encoding="utf-8") as f:
+            sig_b64 = f.read().strip()
+    except Exception as e:
+        return None, PreflightCheckResult(
+            name="Signed Manifest Integrity",
+            passed=False,
+            message=f"Could not read manifest or signature file: {e}",
+            code="ERR_MANIFEST_READ_FAIL",
+            error_detail=str(e)
+        )
+
+    pub_pem = public_key_pem or EMBEDDED_ADMIN_PUBLIC_KEY_PEM
+    is_valid, reason, parsed = verify_manifest(
+        manifest_data, sig_b64, public_key_pem=pub_pem, expected_slug=expected_slug
+    )
+
+    if not is_valid:
+        return parsed, PreflightCheckResult(
+            name="Signed Manifest Integrity",
+            passed=False,
+            message=f"Manifest verification rejected: {reason}",
+            code="ERR_MANIFEST_TAMPERED",
+            error_detail=reason
+        )
+
+    slug = parsed.get("customer_slug", "unknown")
+    url = parsed.get("broker_url", "")
+    return parsed, PreflightCheckResult(
+        name="Signed Manifest Integrity",
+        passed=True,
+        message=f"Authentic Ed25519 signature verified for customer '{slug}' (Endpoint: {url})",
+        code="OK"
+    )
 
 
 # =============================================================================
