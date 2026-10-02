@@ -18,18 +18,13 @@ ALLOWED_PACKAGE_ROOT_FILES = {
     "1_Quick_Install.bat",
     "Setup_DatabaseBackup.exe",
     "Update_App.bat",
-    "Uninstall.bat",
-    "USER_GUIDE.md",
     "READ_ME_FIRST.txt",
-    "SYSTEM_ARCHITECTURE_AND_CODE_GUIDE.md",
     "app_icon.ico",
     "app_icon.png",
 }
 
 ALLOWED_PACKAGE_ROOT_DIRS = {
     "AppFiles",
-    "docs_assets",
-    "images",
     "Tools",
 }
 

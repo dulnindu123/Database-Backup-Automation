@@ -73,12 +73,8 @@ PACKAGE CONTENTS:
   Setup_DatabaseBackup.exe           -> Graphical setup wizard with live broker testing
   1_Quick_Install.bat                -> One-click automated silent installation script
   Update_App.bat                     -> Safe in-place updater (preserves existing configs)
-  Uninstall.bat                      -> Clean uninstaller (removes tasks, shortcuts, registry)
   READ_ME_FIRST.txt                  -> This quick-start guide
-  USER_GUIDE.md                      -> Complete technical engineering and architectural runbook
-  SYSTEM_ARCHITECTURE_AND_CODE_GUIDE.md -> Exhaustive codebase guide and system architecture
-  docs_assets/                       -> High-resolution UI screenshots & workflow walkthrough
-  images/                            -> Visual walkthrough assets
+  app_icon.ico / app_icon.png        -> Application branding assets
   Tools/                             -> Admin key generation and offline recovery utilities
   AppFiles/                          -> Compiled standalone application binaries & public keys
 

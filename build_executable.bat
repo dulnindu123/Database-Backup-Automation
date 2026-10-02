@@ -45,18 +45,13 @@ if exist "%PKG_DIR%" (
     if exist "dist\Setup_DatabaseBackup.exe" copy /y "dist\Setup_DatabaseBackup.exe" "%PKG_DIR%\Setup_DatabaseBackup.exe" >nul
     if exist "1_Quick_Install.bat" copy /y "1_Quick_Install.bat" "%PKG_DIR%\1_Quick_Install.bat" >nul
     if exist "Update_App.bat" copy /y "Update_App.bat" "%PKG_DIR%\Update_App.bat" >nul
-    if exist "Uninstall.bat" copy /y "Uninstall.bat" "%PKG_DIR%\Uninstall.bat" >nul
     if exist "READ_ME_FIRST.txt" copy /y "READ_ME_FIRST.txt" "%PKG_DIR%\READ_ME_FIRST.txt" >nul
-    if exist "USER_GUIDE.md" copy /y "USER_GUIDE.md" "%PKG_DIR%\USER_GUIDE.md" >nul
-    if exist "SYSTEM_ARCHITECTURE_AND_CODE_GUIDE.md" copy /y "SYSTEM_ARCHITECTURE_AND_CODE_GUIDE.md" "%PKG_DIR%\SYSTEM_ARCHITECTURE_AND_CODE_GUIDE.md" >nul
     if exist "app_icon.ico" copy /y "app_icon.ico" "%PKG_DIR%\app_icon.ico" >nul
     if exist "app_icon.png" copy /y "app_icon.png" "%PKG_DIR%\app_icon.png" >nul
-    if exist "docs_assets" robocopy.exe "docs_assets" "%PKG_DIR%\docs_assets" /MIR /IS /IT >nul
-    if exist "images" robocopy.exe "images" "%PKG_DIR%\images" /MIR /IS /IT >nul
     if exist "Tools" robocopy.exe "Tools" "%PKG_DIR%\Tools" /MIR /IS /IT >nul
     echo       [OK] Synchronized dist\DatabaseBackupApp to %PKG_DIR%\AppFiles
     echo       [OK] Synchronized Setup_DatabaseBackup.exe to %PKG_DIR%
-    echo       [OK] Synchronized scripts, docs, assets, and tools to %PKG_DIR%
+    echo       [OK] Synchronized scripts, quick reference, and tools to %PKG_DIR%
 )
 
 :: Also update local test directory
