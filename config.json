@@ -6,6 +6,7 @@
     "BACKUP_EXTENSION": ".zip",
     "TARGET_DATABASES": [],
     "BROKER_URL": "",
+    "CUSTOMER_SLUG": "",
     "TELEMETRY_BROKER_URL": "",
     "GOOGLE_DRIVE_FOLDER_ID": "",
     "GOOGLE_SHEET_ID": "",

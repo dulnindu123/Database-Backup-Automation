@@ -96,11 +96,14 @@ def audit_master_package(pkg_dir):
                 cfg = json.load(fp)
             
             broker_url = cfg.get("BROKER_URL", "").strip()
+            customer_slug = cfg.get("CUSTOMER_SLUG", "").strip()
             drive_id = cfg.get("GOOGLE_DRIVE_FOLDER_ID", "").strip()
             sheet_id = cfg.get("GOOGLE_SHEET_ID", "").strip()
 
             if broker_url != "":
                 errors.append(f"Master config.json violation: BROKER_URL must be empty (Found: '{broker_url}')")
+            if customer_slug != "":
+                errors.append(f"Master config.json violation: CUSTOMER_SLUG must be empty (Found: '{customer_slug}')")
             if drive_id != "":
                 errors.append(f"Master config.json violation: GOOGLE_DRIVE_FOLDER_ID must be empty (Found: '{drive_id}')")
             if sheet_id != "":

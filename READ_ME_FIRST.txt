@@ -76,7 +76,6 @@ PACKAGE CONTENTS:
   Uninstall.bat                      -> Clean uninstaller (removes tasks, shortcuts, registry)
   READ_ME_FIRST.txt                  -> This quick-start guide
   USER_GUIDE.md                      -> Complete technical engineering and architectural runbook
-  Enterprise_Database_Cloud_Backup_Master_Guide.docx -> Enterprise Word format deployment manual
   SYSTEM_ARCHITECTURE_AND_CODE_GUIDE.md -> Exhaustive codebase guide and system architecture
   docs_assets/                       -> High-resolution UI screenshots & workflow walkthrough
   images/                            -> Visual walkthrough assets
