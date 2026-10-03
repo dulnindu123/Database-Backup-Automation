@@ -3,6 +3,45 @@
 ## Overview
 This system is an automated, zero-trust backup architecture designed to securely upload encrypted database backups to Google Drive using Google Apps Script as a Zero-Billing Upload Broker.
 
+### Architecture Diagram
+
+```mermaid
+graph TD
+    %% Define Node Styles
+    classDef client fill:#f9f9f9,stroke:#333,stroke-width:2px;
+    classDef google fill:#fff,stroke:#4285F4,stroke-width:2px;
+    classDef storage fill:#fff,stroke:#F4B400,stroke-width:2px;
+    classDef admin fill:#fff,stroke:#DB4437,stroke-width:2px;
+    
+    subgraph Customer Sites
+        C1[Client 1\nDatabaseBackupApp]:::client
+        C2[Client 2\nDatabaseBackupApp]:::client
+        C3[Client 3...\nDatabaseBackupApp]:::client
+    end
+
+    subgraph Service Provider Cloud (Zero-Billing)
+        GAS[Google Apps Script\nBroker API]:::google
+        GS[Google Sheet\nTokens/Audit DB]:::google
+        GD[Google Drive\n5TB Storage]:::storage
+    end
+    
+    subgraph Administration
+        ADM[Air-Gapped Admin PC\npull_backup.py]:::admin
+    end
+    
+    C1 -->|1. JSON POST: Enroll/Request URI| GAS
+    C2 -->|1. JSON POST: Enroll/Request URI| GAS
+    C3 -->|1. JSON POST: Enroll/Request URI| GAS
+    
+    GAS <-->|2. Validate Token/Quota| GS
+    GAS -->|3. Generate Resumable URI| GD
+    GAS -.->|4. Return URI to Client| C1
+    
+    C1 ===>|5. Chunked HTTP PUT (Direct)| GD
+    
+    ADM --->|6. API Read-Only Pull| GD
+```
+
 ## Components
 
 ### 1. Client-Side Backup Application (`DatabaseBackupApp`)
