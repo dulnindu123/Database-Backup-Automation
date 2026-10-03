@@ -117,61 +117,24 @@ if "!HAS_ESCROW!"=="1" (
     echo       [OK] Preserved existing escrow_public.pem in ProgramData
 )
 
-:: Zero-Typing Signed Manifest Auto-Configuration
-set "MANIFEST_FILE=%~dp0manifest.json"
-if exist "!MANIFEST_FILE!" (
-    echo       [Zero-Typing] Discovered signed customer manifest.json. Auto-configuring...
+:: Setup configuration from command line parameters (1_Quick_Install.bat <broker_url> <enroll_code>)
+set "CLI_BROKER=%~1"
+set "CLI_ENROLL=%~2"
+if not "!CLI_BROKER!"=="" if not "!CLI_ENROLL!"=="" (
+    echo       Applying Broker URL and Enroll Code to config...
     powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
         "try { " ^
-        "  $manifestRaw = Get-Content -Raw -Path '!MANIFEST_FILE!' -Encoding UTF8; " ^
-        "  $m = ConvertFrom-Json $manifestRaw; " ^
-        "  $slug = $m.customer_slug; " ^
-        "  $broker = $m.broker_url; " ^
-        "  $telemetry = $m.telemetry_url; " ^
-        "  $token = $m.initial_token; " ^
-        "  if ($token) { " ^
-        "    Add-Type -AssemblyName System.Security; " ^
-        "    $bytes = [System.Text.Encoding]::UTF8.GetBytes($token.Trim()); " ^
-        "    $protected = [System.Security.Cryptography.ProtectedData]::Protect($bytes, $null, [System.Security.Cryptography.DataProtectionScope]::LocalMachine); " ^
-        "    [System.IO.File]::WriteAllBytes('%DATA_DIR%\token.dpapi', $protected); " ^
-        "    [System.IO.File]::WriteAllBytes('%TARGET_DIR%\token.dpapi', $protected); " ^
-        "    Write-Host '       [OK] Sealed token into Windows DPAPI (LocalMachine scope).' -ForegroundColor Green; " ^
-        "  } " ^
         "  $cfgPath = '%DATA_DIR%\config.json'; " ^
         "  $cfg = if (Test-Path $cfgPath) { Get-Content -Raw -Path $cfgPath -Encoding UTF8 | ConvertFrom-Json } else { [PSCustomObject]@{} }; " ^
-        "  if ($broker) { $cfg | Add-Member -NotePropertyName 'BROKER_URL' -NotePropertyValue $broker -Force; } " ^
-        "  if ($slug) { $cfg | Add-Member -NotePropertyName 'CUSTOMER_SLUG' -NotePropertyValue $slug -Force; } " ^
-        "  if ($telemetry) { $cfg | Add-Member -NotePropertyName 'TELEMETRY_BROKER_URL' -NotePropertyValue $telemetry -Force; } " ^
+        "  $cfg | Add-Member -NotePropertyName 'BROKER_URL' -NotePropertyValue '%CLI_BROKER%' -Force; " ^
+        "  $cfg | Add-Member -NotePropertyName 'ENROLL_CODE' -NotePropertyValue '%CLI_ENROLL%' -Force; " ^
         "  $cfg | ConvertTo-Json -Depth 10 | Set-Content -Path $cfgPath -Encoding UTF8; " ^
         "  Copy-Item -Path $cfgPath -Destination '%TARGET_DIR%\config.json' -Force; " ^
-        "  Write-Host ('       [OK] Applied configuration for customer: ' + $slug + ' (Zero Typing Required).') -ForegroundColor Green; " ^
+        "  Write-Host '       [OK] Applied configuration successfully.' " ^
         "} catch { " ^
-        "  Write-Warning ('Could not parse manifest.json: ' + $_.Exception.Message); " ^
+        "  Write-Error $_.Exception.Message; exit 1; " ^
         "}"
 )
-
-:: Token provisioning from command line parameter (%1) if provided (overrides manifest)
-set "CLI_TOKEN=%~1"
-if not "!CLI_TOKEN!"=="" (
-    if "!CLI_TOKEN!"=="%CLI_TOKEN:.=%" (
-        echo [WARNING] Provided token format invalid. Expected: ^<pc_id^>.^<secret^>
-    ) else (
-        echo       Importing machine token via native Windows DPAPI...
-        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
-            "try { " ^
-            "  $raw = '%CLI_TOKEN%'.Trim(); " ^
-            "  Add-Type -AssemblyName System.Security; " ^
-            "  $bytes = [System.Text.Encoding]::UTF8.GetBytes($raw); " ^
-            "  $protected = [System.Security.Cryptography.ProtectedData]::Protect($bytes, $null, [System.Security.Cryptography.DataProtectionScope]::LocalMachine); " ^
-            "  [System.IO.File]::WriteAllBytes('%DATA_DIR%\token.dpapi', $protected); " ^
-            "  [System.IO.File]::WriteAllBytes('%TARGET_DIR%\token.dpapi', $protected); " ^
-            "  Write-Host '       [OK] Token protected via native DPAPI (LocalMachine scope).' " ^
-            "} catch { " ^
-            "  Write-Error $_.Exception.Message; exit 1; " ^
-            "}"
-    )
-)
-
 echo       [OK] Application installed successfully to "%TARGET_DIR%".
 
 
