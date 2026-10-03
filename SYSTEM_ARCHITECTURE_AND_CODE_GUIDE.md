@@ -2,7 +2,7 @@
 ## Enterprise Database Cloud Backup Automation System (v4.1.0 Zero-Trust Architecture)
 
 **Author / Lead Architect:** Dulnindu Saranga  
-**System Target:** Microsoft SQL Server 2012–2022 (SQL Server 2000/2005 marked as legacy/untested), Google Cloud Platform (Cloud Run, Google Cloud Storage, Cloud Firestore, Google Sheets API v4), Windows 10/11 & Windows Server 2016–2025 (Windows 7/8/8.1 & Server 2008 R2/2012 marked as legacy/untested; macOS/Linux unsupported)  
+**System Target:** Microsoft SQL Server 2012–2022 (SQL Server 2000/2005 marked as legacy/untested), Google Cloud Platform (Cloud Run, Google Drive, Cloud Firestore, Google Sheets API v4), Windows 10/11 & Windows Server 2016–2025 (Windows 7/8/8.1 & Server 2008 R2/2012 marked as legacy/untested; macOS/Linux unsupported)  
 **Architecture Pattern:** Zero-Trust Security Wall / Decoupled Cloud Run Microservices & Stateless Client Core Engine  
 **Cryptographic Standard:** DBK2 Hybrid Streaming Envelope Encryption (AES-256-GCM + Dual RSA-4096-OAEP Key Wrapping)  
 **Documentation Version:** 4.1.0 Zero-Trust & Multi-Module Edition  
@@ -180,7 +180,7 @@ flowchart TD
     end
 
     subgraph StorageCloud["GCP Storage Infrastructure (Immutable / Write-Only)"]
-        GCS["Google Cloud Storage Bucket<br/>• WORM Retention Policy (e.g. 30 Days)<br/>• Manual Bucket Lock (Locked Mode)<br/>• Path: backups/{pc_id}/{db}/{date}_{seq}.dbk2"]
+        GCS["Google Drive Bucket<br/>• WORM Retention Policy (e.g. 30 Days)<br/>• Manual Bucket Lock (Locked Mode)<br/>• Path: backups/{pc_id}/{db}/{date}_{seq}.dbk2"]
         Sheets["Monitoring Google Sheet<br/>• Tab per PC ID<br/>• Append-Only via RAW Option<br/>• Formula Injection Neutralized"]
         Firestore[("Cloud Firestore<br/>Rate-limiting Cache")]
     end
@@ -805,7 +805,7 @@ Phase 1: Post-Compression Disk Reclaim
 
 Phase 2: Post-Verification Cloud Synchronization Purge
 ├── 4. Streaming encryption creates <temp_dir>\<db>_<timestamp>.dbk2 (8 GB).
-├── 5. .dbk2 is streamed directly to Google Cloud Storage.
+├── 5. .dbk2 is streamed directly to Google Drive.
 ├── 6. GCS returns HTTP 200/201 with server-calculated Base64 MD5 checksum.
 ├── 7. Client calculates local Base64 MD5 of .dbk2 and verifies exact match.
 └── 8. IMMEDIATE ACTION:

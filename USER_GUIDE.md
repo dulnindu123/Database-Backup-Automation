@@ -15,7 +15,7 @@
 The **Enterprise Database Cloud Backup Automation System (v4.1.0)** enforces a strict **Zero-Trust Security Wall** between customer PCs and Google Cloud Platform infrastructure.
 
 ### Security Wall Principles
-1. **Zero Client Secrets**: Customer PCs hold **no Google service account keys, cloud credentials, or OAuth secrets**. A compromised client machine cannot read, list, overwrite, or delete backups in Google Cloud Storage.
+1. **Zero Client Secrets**: Customer PCs hold **no Google service account keys, cloud credentials, or OAuth secrets**. A compromised client machine cannot read, list, overwrite, or delete backups in Google Drive.
 2. **Dedicated Cloud Run Broker Per Customer**: Each customer is provisioned with an isolated Cloud Run Upload Broker (`broker-<slug>`) and a dedicated service account limited via IAM conditions strictly to `projects/_/buckets/<bucket>/objects/<slug>/`. Cross-tenant token presentation is automatically rejected.
 3. **Ed25519 Signed Manifest & Zero-Typing Installation**: Customer packages are cryptographically signed with an administrative Ed25519 key. The installer verifies the signature against an embedded public key. If verified, the broker URL is locked and the initial token is sealed into Windows DPAPI machine storage (`token.dpapi`) with **zero typing required from the customer**.
 4. **Tamper Resistance**: If any file, endpoint URL, or manifest field is altered, the installer detects the mismatch (`ERR_MANIFEST_TAMPERED`), alerts the operator with a red warning banner, and aborts installation.

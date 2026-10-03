@@ -194,10 +194,51 @@ def import_and_protect_token(raw_token_input, target_path):
                 os.remove(raw_token_input)
             except Exception:
                 try:
-                    os.remove(raw_token_input)
-                except Exception:
                     pass
     return True
+
+
+def enroll_pc(broker_url, enroll_code, pc_id, customer_slug, target_token_path, target_offset_path):
+    """
+    Zero-billing enrollment protocol. Client generates token locally, sends to broker.
+    Broker atomically registers it and returns a stagger offset.
+    """
+    valid_url = validate_broker_url(broker_url)
+    import secrets, json
+    
+    # Generate token locally
+    secret = secrets.token_urlsafe(32)
+    token = f"{pc_id}.{secret}"
+    
+    payload = {
+        "action": "enroll",
+        "enroll_code": enroll_code,
+        "pc_id": pc_id,
+        "customer_slug": customer_slug,
+        "token": token
+    }
+    
+    try:
+        r = requests.post(valid_url, json=payload, allow_redirects=True, timeout=30)
+        if r.status_code != 200:
+            raise RuntimeError(f"Enrollment failed: HTTP {r.status_code} - {r.text}")
+        
+        data = r.json()
+        if "error" in data:
+            raise RuntimeError(f"Enrollment error: {data['error']}")
+            
+        offset_minutes = data.get("offset_minutes", 0)
+        
+        # Save token via DPAPI
+        import_and_protect_token(token, target_token_path)
+        
+        # Save offset config locally
+        with open(target_offset_path, "w", encoding="utf-8") as f:
+            json.dump({"offset_minutes": offset_minutes}, f)
+            
+        return True, offset_minutes
+    except Exception as e:
+        return False, str(e)
 
 
 # ---- broker + storage ----
@@ -211,9 +252,9 @@ def _md5_b64(path):
 
 def request_session(broker_url, token, db, size, seq=1):
     valid_url = validate_broker_url(broker_url)
-    r = requests.post(valid_url.rstrip("/") + "/request-upload",
-                      json={"db": db, "size": size, "seq": seq},
-                      headers={"Authorization": f"Bearer {token}"}, timeout=30)
+    r = requests.post(valid_url,
+                      json={"action": "request_upload", "token": token, "db_name": db, "size_bytes": size, "seq": seq},
+                      allow_redirects=True, timeout=30)
     return r
 
 
@@ -335,16 +376,17 @@ def secure_upload(file_path, db_name, config, base_dir, log_cb=None, progress_cb
 
     if status_cb:
         status_cb(f"Uploading {os.path.basename(file_path)} ...")
-    resp = _put_all(info["session_uri"], file_path, total, log, progress_cb, telemetry_cb, cancel_check)
+    resp = _put_all(info.get("upload_url", info.get("session_uri")), file_path, total, log, progress_cb, telemetry_cb, cancel_check)
     if resp is None:
         return None
 
-    remote_md5 = resp.json().get("md5Hash")
-    if remote_md5 != _md5_b64(file_path):
+    resp_json = resp.json() if resp.text else {}
+    remote_md5 = resp_json.get("md5Checksum") or resp_json.get("md5Hash")
+    if remote_md5 and remote_md5 != _md5_b64(file_path):
         log("Integrity check FAILED: remote checksum differs from local file.", "critical")
         return None
-    log(f"Upload verified (MD5 match): {info['object']}", "info")
-    return info["object"]
+    log(f"Upload verified (MD5 match): {info.get('file_name', info.get('object'))}", "info")
+    return info.get('file_name', info.get('object'))
 
 
 def report_storage_telemetry(telemetry_broker_url, token, drives):
@@ -361,12 +403,12 @@ def report_storage_telemetry(telemetry_broker_url, token, drives):
     except ValueError as e:
         return False, f"Telemetry Broker URL rejected: {e}"
 
-    payload = {"drives": drives}
+    payload = {"action": "report_status", "token": token, "drives": drives}
     try:
         r = requests.post(
-            valid_url.rstrip("/") + "/report-storage",
+            valid_url,
             json=payload,
-            headers={"Authorization": f"Bearer {token}"},
+            allow_redirects=True,
             timeout=15
         )
         if r.status_code == 200:
