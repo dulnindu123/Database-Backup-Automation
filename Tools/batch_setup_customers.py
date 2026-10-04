@@ -75,6 +75,19 @@ def main():
         except Exception as e:
             print("Failed to load:", e)
 
+    shared_pw = None
+    if input("Use ONE shared passphrase for all customers' keys? (y/N): ").strip().lower() == "y":
+        while True:
+            p = getpass.getpass("Shared passphrase: ")
+            if p != getpass.getpass("  Repeat: "):
+                print("  Do not match."); continue
+            if len(p) < 14:
+                print(f"  WARNING: only {len(p)} chars (14+ recommended). One leak exposes ALL customers.")
+                if input("  Use it anyway? (y/N): ").strip().lower() != "y":
+                    continue
+            shared_pw = p
+            break
+
     cust_dir = os.path.join(BASE, "customers")
     os.makedirs(cust_dir, exist_ok=True)
     client_pkg = os.path.abspath(os.path.join(BASE, "..", "Client_Installation_Package"))
@@ -95,7 +108,7 @@ def main():
             print(f"[{i}/{len(items)}] {name} ({slug}): already provisioned, skipping.")
             continue
         print(f"\n[{i}/{len(items)}] {name} ({slug})")
-        pw = ask_pw("Passphrase for this customer's private keys")
+        pw = shared_pw or ask_pw("Passphrase for this customer's private keys")
         print("  Generating keys...")
         p_priv, p_pub = generate_rsa_keypair(pw)
         e_priv, e_pub = generate_rsa_keypair(pw)
