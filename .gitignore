@@ -38,3 +38,5 @@ scratch/
 build/
 dist/
 *.spec
+
+customers/

@@ -1,0 +1,65 @@
+# One customer per line:  slug,Display Name
+# Slug rules: lowercase letters/numbers only, 2-24 chars, unique.
+# EDIT the slugs below as you like before running batch_setup_customers.py.
+adelaideglass,AdelaideGlass
+bnd,B&D
+bartonglassfmi,BartonGlass - FMI
+viridianbayglass,Viridian (Bay Glass)
+chevronglass,ChevronGlass
+citiwest,Citiwest
+cobalt,Cobalt
+constructionglazing,Construction Glazing
+cutglass,Cut Glass
+davisglass,DavisGlass
+dillmireglass,Dillmire Glass
+directglass,DirectGlass
+geelongglass,GeelongGlass
+ggs,GGS
+glass360,Glass 360
+glassme,Glass me
+glassteam,Glass Team
+glassco,GlassCo
+glasstechact,GlassTechAct
+glasstechcairns,GlassTechCairns
+glassaustralia,Glass Austrailia
+glasshousemanufacturing,GlassHouse Manufacturing
+infinityglass,InfinityGlass
+knkglass,KnK Glass
+kiyomiglass,Kiyomi Glass
+kwikglass,Kwik Glass
+kristal,Kristal
+mercuryglass,MercuryGlass
+miroverreglass,Miroverre Glass
+msg,MSG
+megaglass,Mega Glass
+newcastleglass,NewCastleGlass
+ngs,NGS
+novatech,Novatech
+platinumimports,Platinum Imports
+precisionshowerscreens,PrecisionShowerScreens
+premiumoz,PremiumOZ
+rezglass,REZ Glass
+rgt,RGT
+riou,Riou
+stakeglassspil,Stake Glass - SPIL
+stakeglassspillite,Stake Glass - SPIL Lite
+suburbanglass,SuburbanGlass
+superformglass,SuperFormGlass
+superkote,SuperKote
+sydneygz,SydneyGZ
+tpsglass,TPS Glass
+trendymirrors,Trendy Mirrors
+tuffco,Tuffco
+waglasskote,WA GlassKote
+wholesalebevel,WholeSale Bevel
+wetempglass,We Temp Glass
+blisscoglass,Blissco Glass
+gatewayglass,Gateway Glass
+glennsglassrotorua,GlennsGlassRotorua
+glennswhakatane,GlennsWhakatane
+nulookcreations,NulookCreations
+nulooktepuke,NulookTepuke
+omegatauranga,OmegaTauranga
+rotoruaaluminiumjoinery,RotoruaAlumminiumJoinery
+windowwarehouse,WindowWareHouse
+wizardzglass,Wizardz Glass

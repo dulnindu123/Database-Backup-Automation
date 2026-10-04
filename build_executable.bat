@@ -43,7 +43,6 @@ if exist "%PKG_DIR%" (
     if not exist "%PKG_DIR%\AppFiles" mkdir "%PKG_DIR%\AppFiles"
     robocopy.exe "dist\DatabaseBackupApp" "%PKG_DIR%\AppFiles" /MIR /IS /IT >nul
     if exist "dist\Setup_DatabaseBackup.exe" copy /y "dist\Setup_DatabaseBackup.exe" "%PKG_DIR%\Setup_DatabaseBackup.exe" >nul
-    if exist "1_Quick_Install.bat" copy /y "1_Quick_Install.bat" "%PKG_DIR%\1_Quick_Install.bat" >nul
     if exist "Update_App.bat" copy /y "Update_App.bat" "%PKG_DIR%\Update_App.bat" >nul
     if exist "READ_ME_FIRST.txt" copy /y "READ_ME_FIRST.txt" "%PKG_DIR%\READ_ME_FIRST.txt" >nul
     if exist "app_icon.ico" copy /y "app_icon.ico" "%PKG_DIR%\app_icon.ico" >nul

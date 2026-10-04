@@ -101,9 +101,8 @@ class TestStrayFilesAndAllowlist(unittest.TestCase):
             self.assertTrue(any("BROKER_URL must be empty" in e for e in errors), "Audit did not reject populated config")
 
     def test_05_installer_scripts_contain_zero_stray_txt_reads(self):
-        """Verify that 1_Quick_Install.bat and Update_App.bat do not reference reading stray .txt files."""
+        """Verify that Update_App.bat do not reference reading stray .txt files."""
         scripts = [
-            os.path.join(self.pkg_dir, "1_Quick_Install.bat"),
             os.path.join(self.pkg_dir, "Update_App.bat"),
         ]
         forbidden_patterns = ["broker_url.txt", "drive_folder.txt", "sheet_id.txt"]

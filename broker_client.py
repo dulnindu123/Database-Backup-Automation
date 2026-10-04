@@ -193,8 +193,7 @@ def import_and_protect_token(raw_token_input, target_path):
                     os.fsync(f.fileno())
                 os.remove(raw_token_input)
             except Exception:
-                try:
-                    pass
+                pass
     return True
 
 

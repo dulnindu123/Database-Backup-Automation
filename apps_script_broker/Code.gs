@@ -1,6 +1,6 @@
 // Code.gs
-const SPREADSHEET_ID = "YOUR_SPREADSHEET_ID_HERE";
-const ROOT_FOLDER_ID = "YOUR_DRIVE_FOLDER_ID_HERE";
+const SPREADSHEET_ID = "12xEfxLTOw8D4K8Qi_kj0RWPl12hID6x5HZpvU_AsTLE";
+const ROOT_FOLDER_ID = "16-ifHQQPv2vZ_eTVZvx8CiGilVy9dQ8r";
 
 // Constant-time string comparison to prevent timing attacks
 function secureCompare(a, b) {

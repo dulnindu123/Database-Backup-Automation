@@ -22,6 +22,9 @@ import os
 import sys
 import re
 import json
+import time
+import base64
+import hashlib
 import socket
 import ctypes
 import shutil
@@ -34,6 +37,7 @@ try:
 except ImportError:
     requests = None
 
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import hashes
@@ -120,151 +124,7 @@ class PreflightReport:
 SLUG_RE = re.compile(r"^[a-z0-9]{2,24}$")
 
 
-def verify_manifest(
-    manifest_data: Any,
-    signature_b64: str,
-    public_key: Optional[Any] = None,
-    public_key_pem: Optional[str] = None,
-    expected_slug: Optional[str] = None
-) -> Tuple[bool, str, Dict[str, Any]]:
-    """
-    Cryptographically verifies the Ed25519 signature of a manifest and
-    validates all security constraints (HTTPS URL, slug structure, key fingerprints).
-    Returns (is_valid, reason_or_message, parsed_dict).
-    """
-    import base64
-    from urllib.parse import urlparse
-    from cryptography.exceptions import InvalidSignature
-
-    if isinstance(manifest_data, (str, bytes)):
-        try:
-            raw_bytes = manifest_data.encode("utf-8") if isinstance(manifest_data, str) else manifest_data
-            parsed = json.loads(raw_bytes)
-            canonical_bytes = json.dumps(parsed, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        except Exception as e:
-            return False, f"Manifest JSON parsing failed: {e}", {}
-    elif isinstance(manifest_data, dict):
-        parsed = manifest_data
-        canonical_bytes = json.dumps(parsed, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    else:
-        return False, "Unsupported manifest data format", {}
-
-    # Load public key
-    if public_key is None:
-        pem = public_key_pem or EMBEDDED_ADMIN_PUBLIC_KEY_PEM
-        if pem:
-            try:
-                public_key = serialization.load_pem_public_key(pem.encode("utf-8"))
-            except Exception as e:
-                return False, f"Invalid public key PEM: {e}", {}
-        else:
-            return False, "No public key available for manifest verification", {}
-
-    # 1. Verify Signature
-    try:
-        sig_bytes = base64.b64decode(signature_b64)
-        public_key.verify(sig_bytes, canonical_bytes)
-    except InvalidSignature:
-        return False, "Tampered package: Ed25519 manifest signature is invalid!", parsed
-    except Exception as e:
-        return False, f"Signature verification error: {e}", parsed
-
-    # 2. Validate Schema & Constraints
-    for required_field in ("customer_slug", "broker_url", "version", "expected_key_fingerprints"):
-        if required_field not in parsed:
-            return False, f"Manifest missing mandatory field '{required_field}'", parsed
-
-    slug = parsed.get("customer_slug", "")
-    if not SLUG_RE.match(slug):
-        return False, f"Invalid customer slug format in manifest: '{slug}'", parsed
-
-    if expected_slug and slug != expected_slug:
-        return False, f"Customer slug mismatch: manifest is for '{slug}', expected '{expected_slug}'", parsed
-
-    # 3. HTTPS URL Validation
-    broker_url = parsed.get("broker_url", "")
-    parsed_url = urlparse(broker_url)
-    if parsed_url.scheme.lower() != "https" or not parsed_url.netloc:
-        return False, f"Insecure or invalid broker URL in manifest: '{broker_url}' (HTTPS required)", parsed
-
-    # 4. Key Fingerprints Validation
-    fps = parsed.get("expected_key_fingerprints", [])
-    if not isinstance(fps, list) or len(fps) < 2 or len(set(fps)) < 2:
-        return False, "Manifest must specify at least 2 distinct public key fingerprints", parsed
-
-    return True, "Manifest signature and constraints verified successfully", parsed
-
-
-def validate_signed_manifest(
-    package_dir: Optional[str] = None,
-    expected_slug: Optional[str] = None,
-    public_key_pem: Optional[str] = None
-) -> Tuple[Optional[Dict[str, Any]], PreflightCheckResult]:
-    """
-    Validates manifest.json and manifest.sig in package_dir using the
-    embedded admin Ed25519 public key.
-    """
-
-    dirs_to_check = []
-    if package_dir:
-        dirs_to_check.append(package_dir)
-    dirs_to_check.extend([os.getcwd(), os.path.join(os.getcwd(), "AppFiles")])
-
-    manifest_path = None
-    sig_path = None
-
-    for d in dirs_to_check:
-        m = os.path.join(d, "manifest.json")
-        s = os.path.join(d, "manifest.sig")
-        if os.path.exists(m) and os.path.exists(s):
-            manifest_path = m
-            sig_path = s
-            break
-
-    if not manifest_path or not sig_path:
-        return None, PreflightCheckResult(
-            name="Signed Manifest Integrity",
-            passed=False,
-            message="Customer manifest or signature absent (manifest.json / manifest.sig not found)",
-            code="ERR_MANIFEST_ABSENT"
-        )
-
-    try:
-        with open(manifest_path, "r", encoding="utf-8") as f:
-            manifest_data = json.load(f)
-        with open(sig_path, "r", encoding="utf-8") as f:
-            sig_b64 = f.read().strip()
-    except Exception as e:
-        return None, PreflightCheckResult(
-            name="Signed Manifest Integrity",
-            passed=False,
-            message=f"Could not read manifest or signature file: {e}",
-            code="ERR_MANIFEST_READ_FAIL",
-            error_detail=str(e)
-        )
-
-    pub_pem = public_key_pem or EMBEDDED_ADMIN_PUBLIC_KEY_PEM
-    is_valid, reason, parsed = verify_manifest(
-        manifest_data, sig_b64, public_key_pem=pub_pem, expected_slug=expected_slug
-    )
-
-    if not is_valid:
-        return parsed, PreflightCheckResult(
-            name="Signed Manifest Integrity",
-            passed=False,
-            message=f"Manifest verification rejected: {reason}",
-            code="ERR_MANIFEST_TAMPERED",
-            error_detail=reason
-        )
-
-    slug = parsed.get("customer_slug", "unknown")
-    url = parsed.get("broker_url", "")
-    return parsed, PreflightCheckResult(
-        name="Signed Manifest Integrity",
-        passed=True,
-        message=f"Authentic Ed25519 signature verified for customer '{slug}' (Endpoint: {url})",
-        code="OK"
-    )
+# Removed old verify_manifest, replaced by verify_bundle in sign_bundle.py style.
 
 
 # =============================================================================
@@ -1053,3 +913,87 @@ def run_preflight_suite(
 
     return report
 
+
+SLUG_RE = re.compile(r"^[a-z0-9]{2,24}$")
+URL_RE = re.compile(r"^https://script\.google\.com/macros/s/[A-Za-z0-9_-]{20,200}/exec$")
+
+class BundleError(ValueError):
+    pass
+
+def spki_fingerprint(pem):
+    pub = serialization.load_pem_public_key(pem if isinstance(pem, bytes) else pem.encode())
+    if not isinstance(pub, rsa.RSAPublicKey):
+        raise BundleError("only RSA encryption keys are supported")
+    if pub.key_size < 3072:
+        raise BundleError(f"RSA key is {pub.key_size} bits; minimum is 3072")
+    der = pub.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+    return hashlib.sha256(der).hexdigest()
+
+def verify_bundle(public_key, bundle_b64, signature_b64, expect_customer=None, now=None):
+    try:
+        data, sig = base64.b64decode(bundle_b64, validate=True), base64.b64decode(signature_b64, validate=True)
+        public_key.verify(sig, data)
+    except (InvalidSignature, ValueError):
+        raise BundleError("bundle signature invalid")
+    b = json.loads(data)
+    for k in ("customer", "broker_url", "issued_at", "public_keys"):
+        if k not in b:
+            raise BundleError(f"bundle missing {k}")
+    if not SLUG_RE.match(b["customer"]) or (expect_customer and b["customer"] != expect_customer):
+        raise BundleError("customer mismatch")
+    if not URL_RE.match(b["broker_url"]):
+        raise BundleError("broker_url not allowed")
+    ks = b["public_keys"]
+    if not isinstance(ks, list) or len(ks) < 2:
+        raise BundleError("need primary and escrow keys")
+    fps = set()
+    for k in ks:
+        real = spki_fingerprint(k["pem"])
+        if real != k.get("fingerprint"):
+            raise BundleError("key fingerprint does not match its PEM")
+        fps.add(real)
+    if len(fps) < 2:
+        raise BundleError("primary and escrow keys must be distinct")
+    now = int(time.time() if now is None else now)
+    if b.get("expires_at") and now > b["expires_at"]:
+        raise BundleError("bundle expired")
+    return b
+
+def validate_signed_bundle(
+    package_dir: Optional[str] = None,
+    expected_slug: Optional[str] = None,
+    public_key_pem: Optional[str] = None
+) -> Tuple[Optional[Dict[str, Any]], PreflightCheckResult]:
+    dirs_to_check = []
+    if package_dir: dirs_to_check.append(package_dir)
+    dirs_to_check.extend([os.getcwd(), os.path.join(os.getcwd(), "AppFiles")])
+
+    bundle_path = None
+    for d in dirs_to_check:
+        b = os.path.join(d, "bundle.json")
+        if os.path.exists(b):
+            bundle_path = b
+            break
+
+    if not bundle_path:
+        return None, PreflightCheckResult("Signed Bundle Integrity", False, "Customer bundle.json absent", "ERR_BUNDLE_ABSENT")
+
+    try:
+        with open(bundle_path, "r", encoding="utf-8") as f:
+            b_data = json.load(f)
+        bundle_b64 = b_data.get("BUNDLE_B64", "")
+        signature_b64 = b_data.get("SIGNATURE_B64", "")
+    except Exception as e:
+        return None, PreflightCheckResult("Signed Bundle Integrity", False, f"Could not read bundle.json: {e}", "ERR_BUNDLE_READ_FAIL", str(e))
+
+    pub_pem = public_key_pem or EMBEDDED_ADMIN_PUBLIC_KEY_PEM
+    try:
+        pub_key = serialization.load_pem_public_key(pub_pem.encode("utf-8"))
+        parsed = verify_bundle(pub_key, bundle_b64, signature_b64, expect_customer=expected_slug)
+        slug = parsed.get("customer", "unknown")
+        url = parsed.get("broker_url", "")
+        # Adapt keys for installer UI extraction if needed
+        parsed["customer_slug"] = slug # backward compat for installer
+        return parsed, PreflightCheckResult("Signed Bundle Integrity", True, f"Authentic Ed25519 signature verified for customer '{slug}' (Endpoint: {url})", "OK")
+    except Exception as e:
+        return None, PreflightCheckResult("Signed Bundle Integrity", False, f"Bundle verification rejected: {e}", "ERR_BUNDLE_TAMPERED", str(e))

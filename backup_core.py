@@ -46,6 +46,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from googleapiclient.errors import HttpError
 import re
+import requests
 from crypto_stream import encrypt_file
 from broker_client import secure_upload
 
@@ -560,24 +561,13 @@ def authenticate(interactive=True, log_cb=None):
                 emit_log(f"Token refresh failed (token may have been revoked): {e}", "error", log_cb)
                 creds = None
                 
-        # Step B: Interactive initial browser authorization
+        # Step B: Interactive Google OAuth was REMOVED in the zero-trust build.
+        # Uploads and telemetry go through the Apps Script broker (broker_client.py);
+        # no client_secret.json is ever shipped, so there is nothing to authorize.
         if not creds:
-            if not os.path.exists(CLIENT_SECRET_FILE):
-                emit_log(f"OAuth Client Secret missing at {CLIENT_SECRET_FILE}. Please configure GCP credentials.", "critical", log_cb)
-                return None
-                
-            if not interactive:
-                emit_log("Unattended execution halted: User authorization required but running in non-interactive mode.", "error", log_cb)
-                return None
-                
-            emit_log("Launching default web browser for Google account authorization...", "info", log_cb)
-            try:
-                flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRET_FILE, SCOPES)
-                creds = flow.run_local_server(port=0)
-            except Exception as e:
-                emit_log(f"OAuth handshake failed: {e}", "critical", log_cb)
-                return None
-                
+            emit_log("Google OAuth is not used in this build; broker enrollment handles authentication.", "warning", log_cb)
+            return None
+
         # Step C: Save newly authorized or refreshed credentials
         try:
             with open(TOKEN_FILE, 'w', encoding='utf-8') as token_out:
@@ -623,7 +613,7 @@ def test_broker_connection(config, log_cb=None):
     }
     broker_url = (config.get("BROKER_URL") or "").rstrip("/")
     if not broker_url:
-        results["errors"].append("BROKER_URL is not configured. Please enter your Cloud Run endpoint in Settings.")
+        results["errors"].append("BROKER_URL is not configured. Please enter your Apps Script endpoint in Settings.")
         emit_log("Broker connection test failed: BROKER_URL missing.", "error", log_cb)
         return results
 

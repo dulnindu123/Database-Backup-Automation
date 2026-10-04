@@ -79,8 +79,10 @@ Since the Broker and Client hold no read credentials (Zero-Trust), restores must
 - **Ransomware Vulnerability**: Unlike Google Cloud Storage WORM, Google Drive does not support Object Retention Locks. If the primary Google Workspace account running the Apps Script is compromised, an attacker can empty the trash and delete backups.
 - **Encryption**: Files are encrypted client-side using a public key. The private key never touches the customer's machine or the Google Drive.
 
-## Deployment
-1. Import `apps_script_broker/Code.gs` into a new Apps Script project.
-2. Link the Apps Script to a Google Sheet with tabs: `Config`, `Tokens`, `Audit`, `Telemetry`.
-3. Deploy as Web App -> Execute as: Me -> Access: Anyone.
-4. Run `rebuild_client_installation_package.py` locally to bake the Broker URL into the Windows installer.
+## Deployment Instructions
+1. Clone the repository and install requirements.
+2. Ensure you have the Apps Script Web App deployed and have your Google Sheet ID and Folder ID ready.
+3. Run `python Tools\setup_new_customer.py`.
+4. The wizard will automatically generate secure RSA keys, bundle them into an Admin-signed `bundle.json`, and output an `ENROLL_CODE`.
+5. Add the `ENROLL_CODE` to the `Config` tab of your Google Sheet.
+6. The wizard automatically copies `Setup_DatabaseBackup.exe` and `AppFiles` into the customer's deployment folder. Zip this folder and send it to the customer. When run, the installer uses true zero-typing to auto-enroll the PC.

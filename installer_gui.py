@@ -11,6 +11,7 @@ import subprocess
 import urllib.request
 import urllib.error
 import ctypes
+import socket
 import tkinter as tk
 from tkinter import messagebox, filedialog
 import customtkinter as ctk
@@ -124,28 +125,28 @@ class InstallerApp(ctk.CTk):
         self.target_dir = os.path.join(pf, DEFAULT_INSTALL_SUBDIR)
         self.data_dir = PROGRAM_DATA_DIR
 
-        self.manifest_data = None
-        self.manifest_verified = False
-        self.manifest_tampered = False
-        self.manifest_error = ""
+        self.bundle_data = None
+        self.bundle_verified = False
+        self.bundle_tampered = False
+        self.bundle_error = ""
         self.customer_slug = ""
         self.telemetry_url = ""
         self.broker_url = ""
         self.raw_token = ""
 
         # Check for Ed25519-signed manifest in package (Requirement 2)
-        from preflight import validate_signed_manifest
-        m_data, m_res = validate_signed_manifest(package_dir=self.bundle_dir)
-        if m_res.code == "ERR_MANIFEST_TAMPERED":
-            self.manifest_tampered = True
-            self.manifest_error = m_res.message
+        from preflight import validate_signed_bundle
+        m_data, m_res = validate_signed_bundle(package_dir=self.bundle_dir)
+        if m_res.code == "ERR_BUNDLE_TAMPERED":
+            self.bundle_tampered = True
+            self.bundle_error = m_res.message
         elif m_res.passed and m_data:
-            self.manifest_data = m_data
-            self.manifest_verified = True
+            self.bundle_data = m_data
+            self.bundle_verified = True
             self.customer_slug = m_data.get("customer_slug", "")
             self.broker_url = m_data.get("broker_url", "")
             self.telemetry_url = m_data.get("telemetry_url", "")
-            self.raw_token = m_data.get("initial_token", "")
+            self.enroll_code = m_data.get("enroll_code", "")
 
         # Automatically resolve existing configured Broker URL and Token if not in manifest
         if not self.broker_url:
@@ -166,7 +167,7 @@ class InstallerApp(ctk.CTk):
 
     def _auto_resolve_broker_url(self):
         """Discovers existing configured Upload Broker URL if deployed or packaged."""
-        if self.manifest_verified and self.broker_url:
+        if self.bundle_verified and self.broker_url:
             return self.broker_url
 
         # 1. Check existing config on client PC (upgrade scenario)
@@ -203,7 +204,14 @@ class InstallerApp(ctk.CTk):
 
     def _auto_resolve_raw_token(self):
         """Discovers raw token if provided via signed manifest, raw_token.txt, or existing token.dpapi."""
-        if self.manifest_verified and self.raw_token:
+        if getattr(self, "enroll_code", ""):
+            import re
+            clean_hostname = re.sub(r'[^A-Za-z0-9_-]', '-', socket.gethostname()).upper()[:40]
+            if not clean_hostname:
+                clean_hostname = "PC-UNKNOWN"
+            return f"{clean_hostname}:{self.enroll_code}"
+
+        if self.bundle_verified and self.raw_token:
             return self.raw_token
 
         # Check raw_token.txt in bundle directory
@@ -255,16 +263,16 @@ class InstallerApp(ctk.CTk):
         body.pack(fill="both", expand=True, padx=25, pady=15)
 
         # Tampered or Verified Manifest Status Banner
-        if self.manifest_tampered:
+        if self.bundle_tampered:
             err_frame = ctk.CTkFrame(body, fg_color="#7f1d1d", corner_radius=6)
             err_frame.pack(fill="x", pady=(0, 10))
             ctk.CTkLabel(
                 err_frame,
-                text=f"⚠️ TAMPERED PACKAGE: {self.manifest_error}",
+                text=f"⚠️ TAMPERED PACKAGE: {self.bundle_error}",
                 font=ctk.CTkFont(size=11, weight="bold"),
                 text_color="#fca5a5"
             ).pack(padx=10, pady=8)
-        elif self.manifest_verified:
+        elif self.bundle_verified:
             v_frame = ctk.CTkFrame(body, fg_color="#064e3b", corner_radius=6)
             v_frame.pack(fill="x", pady=(0, 10))
             ctk.CTkLabel(
@@ -298,9 +306,9 @@ class InstallerApp(ctk.CTk):
 
         ctk.CTkLabel(
             card_top,
-            text="CLOUD RUN UPLOAD BROKER ENDPOINT" + (" (LOCKED BY SIGNED MANIFEST)" if self.manifest_verified else ""),
+            text="APPS SCRIPT WEB APP URL" + (" (LOCKED BY SIGNED MANIFEST)" if self.bundle_verified else ""),
             font=ctk.CTkFont(size=11, weight="bold"),
-            text_color="#34d399" if self.manifest_verified else "#60a5fa"
+            text_color="#34d399" if self.bundle_verified else "#60a5fa"
         ).pack(side="left")
 
         # Test Broker Connection button
@@ -320,18 +328,18 @@ class InstallerApp(ctk.CTk):
         self.entry_broker = ctk.CTkEntry(
             broker_card,
             textvariable=self.broker_url_var,
-            placeholder_text="Enter Cloud Run Broker URL (e.g. https://upload-broker-xxx.run.app)",
+            placeholder_text="Enter Apps Script Web App URL (e.g. https://script.google.com/macros/s/.../exec)",
             font=ctk.CTkFont(family="Consolas", size=11),
             height=30
         )
         self.entry_broker.pack(fill="x", padx=12, pady=(2, 4))
-        if self.manifest_verified and self.broker_url:
+        if self.bundle_verified and self.broker_url:
             self.entry_broker.configure(state="disabled")
 
         # Token Entry Field
         ctk.CTkLabel(
             broker_card,
-            text="ENROLLMENT CODE (DPAPI ENCRYPTED):" + (" (PRE-SEALED)" if self.manifest_verified and self.raw_token else ""),
+            text="ENROLLMENT CODE (DPAPI ENCRYPTED):" + (" (PRE-SEALED)" if self.bundle_verified and self.raw_token else ""),
             font=ctk.CTkFont(size=10, weight="bold"),
             text_color="#9ca3af"
         ).pack(anchor="w", padx=12, pady=(2, 1))
@@ -345,7 +353,7 @@ class InstallerApp(ctk.CTk):
             height=30
         )
         self.entry_token.pack(fill="x", padx=12, pady=(1, 4))
-        if self.manifest_verified and self.raw_token:
+        if self.bundle_verified and self.raw_token:
             self.entry_token.configure(state="disabled")
 
         # Status indicator badge
@@ -464,18 +472,12 @@ class InstallerApp(ctk.CTk):
 
         if token and ':' in token:
             pc_id, enroll_code = token.split(':', 1)
-            # In a real test we'd ping, but for now we'll just check format
-            v_res = type('Result', (), {'passed': True, 'message': 'Valid format'})()
-            if v_res.passed:
-                self.lbl_broker_status.configure(
-                    text=f"✓ Broker Reachable & Token Verified ({token.split('.')[0]})",
-                    text_color="#34d399"
-                )
-            else:
-                self.lbl_broker_status.configure(
-                    text=f"⚠️ Token Rejected by Broker: {v_res.message}",
-                    text_color="#f87171"
-                )
+            # In Apps Script model, we don't 'verify' an enrollment code without enrolling. 
+            # We'll just validate the format during preflight ping.
+            self.lbl_broker_status.configure(
+                text=f"✓ Broker Reachable & Enrollment Code formatted for PC: {pc_id}",
+                text_color="#34d399"
+            )
         else:
             self.lbl_broker_status.configure(
                 text="✓ Broker Reachable & Active (Endpoint Verified)",
@@ -561,13 +563,20 @@ class InstallerApp(ctk.CTk):
             subprocess.run(["robocopy.exe", self.source_app_dir, self.target_dir, "/E", "/IS", "/IT"], capture_output=True)
 
             # Ensure public keys are copied to both target_dir and data_dir
-            for k in ["backup_public.pem", "escrow_public.pem"]:
-                for s_base in [self.source_app_dir, self.bundle_dir]:
-                    k_src = os.path.join(s_base, k)
-                    if os.path.exists(k_src):
-                        shutil.copy2(k_src, os.path.join(self.target_dir, k))
-                        shutil.copy2(k_src, os.path.join(self.data_dir, k))
-                        break
+            if self.bundle_data and "public_keys" in self.bundle_data:
+                for pk in self.bundle_data["public_keys"]:
+                    fname = "backup_public.pem" if pk["name"] == "primary" else "escrow_public.pem"
+                    for d in [self.target_dir, self.data_dir]:
+                        with open(os.path.join(d, fname), "w", encoding="utf-8") as f:
+                            f.write(pk["pem"])
+            else:
+                for k in ["backup_public.pem", "escrow_public.pem"]:
+                    for s_base in [self.source_app_dir, self.bundle_dir]:
+                        k_src = os.path.join(s_base, k)
+                        if os.path.exists(k_src):
+                            shutil.copy2(k_src, os.path.join(self.target_dir, k))
+                            shutil.copy2(k_src, os.path.join(self.data_dir, k))
+                            break
 
             # Process machine authentication token
             tok_input = self.token_var.get().strip() if hasattr(self, 'token_var') else ""
@@ -585,23 +594,38 @@ class InstallerApp(ctk.CTk):
                 except Exception:
                     pass
 
-            if tok_input and "." in tok_input:
-                self.status_lbl.configure(text="Sealing machine token via native Windows DPAPI (Machine Scope 0x4)...")
-                try:
-                    prot_bytes = _protect_dpapi_native(tok_input.encode("utf-8"))
-                    if prot_bytes:
-                        with open(os.path.join(self.target_dir, "token.dpapi"), "wb") as f:
-                            f.write(prot_bytes)
-                        with open(os.path.join(self.data_dir, "token.dpapi"), "wb") as f:
-                            f.write(prot_bytes)
-                    if raw_token_found and os.path.exists(raw_token_found):
-                        # Securely wipe raw_token.txt
-                        flen = os.path.getsize(raw_token_found)
-                        with open(raw_token_found, "wb") as wf:
-                            wf.write(os.urandom(max(flen, 64)))
-                        os.remove(raw_token_found)
-                except Exception as ex:
-                    print(f"Token DPAPI sealing failed: {ex}")
+            if tok_input:
+                from broker_client import enroll_pc
+                if ":" in tok_input:
+                    self.status_lbl.configure(text="Enrolling PC with broker...")
+                    pc_id, enroll_code = tok_input.split(":", 1)
+                    b_url = self.broker_url_var.get().strip()
+                    success, msg = enroll_pc(
+                        b_url, enroll_code, pc_id, self.customer_slug,
+                        os.path.join(self.target_dir, "token.dpapi"),
+                        os.path.join(self.target_dir, "offset.json")
+                    )
+                    if success:
+                        shutil.copy2(os.path.join(self.target_dir, "token.dpapi"), os.path.join(self.data_dir, "token.dpapi"))
+                        shutil.copy2(os.path.join(self.target_dir, "offset.json"), os.path.join(self.data_dir, "offset.json"))
+                    else:
+                        messagebox.showerror("Enrollment Failed", f"Failed to enroll PC:\\n{msg}")
+                elif "." in tok_input:
+                    self.status_lbl.configure(text="Sealing machine token via native Windows DPAPI (Machine Scope 0x4)...")
+                    try:
+                        prot_bytes = _protect_dpapi_native(tok_input.encode("utf-8"))
+                        if prot_bytes:
+                            with open(os.path.join(self.target_dir, "token.dpapi"), "wb") as f:
+                                f.write(prot_bytes)
+                            with open(os.path.join(self.data_dir, "token.dpapi"), "wb") as f:
+                                f.write(prot_bytes)
+                        if raw_token_found and os.path.exists(raw_token_found):
+                            flen = os.path.getsize(raw_token_found)
+                            with open(raw_token_found, "wb") as wf:
+                                wf.write(os.urandom(max(flen, 64)))
+                            os.remove(raw_token_found)
+                    except Exception as ex:
+                        print(f"Token DPAPI sealing failed: {ex}")
 
             # Check for existing token.dpapi in bundle
             for s_base in [self.bundle_dir, self.source_app_dir]:

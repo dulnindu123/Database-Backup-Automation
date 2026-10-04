@@ -13,9 +13,7 @@ import os
 import sys
 import json
 
-# Strict Allowlist for Distribution Package
 ALLOWED_PACKAGE_ROOT_FILES = {
-    "1_Quick_Install.bat",
     "Setup_DatabaseBackup.exe",
     "Update_App.bat",
     "READ_ME_FIRST.txt",

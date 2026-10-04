@@ -27,6 +27,7 @@ Key Architectural & Design Decisions:
 """
 
 import os
+import subprocess
 import sys
 import re
 import json
@@ -772,7 +773,7 @@ class BackupAutomationApp(ctk.CTk):
             text_color="#60a5fa"
         ).pack(side="left")
 
-        self._create_field_label(sec_box, "Upload Broker URL (Cloud Run Endpoint):", pack_padx=15)
+        self._create_field_label(sec_box, "Apps Script Web App URL:", pack_padx=15)
         broker_row = ctk.CTkFrame(sec_box, fg_color="transparent")
         broker_row.pack(fill="x", padx=15, pady=(0, 10))
         self.entry_broker_url = ctk.CTkEntry(broker_row, width=370, placeholder_text="https://backup-broker-xxxx.run.app")
@@ -1326,7 +1327,7 @@ class BackupAutomationApp(ctk.CTk):
         if self.entry_broker_url.cget("state") == "disabled":
             if messagebox.askyesno(
                 "Unlock Upload Broker URL",
-                "The Upload Broker URL connects the application to your secure Cloud Run microservice.\n\n"
+                "The Upload Broker URL connects the application to your secure Google Apps Script microservice.\n\n"
                 "Modifying this address may disrupt automated backups and cloud synchronization.\n\n"
                 "Are you sure you want to unlock and edit this endpoint?"
             ):
@@ -1473,7 +1474,7 @@ class BackupAutomationApp(ctk.CTk):
                     self.after(0, lambda: messagebox.showerror("Sheet Verification Failed", err_msg))
             except Exception as ex:
                 self.append_log(f"[SHEET] Network error: {ex}", "error")
-                self.after(0, lambda: messagebox.showerror("Connection Error", str(ex)))
+                self.after(0, lambda ex=ex: messagebox.showerror("Connection Error", str(ex)))
             finally:
                 self.after(0, lambda: self.btn_test_sheet.configure(state="normal", text="🔍 Test Sheet"))
 
@@ -1675,7 +1676,7 @@ class BackupAutomationApp(ctk.CTk):
                 self.append_log(f"[SCHEDULER] Task '{DEFAULT_TASK_NAME}' triggered successfully. Waiting for execution result...")
             except Exception as ex:
                 self.append_log(f"[SCHEDULER] Execution error: {ex}", "error")
-                self.after(0, lambda: messagebox.showerror("Execution Error", str(ex)))
+                self.after(0, lambda ex=ex: messagebox.showerror("Execution Error", str(ex)))
                 return
 
             # 3. Poll for completion (up to 15 seconds)
@@ -1819,7 +1820,7 @@ class BackupAutomationApp(ctk.CTk):
                 text_color="#fca5a5",
                 fg_color="#7f1d1d"
             ))
-            self.after(0, lambda: messagebox.showerror("Error", str(e)))
+            self.after(0, lambda e=e: messagebox.showerror("Error", str(e)))
         finally:
             self.after(0, lambda: self.btn_test_conn.configure(state="normal", text="🔍  Test Preflights"))
 
@@ -1906,7 +1907,7 @@ class BackupAutomationApp(ctk.CTk):
                 self.append_log("Backup process terminated cleanly.", "info")
             else:
                 self.append_log(f"Fatal execution error: {e}", "critical")
-                self.after(0, lambda: messagebox.showerror("Fatal Error", f"Workflow failed:\n{e}"))
+                self.after(0, lambda e=e: messagebox.showerror("Fatal Error", f"Workflow failed:\n{e}"))
         finally:
             def _reset_ui():
                 self.is_running = False
@@ -2253,7 +2254,7 @@ class BackupAutomationApp(ctk.CTk):
             self.after(0, _update_ui)
 
         except Exception as e:
-            def _err():
+            def _err(e=e):
                 self.sh_scan_status.configure(text=f"Status: Error — {e}", text_color="#f87171")
                 self.btn_scan_now.configure(state="normal", text="🔍  Scan Now")
             self.after(0, _err)

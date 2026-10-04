@@ -178,7 +178,22 @@ def sync_to_client_package(build_info: dict):
         f.write(info_json)
     print("[SYNC] Synchronized build_info.json to AppFiles and package root.")
 
-    # 5. Audit Client_Installation_Package
+    # 5. Sync batch scripts, docs, and Tools
+    print("[SYNC] Copying root scripts and documentation...")
+    for file in ['Update_App.bat', 'READ_ME_FIRST.txt']:
+        if os.path.exists(file):
+            shutil.copy2(file, os.path.join(PKG_DIR, file))
+    
+    src_tools = 'Tools'
+    dst_tools = os.path.join(PKG_DIR, 'Tools')
+    if os.path.exists(src_tools):
+        print(f"[SYNC] Syncing Tools folder: {src_tools} -> {dst_tools}")
+        shutil.copytree(src_tools, dst_tools, dirs_exist_ok=True)
+        # Clean up any leftover make_token.py in the target
+        make_token = os.path.join(dst_tools, 'make_token.py')
+        if os.path.exists(make_token): os.remove(make_token)
+
+    # 6. Audit Client_Installation_Package
     pkg_errors = audit_master_package(PKG_DIR)
     if pkg_errors:
         print("[CRITICAL ERROR] Client package audit failed with violations:")

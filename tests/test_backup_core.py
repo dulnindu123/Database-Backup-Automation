@@ -89,7 +89,7 @@ class TestBackupCore(unittest.TestCase):
     def test_03_installer_output_satisfies_broker_ready(self):
         """Verifies that the files laid down by the installer satisfy broker_ready()."""
         with tempfile.TemporaryDirectory() as td:
-            # Simulate files produced by 1_Quick_Install.bat
+            # Simulate files produced by Setup_DatabaseBackup.exe
             config = {
                 "BROKER_URL": "https://upload-broker.example.com",
                 "BROKER_TOKEN_FILE": "token.dpapi",

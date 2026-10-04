@@ -71,7 +71,7 @@ This single command automates the entire cloud and package provisioning lifecycl
 
 ## Step 4: Customer PC Installation (Zero Typing Required)
 Deliver the tailored package from `dist/Customer_Packages/<slug>/` to the customer PC:
-1. The customer runs `Setup_DatabaseBackup.exe` as Administrator (or runs `1_Quick_Install.bat`).
+1. The customer runs `Setup_DatabaseBackup.exe` as Administrator.
 2. The installer automatically validates the Ed25519 signature on `manifest.json` against the embedded administrator public key.
 3. The customer types nothing:
    - Unique broker URL is pre-loaded and locked (`state="disabled"`).
