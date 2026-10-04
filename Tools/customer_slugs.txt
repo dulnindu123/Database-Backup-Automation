@@ -1,65 +1,63 @@
-# One customer per line:  slug,Display Name
-# Slug rules: lowercase letters/numbers only, 2-24 chars, unique.
-# EDIT the slugs below as you like before running batch_setup_customers.py.
-adelaideglass,AdelaideGlass
-bnd,B&D
-bartonglassfmi,BartonGlass - FMI
-viridianbayglass,Viridian (Bay Glass)
-chevronglass,ChevronGlass
-citiwest,Citiwest
-cobalt,Cobalt
-constructionglazing,Construction Glazing
-cutglass,Cut Glass
-davisglass,DavisGlass
-dillmireglass,Dillmire Glass
-directglass,DirectGlass
-geelongglass,GeelongGlass
-ggs,GGS
-glass360,Glass 360
-glassme,Glass me
-glassteam,Glass Team
-glassco,GlassCo
-glasstechact,GlassTechAct
-glasstechcairns,GlassTechCairns
-glassaustralia,Glass Austrailia
-glasshousemanufacturing,GlassHouse Manufacturing
-infinityglass,InfinityGlass
-knkglass,KnK Glass
-kiyomiglass,Kiyomi Glass
-kwikglass,Kwik Glass
-kristal,Kristal
-mercuryglass,MercuryGlass
-miroverreglass,Miroverre Glass
-msg,MSG
-megaglass,Mega Glass
-newcastleglass,NewCastleGlass
-ngs,NGS
-novatech,Novatech
-platinumimports,Platinum Imports
-precisionshowerscreens,PrecisionShowerScreens
-premiumoz,PremiumOZ
-rezglass,REZ Glass
-rgt,RGT
-riou,Riou
-stakeglassspil,Stake Glass - SPIL
-stakeglassspillite,Stake Glass - SPIL Lite
-suburbanglass,SuburbanGlass
-superformglass,SuperFormGlass
-superkote,SuperKote
-sydneygz,SydneyGZ
-tpsglass,TPS Glass
-trendymirrors,Trendy Mirrors
-tuffco,Tuffco
-waglasskote,WA GlassKote
-wholesalebevel,WholeSale Bevel
-wetempglass,We Temp Glass
-blisscoglass,Blissco Glass
-gatewayglass,Gateway Glass
-glennsglassrotorua,GlennsGlassRotorua
-glennswhakatane,GlennsWhakatane
-nulookcreations,NulookCreations
-nulooktepuke,NulookTepuke
-omegatauranga,OmegaTauranga
-rotoruaaluminiumjoinery,RotoruaAlumminiumJoinery
-windowwarehouse,WindowWareHouse
-wizardzglass,Wizardz Glass
+# One customer per line:  slug,Display Name (email)
+# Slug = the name before @, lowercase, letters/numbers only (the system does not allow @ . & spaces or capitals).
+adelaideglass,AdelaideGlass@spillabs.com
+bnd,B&D@spillabs.com
+fmi,FMI@spillabs.com
+viridian,Viridian@spillabs.com
+chevronglass,ChevronGlass@spillabs.com
+citiwest,Citiwest@spillabs.com
+cobalt,Cobalt@spillabs.com
+constructionglazing,Construction Glazing@spillabs.com
+cutglass,CutGlass@spillabs.com
+davisglass,DavisGlass@spillabs.com
+dillmireglass,DillmireGlass@spillabs.com
+directglass,DirectGlass@spillabs.com
+geelongglass,GeelongGlass@spillabs.com
+ggs,GGS@spillabs.com
+glass360,Glass360@spillabs.com
+glassme,Glassme@spillabs.com
+glassteam,GlassTeam@spillabs.com
+glassco,GlassCo@spillabs.com
+glasstechact,GlassTechAct@spillabs.com
+glasstechcairns,GlassTechCairns@spillabs.com
+glassaustrailia,GlassAustrailia@spillabs.com
+glasshousemanufacturing,GlassHouseManufacturing@spillabs.com
+infinityglass,InfinityGlass@spillabs.com
+knkglass,KnKGlass@spillabs.com
+kiyomiglass,KiyomiGlass@spillabs.com
+kwikglass,KwikGlass@spillabs.com
+kristal,Kristal@spillabs.com
+mercuryglass,MercuryGlass@spillabs.com
+miroverreglass,MiroverreGlass@spillabs.com
+msg,MSG@spillabs.com
+megaglass,MegaGlass@spillabs.com
+newcastleglass,NewCastleGlass@spillabs.com
+ngs,NGS@spillabs.com
+novatech,Novatech@spillabs.com
+platinumimports,PlatinumImports@spillabs.com
+precisionshower,PrecisionShower@spillabs.com
+premiumoz,PremiumOZ@spillabs.com
+rezglass,REZGlass@spillabs.com
+rgt,RGT@spillabs.com
+riou,Riou@spillabs.com
+stakeglass,StakeGlass@spillabs.com
+suburbanglass,SuburbanGlass@spillabs.com
+superformglass,SuperFormGlass@spillabs.com
+superkote,SuperKote@spillabs.com
+sydneygz,SydneyGZ@spillabs.com
+tpsglass,TPSGlass@spillabs.com
+trendymirrors,Trendy Mirrors@spillabs.com
+tuffco,Tuffco@spillabs.com
+waglasskote,WAGlassKote@spillabs.com
+wholesalebevel,WholeSale Bevel@spillabs.com
+wetempglass,WeTempGlass@spillabs.com
+blisscoglass,BlisscoGlass@spillabs.com
+gatewayglass,GatewayGlass@spillabs.com
+glennsglassrotorua,GlennsGlassRotorua@spillabs.com
+glennswhakatane,GlennsWhakatane@spillabs.com
+nulookcreations,NulookCreations@spillabs.com
+nulooktepuke,NulookTepuke@spillabs.com
+omegatauranga,OmegaTauranga@spillabs.com
+rotoruaalumminium,RotoruaAlumminium@spillabs.com
+windowwarehouse,WindowWareHouse@spillabs.com
+wizardzglass,WizardzGlass@spillabs.com
