@@ -39,4 +39,11 @@ build/
 dist/
 *.spec
 
+# Customer packages (generated, not stored in repo)
 customers/
+
+# Offline admin key store (never commit)
+offline/
+
+# Docs image assets (too heavy for repo)
+docs_assets/
