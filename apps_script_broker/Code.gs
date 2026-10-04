@@ -1,6 +1,20 @@
 // Code.gs
-const SPREADSHEET_ID = "12xEfxLTOw8D4K8Qi_kj0RWPl12hID6x5HZpvU_AsTLE";
-const ROOT_FOLDER_ID = "16-ifHQQPv2vZ_eTVZvx8CiGilVy9dQ8r";
+// Optional: SPREADSHEET_ID. If running inside the container spreadsheet (Extensions > Apps Script),
+// leave empty "" to automatically use the active spreadsheet.
+const SPREADSHEET_ID = "";
+
+// Optional: ROOT_FOLDER_ID. The Google Drive folder where customer backup folders will be created.
+// Leave empty "" to save directly in your Google Drive root.
+const ROOT_FOLDER_ID = "";
+
+function getSpreadsheet() {
+  if (SPREADSHEET_ID && SPREADSHEET_ID.trim() !== "") {
+    try {
+      return SpreadsheetApp.openById(SPREADSHEET_ID.trim());
+    } catch (e) {}
+  }
+  return SpreadsheetApp.getActiveSpreadsheet();
+}
 
 // Constant-time string comparison to prevent timing attacks
 function secureCompare(a, b) {
@@ -69,7 +83,7 @@ function handleEnroll(payload) {
   }
 
   try {
-    const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const ss = getSpreadsheet();
     const configSheet = ss.getSheetByName("Config");
     const tokensSheet = ss.getSheetByName("Tokens");
     
@@ -118,7 +132,7 @@ function verifyToken(token) {
   const pcId = parts[0];
   const tokenHash = hashToken(token);
 
-  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const ss = getSpreadsheet();
   const tokensSheet = ss.getSheetByName("Tokens");
   const data = tokensSheet.getDataRange().getValues();
 
@@ -148,7 +162,7 @@ function handleRequestUpload(pcData, payload) {
   
   try {
     const today = new Date().toISOString().split('T')[0];
-    const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const ss = getSpreadsheet();
     const auditSheet = ss.getSheetByName("Audit");
     
     // Check 3 slots/day quota
@@ -183,7 +197,7 @@ function handleRequestUpload(pcData, payload) {
 }
 
 function handleReportStatus(pcData, payload) {
-  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const ss = getSpreadsheet();
   
   // Use module-specific tab, default to Telemetry
   const tabName = payload.tab_name || "Telemetry";
@@ -224,7 +238,16 @@ function handleReportStatus(pcData, payload) {
 }
 
 function getOrCreateFolder(parentFolderId, folderName) {
-  const parent = DriveApp.getFolderById(parentFolderId);
+  let parent;
+  if (!parentFolderId || String(parentFolderId).trim() === "") {
+    parent = DriveApp.getRootFolder();
+  } else {
+    try {
+      parent = DriveApp.getFolderById(String(parentFolderId).trim());
+    } catch (e) {
+      parent = DriveApp.getRootFolder();
+    }
+  }
   const folders = parent.getFoldersByName(folderName);
   if (folders.hasNext()) return folders.next().getId();
   return parent.createFolder(folderName).getId();
@@ -262,8 +285,12 @@ function createResumableUpload(folderId, fileName, sizeBytes) {
 }
 
 function logAudit(pcId, action, details) {
-  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-  const auditSheet = ss.getSheetByName("Audit");
+  const ss = getSpreadsheet();
+  let auditSheet = ss.getSheetByName("Audit");
+  if (!auditSheet) {
+    auditSheet = ss.insertSheet("Audit");
+    auditSheet.appendRow(["TIMESTAMP", "PC_ID", "ACTION", "DETAILS"]);
+  }
   auditSheet.appendRow([new Date().toISOString(), pcId, action, details]);
 }
 
@@ -279,9 +306,10 @@ function errorResponse(msg, code) {
 
 // Scheduled Trigger Function: 8-Day Silence Check
 function checkSilenceAlerts() {
-  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const ss = getSpreadsheet();
   const tokensSheet = ss.getSheetByName("Tokens");
   const auditSheet = ss.getSheetByName("Audit");
+  if (!tokensSheet || !auditSheet) return;
   
   const pcs = tokensSheet.getDataRange().getValues().slice(1).map(r => r[0]);
   const auditData = auditSheet.getDataRange().getValues();
@@ -308,4 +336,39 @@ function checkSilenceAlerts() {
       body: "The following PCs have not checked in:\n" + silentPcs.join("\n")
     });
   }
+}
+
+/**
+ * Setup Function: Run this once from the Apps Script editor
+ * to automatically build all required tabs and column headers.
+ */
+function setupSheets() {
+  const ss = getSpreadsheet();
+  
+  const requiredSheets = [
+    { name: "Config", headers: ["KEY", "VALUE", "CUSTOMER_SLUG", "STATUS"] },
+    { name: "Tokens", headers: ["PC_ID", "CUSTOMER_SLUG", "TOKEN_HASH", "OFFSET_MINUTES", "CREATED_AT"] },
+    { name: "Audit", headers: ["TIMESTAMP", "PC_ID", "ACTION", "DETAILS"] },
+    { name: "Telemetry", headers: ["TIMESTAMP", "PC_ID", "CUSTOMER_SLUG", "STATUS", "MESSAGE", "DB_NAME", "BYTES"] },
+    { name: "Storage Monitor", headers: ["TIMESTAMP", "PC_ID", "CUSTOMER_SLUG", "DRIVE", "TOTAL_GB", "FREE_GB", "PERCENT_FREE"] }
+  ];
+  
+  requiredSheets.forEach(spec => {
+    let sheet = ss.getSheetByName(spec.name);
+    if (!sheet) {
+      sheet = ss.insertSheet(spec.name);
+    }
+    if (sheet.getLastRow() === 0) {
+      sheet.appendRow(spec.headers);
+      sheet.getRange(1, 1, 1, spec.headers.length).setFontWeight("bold").setBackground("#e8eaed");
+    }
+  });
+  
+  // Delete initial default empty Sheet1 if present
+  const defaultSheet = ss.getSheetByName("Sheet1");
+  if (defaultSheet && ss.getSheets().length > 1 && defaultSheet.getLastRow() === 0) {
+    try { ss.deleteSheet(defaultSheet); } catch (e) {}
+  }
+  
+  Logger.log("✅ Master Sheet tabs configured successfully!");
 }
