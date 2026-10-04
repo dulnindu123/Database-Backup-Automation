@@ -94,7 +94,7 @@ def main():
     dist = os.path.join(BASE, "dist")
     installer = next((p for p in (os.path.join(client_pkg, "Setup_DatabaseBackup.exe"),
                                   os.path.join(dist, "Setup_DatabaseBackup.exe")) if os.path.exists(p)), None)
-    appfiles = next((p for p in (os.path.join(client_pkg, "AppFiles"), os.path.join(dist, "AppFiles"))
+    appfiles = next((p for p in (os.path.join(client_pkg, "AppFiles"), os.path.join(dist, "AppFiles"), os.path.join(dist, "DatabaseBackupApp"))
                      if os.path.exists(p)), None)
 
     csv_path = os.path.join(cust_dir, "enroll_codes.csv")

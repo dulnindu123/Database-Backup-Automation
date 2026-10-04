@@ -388,10 +388,10 @@ def secure_upload(file_path, db_name, config, base_dir, log_cb=None, progress_cb
     return info.get('file_name', info.get('object'))
 
 
-def report_storage_telemetry(telemetry_broker_url, token, drives):
+def report_storage_telemetry(telemetry_broker_url, token, drives, tab_name="Storage Monitor"):
     """
-    Sends drive health stats to the separate Telemetry Broker endpoint (POST /report-storage).
-    Note: Client NEVER sends a Sheet ID or tab name. The broker handles sheet insertion safely.
+    Sends drive health stats to the separate Telemetry Broker endpoint (POST /report-status).
+    Note: Client NEVER sends a Sheet ID. The broker handles sheet insertion safely.
     Returns (success_boolean, message)
     """
     if not telemetry_broker_url or not token:
@@ -402,7 +402,7 @@ def report_storage_telemetry(telemetry_broker_url, token, drives):
     except ValueError as e:
         return False, f"Telemetry Broker URL rejected: {e}"
 
-    payload = {"action": "report_status", "token": token, "drives": drives}
+    payload = {"action": "report_status", "token": token, "drives": drives, "tab_name": tab_name}
     try:
         r = requests.post(
             valid_url,

@@ -73,17 +73,20 @@ function handleEnroll(payload) {
     const configSheet = ss.getSheetByName("Config");
     const tokensSheet = ss.getSheetByName("Tokens");
     
-    // Verify enrollment code from config
+    // Verify enrollment code and slug from config
     const configData = configSheet.getDataRange().getValues();
     let validCode = false;
-    let expectedCustomer = "";
     for (let i = 1; i < configData.length; i++) {
       if (configData[i][0] === "ENROLL_CODE" && secureCompare(String(configData[i][1]), enrollCode)) {
-        validCode = true;
+        const expectedSlug = String(configData[i][2] || "").trim();
+        if (!expectedSlug || secureCompare(expectedSlug, customerSlug)) {
+          validCode = true;
+          break;
+        }
       }
     }
     if (!validCode) {
-      logAudit(pcId, "ENROLL_FAILURE", "Invalid enrollment code");
+      logAudit(pcId, "ENROLL_FAILURE", "Invalid enrollment code or slug mismatch");
       return errorResponse("Unauthorized", 401);
     }
     
@@ -181,21 +184,43 @@ function handleRequestUpload(pcData, payload) {
 
 function handleReportStatus(pcData, payload) {
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-  const telemetrySheet = ss.getSheetByName("Telemetry");
+  
+  // Use module-specific tab, default to Telemetry
+  const tabName = payload.tab_name || "Telemetry";
+  let sheet = ss.getSheetByName(tabName);
+  if (!sheet) {
+    sheet = ss.insertSheet(tabName);
+  }
+  
   const timestamp = new Date().toISOString();
   
-  // Flatten payload to prevent injection and append RAW
-  telemetrySheet.appendRow([
-    timestamp,
-    pcData.pcId,
-    pcData.customerSlug,
-    payload.status || "UNKNOWN",
-    payload.message || "",
-    payload.db_name || "",
-    payload.bytes || 0
-  ]);
-  
-  return successResponse({ status: "recorded" });
+  // If payload contains drives, it's the Server Cleanup module
+  if (payload.drives && Array.isArray(payload.drives)) {
+    payload.drives.forEach(drive => {
+      sheet.appendRow([
+        timestamp,
+        pcData.pcId,
+        pcData.customerSlug,
+        drive.letter || "",
+        drive.total_gb || 0,
+        drive.free_gb || 0,
+        drive.percent_free || 0
+      ]);
+    });
+    return successResponse({ status: "recorded", drives_logged: payload.drives.length });
+  } else {
+    // Default fallback for single-line flat reports
+    sheet.appendRow([
+      timestamp,
+      pcData.pcId,
+      pcData.customerSlug,
+      payload.status || "UNKNOWN",
+      payload.message || "",
+      payload.db_name || "",
+      payload.bytes || 0
+    ]);
+    return successResponse({ status: "recorded" });
+  }
 }
 
 function getOrCreateFolder(parentFolderId, folderName) {

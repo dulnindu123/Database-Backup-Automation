@@ -2538,7 +2538,8 @@ def run_storage_monitor(config=None, log_cb=None, status_cb=None):
         try:
             from broker_client import load_token, report_storage_telemetry
             token = load_token(token_path)
-            sheet_logged, msg = report_storage_telemetry(telemetry_broker_url, token, drives)
+            tab_name = config.get("STORAGE_SHEET_TAB_NAME", "Storage Monitor")
+            sheet_logged, msg = report_storage_telemetry(telemetry_broker_url, token, drives, tab_name=tab_name)
             emit_log(f"Telemetry Broker: {msg}", "info" if sheet_logged else "warning", log_cb)
         except Exception as tel_err:
             emit_log(f"Notice: Storage telemetry reporting skipped: {tel_err}", "warning", log_cb)
