@@ -6,15 +6,17 @@
   <br>
   <p>
     <img src="https://img.shields.io/badge/Version-v4.2.0-blue?style=for-the-badge&logo=git&logoColor=white">
+    <img src="https://img.shields.io/badge/Shell%20Agent-100%25%20Pure%20PowerShell-239120?style=for-the-badge&logo=powershell&logoColor=white">
+    <img src="https://img.shields.io/badge/Client%20Python%20Required-NO%20(Zero%20Runtime)-success?style=for-the-badge&logo=windows&logoColor=white">
     <img src="https://img.shields.io/badge/Encryption-AES--256--GCM%20%2B%20RSA--4096-green?style=for-the-badge&logo=lock&logoColor=white">
     <img src="https://img.shields.io/badge/Broker-Google%20Apps%20Script-4285F4?style=for-the-badge&logo=google&logoColor=white">
     <img src="https://img.shields.io/badge/Cost-Zero--Billing-orange?style=for-the-badge&logo=googlecloud&logoColor=white">
-    <img src="https://img.shields.io/badge/Platform-Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white">
   </p>
   <h3>Autonomous, Zero-Knowledge Cloud Disaster Recovery for SQL Server, MySQL & PostgreSQL</h3>
   <p>
     <b>📖 User Installation:</b> See the complete <a href="INSTALLATION_GUIDE.md"><b>User Installation & Deployment Guide</b></a> |
-    <b>🔍 Reviewers:</b> See the <a href="CODE_REVIEW.md"><b>Senior Engineer Code Review Guide</b></a>
+    <b>🔍 Reviewers:</b> See the <a href="CODE_REVIEW.md"><b>Senior Engineer Code Review Guide</b></a> |
+    <b>💻 Pure Shell Agent:</b> See <a href="shell_client/README.md"><b>PowerShell Agent Guide</b></a>
   </p>
 </div>
 
@@ -26,10 +28,13 @@
 **Enterprise Database Cloud Backup Automation** is a production-grade, zero-trust automated database backup and disaster recovery system.  
 It protects mission-critical databases on customer Windows servers by:
 
+- **Dual-Engine Deployment Options**:
+  - **⚡ Option 1: 100% Pure Windows PowerShell Shell Agent (`shell_client/`)**: **Zero external dependencies, zero Python runtime, zero compilers**. Uses out-of-the-box Windows OS-level .NET Cryptography (`RSACng`, `AES`, `ProtectedData` DPAPI) and built-in Windows Task Scheduler. Ideal for sysadmins, automated RMM, and hardened servers.
+  - **🖥️ Option 2: Standalone Desktop GUI & Executable (`DatabaseBackupApp.exe`)**: Pre-compiled zero-typing graphical installation wizard (`Setup_DatabaseBackup.exe`) and interactive desktop control panel.
 - **Encrypting backups 100% client-side** using AES-256-GCM + dual RSA-4096 before anything leaves the machine.
 - **Uploading encrypted archives (`.dbk2`)** to Google Drive through a free serverless Google Apps Script broker — **zero cloud billing, zero GCP APIs, zero service accounts**.
 - **Logging telemetry** (backup status, disk health) to a single Google Sheet with automatic dynamic tab routing per module.
-- **Running silently as a Windows Scheduled Task** with a desktop GUI for manual control.
+- **Running silently as Windows Scheduled Tasks** with persistent machine-bound DPAPI credentials.
 
 > ⚠️ The cloud provider (Google Drive) stores only opaque ciphertext. Google cannot read your database data. Neither can any attacker who compromises the cloud account.
 
@@ -123,6 +128,15 @@ BackupAutomation/
 │
 ├── CODE_REVIEW.md                ← Senior Engineer Review Guide (Architecture & Invariants)
 │
+├── shell_client/                 ← 100% Native Windows Shell Client (ZERO Python Required!)
+│   ├── install_agent.ps1         ← Elevated native installer (enrollment, DPAPI, task scheduler)
+│   ├── backup_agent.ps1          ← Autonomous backup & streaming chunked upload agent
+│   ├── storage_monitor.ps1       ← Storage telemetry & health reporter
+│   ├── decrypt_backup.ps1        ← Offline DR decryption utility (.dbk2 -> .bak)
+│   ├── backup_public.pem         ← RSA-4096 primary public key
+│   ├── escrow_public.pem         ← RSA-4096 escrow public key
+│   └── README.md                 ← Sysadmin deployment guide
+│
 ├── apps_script_broker/
 │   ├── Code.gs                   ← Serverless broker (paste into Apps Script)
 │   ├── appsscript.json           ← OAuth scopes manifest
@@ -214,7 +228,34 @@ For each customer folder in `customers/<slug>_package/`:
 
 ---
 
-## 💻 Customer Installation (Zero-Typing Experience)
+## 💻 Customer Installation (Two Options)
+
+### ⚡ Option A: 100% Native PowerShell Shell Agent (No Python, No Runtime Required)
+Ideal for system administrators, headless servers, automated scripts, and enterprise environments where installing Python or compiling third-party binaries is undesirable:
+
+1. Extract the package folder (containing `bundle.json`, `backup_public.pem`, `escrow_public.pem`, and `shell_client/`).
+2. Open an elevated **PowerShell** prompt (**Run as Administrator**):
+```powershell
+cd shell_client
+powershell.exe -ExecutionPolicy Bypass -File .\install_agent.ps1
+```
+3. The installer:
+   - Auto-reads `bundle.json` for broker URL and single-use enroll code.
+   - Computes machine hardware fingerprint (`Motherboard UUID + CPU ID + MAC`).
+   - Enrolls with the Google Apps Script Web App Broker.
+   - Encrypts and seals the machine token into Windows DPAPI storage (`C:\ProgramData\DatabaseBackupApp\token.dpapi`).
+   - Copies agent scripts and public keys to `C:\Program Files\DatabaseBackupApp\`.
+   - Restricts NTFS folder ACLs via Windows `icacls.exe`.
+   - Registers automated background tasks in **Windows Task Scheduler** (`DatabaseBackup_AutomatedTask` and `DatabaseBackup_StorageMonitor`).
+4. To test a backup run immediately:
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\backup_agent.ps1
+```
+
+---
+
+### 🖥️ Option B: Standalone Graphical Setup Wizard (`Setup_DatabaseBackup.exe`)
+For non-technical staff or retail endpoints where a desktop GUI application is preferred:
 
 1. Customer extracts their `.zip` package.
 2. Runs `Setup_DatabaseBackup.exe` as Administrator.

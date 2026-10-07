@@ -26,19 +26,61 @@ flowchart TD
 | **Operating System** | Windows 10, Windows 11, Windows Server 2016, 2019, 2022, 2025 (64-bit) |
 | **Permissions** | Local Administrator rights (required for Windows Scheduled Task and DPAPI vault) |
 | **Database Engines** | Microsoft SQL Server (2012–2022), MySQL (5.7, 8.0+), PostgreSQL (12+) |
-| **Python Required on Client?** | **NO** — Fully standalone `.exe` bundle (Python runtime is pre-packaged in `_internal`) |
+| **Python Required on Client?** | **ABSOLUTELY NOT** — Both deployment tracks require **zero Python installation** on client machines. |
+| **PowerShell Version** | Windows PowerShell 5.1 (built into Windows 10/Server 2016+) or PowerShell 7+ |
 | **Network Access** | Outbound HTTPS (Port 443) to `script.google.com` and `drive.google.com` |
-| **Disk Space** | Minimum 500 MB free for application files; local staging folder requires 2.5× database size |
+| **Disk Space** | Minimum 50 MB for PowerShell agent (or 500 MB for GUI executable); staging requires 2.5× database size |
 
 > [!IMPORTANT]
-> - **Zero Python Dependency on Client**: End-users do **NOT** need Python installed on their machines. The installer and app run as native, standalone Windows executables (`.exe`). Python is only required on the **administrator's management machine** for running offline key generation and recovery tools.
-> - **No Cloud Credentials Needed**: The client machine requires **no** Google account logins, OAuth tokens, or service account keys. All communications are mediated through the stateless Zero-Trust Upload Broker.
+> - **Zero Python Dependency on Client**: End-users and server administrators do **NOT** need Python installed.
+>   - **Track 1 (Pure PowerShell Agent)**: 100% native Windows shell script using built-in Windows .NET Cryptography (`RSACng`, `AES`, `ProtectedData` DPAPI) and Task Scheduler.
+>   - **Track 2 (Standalone Executable)**: Pre-compiled Windows `.exe` with internal runtime.
+> - **Zero Cloud Credentials Needed**: The client machine requires **no** Google account logins, OAuth tokens, or service account keys. All communications are mediated through the stateless Zero-Trust Upload Broker.
 
 ---
 
-## 🚀 Step-by-Step Installation Walkthrough
+## 🚀 Choose Your Installation Track
 
-### Step 1: Extract the Customer Deployment Package
+### ⚡ Track 1: Native Windows PowerShell Shell Agent (Recommended for SysAdmins & Servers)
+*Use this option if you want a lightweight, auditable script with **zero third-party binaries** and **zero Python**.*
+
+#### 1. Extract Package
+Extract the customer `.zip` file. You will see:
+* `shell_client/` folder (contains `install_agent.ps1`, `backup_agent.ps1`, `storage_monitor.ps1`, `decrypt_backup.ps1`)
+* `bundle.json` (signed configuration envelope)
+* `backup_public.pem` & `escrow_public.pem` (RSA-4096 public keys)
+
+#### 2. Open Elevated PowerShell (Run as Administrator)
+Right-click the Windows Start menu, select **Windows PowerShell (Admin)** or **Terminal (Admin)**, and navigate to the directory:
+```powershell
+cd shell_client
+powershell.exe -ExecutionPolicy Bypass -File .\install_agent.ps1
+```
+
+#### 3. Automatic Zero-Typing Installation
+The installer script automatically:
+1. Reads `bundle.json` for broker URL and single-use `ENROLL_CODE`.
+2. Gathers hardware fingerprint (`SHA-256` of Motherboard UUID + CPU ID + MAC).
+3. Connects to the Google Apps Script broker, authenticates, and receives an authorized machine token.
+4. Seals the machine token in **Windows DPAPI** (`C:\ProgramData\DatabaseBackupApp\token.dpapi`).
+5. Copies all agent scripts to `C:\Program Files\DatabaseBackupApp\`.
+6. Sets restricted NTFS folder permissions via `icacls`.
+7. Registers two automated tasks in **Windows Task Scheduler**:
+   - `DatabaseBackup_AutomatedTask` (Daily backup at 02:00 AM)
+   - `DatabaseBackup_StorageMonitor` (Hourly storage telemetry monitor)
+
+#### 4. Immediate Test Run
+To test a backup immediately from PowerShell:
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File "C:\Program Files\DatabaseBackupApp\backup_agent.ps1"
+```
+
+---
+
+### 🖥️ Track 2: Graphical Setup Wizard (`Setup_DatabaseBackup.exe`)
+*Use this option if you prefer an interactive desktop GUI wizard.*
+
+#### Step 1: Extract the Customer Deployment Package
 You will receive a tailored customer deployment package (e.g., `acme_package.zip`).
 1. Download or copy the `.zip` file to the target machine.
 2. Extract the archive into a dedicated temporary folder (e.g., `C:\Temp\Installer` or Desktop).
@@ -49,14 +91,14 @@ You will receive a tailored customer deployment package (e.g., `acme_package.zip
 
 ---
 
-### Step 2: Run the Installer as Administrator
+#### Step 2: Run the Installer as Administrator
 1. Locate **`Setup_DatabaseBackup.exe`**.
 2. **Right-click** the executable and select **Run as administrator**.
 3. When prompted by Windows User Account Control (UAC), click **Yes**.
 
 ---
 
-### Step 3: Automated Bundle Verification & Enrollment
+#### Step 3: Automated Bundle Verification & Enrollment
 The installer wizard will open and automatically perform security checks:
 
 1. **Digital Signature Verification**:
