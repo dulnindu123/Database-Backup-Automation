@@ -11,52 +11,56 @@ Google Apps Script broker to the provider's Google Drive. **No Google credential
 
 | Path | Purpose |
 |------|---------|
-| `Setup_DatabaseBackup.exe` | The installer the customer runs |
-| `AppFiles/` | The backup application (`DatabaseBackupApp.exe`, `_internal/`, public keys, blank `config.json`) |
-| `Tools/decrypt_backup.py` | Admin tool to decrypt a `.dbk2` backup (needs the private key) |
-| `Tools/generate_keys.py` | Admin tool to create an RSA key pair |
+| `shell_client/` | **100% Native Windows PowerShell Shell Agent** (Zero Python required! Contains `install_agent.ps1`, `backup_agent.ps1`, `storage_monitor.ps1`) |
+| `Setup_DatabaseBackup.exe` | Standalone graphical installer wizard |
+| `AppFiles/` | GUI backup application binaries (`DatabaseBackupApp.exe`, `_internal/`, public keys, blank `config.json`) |
 | `Update_App.bat` | Updates an installed app to a newer build |
-| `READ_ME_FIRST.txt` | Admin quick reference |
+| `READ_ME_FIRST.txt` | Quick reference card |
 | `sha256_manifest.json`, `build_info.json` | Build integrity and version info |
+
+> 🔒 **Decryption Security Note**: Client installation packages contain **only public keys** and cannot decrypt backups. Decryption is performed strictly by authorized service providers on an air-gapped machine using `admin_recovery_tool/` on the `main` branch.
 
 ## Requirements
 
-- Windows 10/11 or Windows Server (64-bit)
-- Administrator rights
-- Microsoft SQL Server reachable from the PC
-- Internet access (HTTPS to `script.google.com`)
+- Windows 10/11 or Windows Server 2016+ (64-bit)
+- Local Administrator rights
+- Database engine (Microsoft SQL Server, MySQL, or PostgreSQL)
+- Outbound HTTPS access (Port 443 to `script.google.com` and `drive.google.com`)
+- **Python Required on Client?** **NO** — Neither the PowerShell shell agent nor the GUI executable require Python on the client machine!
 
-## For the Provider (Admin): preparing a customer package
+---
 
-Done once per customer from the `main` branch:
+## Installation Options
 
-1. Run `python Tools\setup_new_customer.py` (one customer) or `python Tools\batch_setup_customers.py` (many).
-2. Paste the printed `ENROLL_CODE` into the Google Sheet **Config** tab (A = `ENROLL_CODE`, B = the code).
-3. Take the generated `customers\<slug>_package` folder. It already contains this installer, `AppFiles`,
-   the customer's public keys and a signed `bundle.json`.
-4. Zip it and send it to the customer.
-5. Keep `customers\<slug>_keys` (private keys) **offline and never send them**.
+### ⚡ Option 1: Native Windows PowerShell Shell Agent (No Python Required)
+Recommended for system administrators, headless servers, and locked-down environments:
+1. Extract package.
+2. Open an elevated PowerShell prompt (Run as Administrator):
+   ```powershell
+   cd shell_client
+   powershell.exe -ExecutionPolicy Bypass -File .\install_agent.ps1
+   ```
+3. The installer auto-detects `bundle.json`, enrolls with the Apps Script broker, seals the machine token in DPAPI, and registers Windows Scheduled Tasks.
+4. Test a backup immediately:
+   ```powershell
+   powershell.exe -ExecutionPolicy Bypass -File .\backup_agent.ps1
+   ```
 
-> The `bundle.json` is customer-specific and is **not** in this branch.
-
-## For the Customer: installing
-
-1. Extract the ZIP you received to a normal folder (e.g. Desktop). Do not run from inside the ZIP.
+### 🖥️ Option 2: Graphical Setup Wizard (`Setup_DatabaseBackup.exe`)
+For desktop users preferring an interactive GUI:
+1. Extract the package ZIP to a local folder.
 2. Right-click **`Setup_DatabaseBackup.exe`** and choose **Run as administrator**.
-3. The installer verifies the signed `bundle.json`, registers the PC automatically, and shows the settings screen.
-4. Enter the SQL Server details, choose the backup folder and schedule, then click **Save**.
-5. Done. Backups run automatically (default: Mondays at 02:00).
+3. The installer verifies the signed `bundle.json`, registers the PC automatically, and configures Scheduled Tasks.
+4. Launch **DatabaseBackupApp** from the desktop shortcut to run manual backups or review live logs.
 
-## Updating an installed app
+---
 
-Run `Update_App.bat` as administrator from the new package folder.
-
-## Restoring a backup (provider only)
-
+## Restoring a Backup (Provider / Admin Only)
+Restores are performed strictly on the provider's air-gapped admin workstation using the dedicated recovery suite on the `main` branch (`admin_recovery_tool/`):
+```bash
+# Launch the 1-click GUI recovery wizard:
+admin_recovery_tool\Launch_Recovery_Wizard.bat
 ```
-python Tools\decrypt_backup.py <file.dbk2> <private_key.pem> <output_file>
-```
-You will be asked for the key passphrase. Only the provider holds the private keys.
 
 ## Troubleshooting
 
