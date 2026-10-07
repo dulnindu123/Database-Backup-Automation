@@ -16,6 +16,7 @@
 param(
     [string]$ConfigDir = "C:\ProgramData\DatabaseBackupApp",
     [string]$InstallDir = "C:\Program Files\DatabaseBackupApp",
+    [string]$RunMode = "Automatic",
     [switch]$VerboseLog
 )
 
@@ -376,26 +377,37 @@ while ($offset -lt $totalBytes) {
 Write-Log "Upload complete! Verification confirmed by cloud endpoint." "SUCCESS" "UPLOAD"
 
 # ------------------------------------------------------------------------------
-# 10. REPORT STATUS & TELEMETRY TO GOOGLE SHEET
+# 10. REPORT STATUS & TELEMETRY TO GOOGLE SHEETS
 # ------------------------------------------------------------------------------
-Write-Log "Reporting backup telemetry to Master Google Sheet..." "INFO" "TELEMETRY"
+Write-Log "Reporting backup telemetry to Master Application Report & Customer Sheet..." "INFO" "TELEMETRY"
 $reportPayload = @{
-    action        = "report_status"
-    token         = $bearerToken
-    status        = "SUCCESS"
-    db_name       = $dbName
-    file_name     = $remoteFileName
-    bytes         = $dbk2Size
-    sha256        = $sha256Hash
-    duration_secs = 5
+    action            = "report_status"
+    token             = $bearerToken
+    module            = "DB_BACKUP"
+    run_mode          = $RunMode
+    status            = "SUCCESS"
+    db_name           = $dbName
+    file_name         = $remoteFileName
+    bytes             = $dbk2Size
+    sha256            = $sha256Hash
+    duration_secs     = 5
+    customer_sheet_id = if ($config.CUSTOMER_SHEET_ID) { $config.CUSTOMER_SHEET_ID } else { "" }
 }
 
 try {
     $reportResult = Invoke-AppsScriptBroker -Url $brokerUrl -Payload $reportPayload
-    Write-Log "Telemetry logged successfully to Audit/Telemetry sheet tabs." "SUCCESS" "TELEMETRY"
+    Write-Log "Telemetry logged successfully to Customer Sheet [DB Backups] and Master Application Report." "SUCCESS" "TELEMETRY"
 } catch {
     Write-Log "Failed to report telemetry: $_" "WARNING" "TELEMETRY"
 }
+
+# Phase 2 Storage Cleanup: Delete local .dbk2 file after successful upload to maintain 0 MB disk footprint
+try {
+    if (Test-Path $dbk2File) {
+        Remove-Item -Path $dbk2File -Force -ErrorAction SilentlyContinue | Out-Null
+        Write-Log "Phase 2 Storage Cleanup: Local encrypted container purged from disk (Zero Footprint maintained)." "INFO" "CLEANUP"
+    }
+} catch {}
 
 Write-Log "============================================================" "SUCCESS" "SYSTEM"
 Write-Log "BACKUP CYCLE COMPLETED SUCCESSFULLY: $remoteFileName" "SUCCESS" "SYSTEM"

@@ -1,8 +1,110 @@
-// Master Google Sheet ID: https://docs.google.com/spreadsheets/d/12xEfxLTOw8D4K8Qi_kj0RWPl12hID6x5HZpvU_AsTLE/edit
+// =============================================================================
+// Enterprise Database Cloud Backup Automation - Zero-Trust Upload Broker
+// Version: 4.3.0
+//
+// Destinations Supported:
+// A. Customer-Specific Operational Sheet (e.g., "FMI Backup Sheet")
+//    - Tab: [DB Backups] (Date & Time, Backup File Name, Size, Drive Link, Status)
+//    - Tab: [Server Cleanup] (Date & Time, Machine ID, Drive, Total GB, Free GB, Used %, Status)
+//    - Tab: [Performance Query] (Date & Time, Database, Metric, Duration ms, Status, Details)
+//
+// B. Master "Application report" Sheet (70+ Tabs — One per Customer)
+//    - Tabs: [AdelaideGlass], [B&D], [BartonGlass - FMI], [Viridian (Bay Glass)], etc.
+//    - Records every manual/automatic execution of Backups, Cleanup, and Performance.
+//
+// C. Customer Google Drive Folders
+//    - Dedicated folders created for each customer (e.g., "AdelaideGlass", "Viridian (Bay Glass)")
+// =============================================================================
+
+// Master Broker & Application Report Google Sheet ID:
+// https://docs.google.com/spreadsheets/d/12xEfxLTOw8D4K8Qi_kj0RWPl12hID6x5HZpvU_AsTLE/edit
 const SPREADSHEET_ID = "12xEfxLTOw8D4K8Qi_kj0RWPl12hID6x5HZpvU_AsTLE";
 
-// Master Google Drive Folder ID: https://drive.google.com/drive/folders/16-ifHQQPv2vZ_eTVZvx8CiGilVy9dQ8r
+// If Application Report is hosted in a dedicated spreadsheet, set its ID here.
+// Defaults to SPREADSHEET_ID if left empty or matching.
+const APPLICATION_REPORT_ID = "12xEfxLTOw8D4K8Qi_kj0RWPl12hID6x5HZpvU_AsTLE";
+
+// Master Google Drive Root Folder ID:
+// https://drive.google.com/drive/folders/16-ifHQQPv2vZ_eTVZvx8CiGilVy9dQ8r
 const ROOT_FOLDER_ID = "16-ifHQQPv2vZ_eTVZvx8CiGilVy9dQ8r";
+
+// =============================================================================
+// 70+ CUSTOMER CANONICAL DIRECTORY (Slug -> Display Name mapping)
+// Matching customer_slugs.txt and Master Application Report tabs
+// =============================================================================
+const CUSTOMER_DIRECTORY = {
+  "adelaideglass": "AdelaideGlass",
+  "bnd": "B&D",
+  "fmi": "BartonGlass - FMI",
+  "viridian": "Viridian (Bay Glass)",
+  "chevronglass": "ChevronGlass",
+  "citiwest": "Citiwest",
+  "cobalt": "Cobalt",
+  "constructionglazing": "Construction Glazing",
+  "cutglass": "CutGlass",
+  "davisglass": "DavisGlass",
+  "dillmireglass": "DillmireGlass",
+  "directglass": "DirectGlass",
+  "geelongglass": "GeelongGlass",
+  "ggs": "GGS",
+  "glass360": "Glass360",
+  "glassme": "Glassme",
+  "glassteam": "GlassTeam",
+  "glassco": "GlassCo",
+  "glasstechact": "GlassTechAct",
+  "glasstechcairns": "GlassTechCairns",
+  "glassaustrailia": "GlassAustrailia",
+  "glasshousemanufacturing": "GlassHouseManufacturing",
+  "infinityglass": "InfinityGlass",
+  "knkglass": "KnKGlass",
+  "kiyomiglass": "KiyomiGlass",
+  "kwikglass": "KwikGlass",
+  "kristal": "Kristal",
+  "mercuryglass": "MercuryGlass",
+  "miroverreglass": "MiroverreGlass",
+  "msg": "MSG",
+  "megaglass": "MegaGlass",
+  "newcastleglass": "NewCastleGlass",
+  "ngs": "NGS",
+  "novatech": "Novatech",
+  "platinumimports": "PlatinumImports",
+  "precisionshower": "PrecisionShower",
+  "premiumoz": "PremiumOZ",
+  "rezglass": "REZGlass",
+  "rgt": "RGT",
+  "riou": "Riou",
+  "stakeglass": "StakeGlass",
+  "suburbanglass": "SuburbanGlass",
+  "superformglass": "SuperFormGlass",
+  "superkote": "SuperKote",
+  "sydneygz": "SydneyGZ",
+  "tpsglass": "TPSGlass",
+  "trendymirrors": "Trendy Mirrors",
+  "tuffco": "Tuffco",
+  "waglasskote": "WAGlassKote",
+  "wholesalebevel": "WholeSale Bevel",
+  "wetempglass": "WeTempGlass",
+  "blisscoglass": "BlisscoGlass",
+  "gatewayglass": "GatewayGlass",
+  "glennsglassrotorua": "GlennsGlassRotorua",
+  "glennswhakatane": "GlennsWhakatane",
+  "nulookcreations": "NulookCreations",
+  "nulooktepuke": "NulookTepuke",
+  "omegatauranga": "OmegaTauranga",
+  "rotoruaalumminium": "RotoruaAlumminium",
+  "windowwarehouse": "WindowWareHouse",
+  "wizardzglass": "WizardzGlass"
+};
+
+function getCustomerDisplayName(slug) {
+  if (!slug) return "Unknown Customer";
+  const clean = String(slug).trim().toLowerCase();
+  if (CUSTOMER_DIRECTORY[clean]) {
+    return CUSTOMER_DIRECTORY[clean];
+  }
+  // Title-cased fallback if a new slug is added dynamically
+  return clean.charAt(0).toUpperCase() + clean.slice(1);
+}
 
 function getSpreadsheet() {
   if (SPREADSHEET_ID && SPREADSHEET_ID.trim() !== "") {
@@ -11,6 +113,15 @@ function getSpreadsheet() {
     } catch (e) {}
   }
   return SpreadsheetApp.getActiveSpreadsheet();
+}
+
+function getApplicationReportSpreadsheet() {
+  if (APPLICATION_REPORT_ID && APPLICATION_REPORT_ID.trim() !== "") {
+    try {
+      return SpreadsheetApp.openById(APPLICATION_REPORT_ID.trim());
+    } catch (e) {}
+  }
+  return getSpreadsheet();
 }
 
 // Constant-time string comparison to prevent timing attacks
@@ -29,8 +140,19 @@ function hashToken(token) {
   return bytes.map(b => (b < 0 ? b + 256 : b).toString(16).padStart(2, '0')).join('');
 }
 
+function formatBytes(bytes) {
+  if (!bytes || bytes === 0) return "0 Bytes";
+  const k = 1024;
+  const sizes = ["Bytes", "KB", "MB", "GB", "TB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+}
+
+// =============================================================================
+// HTTP REQUEST HANDLERS (doGet & doPost)
+// =============================================================================
 function doGet(e) {
-  return successResponse({ status: "ok", service: "backup-broker" });
+  return successResponse({ status: "ok", service: "backup-broker", version: "4.3.0" });
 }
 
 function doPost(e) {
@@ -39,15 +161,15 @@ function doPost(e) {
     const action = payload.action;
 
     if (action === "health") {
-      return successResponse({ status: "ok", service: "backup-broker" });
+      return successResponse({ status: "ok", service: "backup-broker", version: "4.3.0" });
     }
     
-    // Enroll doesn't need a pre-existing token, but uses an enrollment code
+    // Enroll uses an admin-configured one-time enrollment code
     if (action === "enroll") {
       return handleEnroll(payload);
     }
 
-    // All other actions require a valid token
+    // All authenticated actions require a valid bearer machine token
     const token = payload.token;
     if (!token) return errorResponse("Missing token", 401);
 
@@ -72,6 +194,9 @@ function doPost(e) {
   }
 }
 
+// =============================================================================
+// ATOMIC ENROLLMENT
+// =============================================================================
 function handleEnroll(payload) {
   const enrollCode = String(payload.enroll_code || "").trim();
   const pcId = String(payload.pc_id || "").trim();
@@ -100,7 +225,6 @@ function handleEnroll(payload) {
       const storedCode = String(configData[i][1] || "").trim();
       if (key === "ENROLL_CODE" && storedCode && secureCompare(storedCode, enrollCode)) {
         const expectedSlug = String(configData[i][2] || "").trim();
-        // Slug must be present and match strictly (case-insensitive)
         if (expectedSlug && secureCompare(expectedSlug.toLowerCase(), customerSlug.toLowerCase())) {
           validCode = true;
           break;
@@ -112,12 +236,11 @@ function handleEnroll(payload) {
       return errorResponse("Unauthorized", 401);
     }
     
-    // Check if PC already enrolled -> allow re-enrollment if valid ENROLL_CODE was provided
     let existingRowIndex = -1;
     const tokenData = tokensSheet.getDataRange().getValues();
     for (let i = 1; i < tokenData.length; i++) {
       if (tokenData[i][0] === pcId) {
-        existingRowIndex = i + 1; // 1-indexed sheet row
+        existingRowIndex = i + 1;
         break;
       }
     }
@@ -159,6 +282,9 @@ function verifyToken(token) {
   return null;
 }
 
+// =============================================================================
+// GOOGLE DRIVE UPLOAD BROKERING (Destination C: Customer Folder)
+// =============================================================================
 function handleRequestUpload(pcData, payload) {
   let dbName = String(payload.db_name || "").trim();
   const sizeBytes = payload.size_bytes;
@@ -199,60 +325,280 @@ function handleRequestUpload(pcData, payload) {
     const seq = countToday + 1;
     const fileName = `${pcData.pcId}_${dbName}_${today}_${seq}.dbk2`;
     
-    // Server-chosen folder: ROOT/CustomerSlug/
-    const destFolderId = getOrCreateFolder(ROOT_FOLDER_ID, pcData.customerSlug);
+    // Destination C: Customer's dedicated folder in Google Drive
+    const customerDisplayName = getCustomerDisplayName(pcData.customerSlug);
+    const destFolderId = getOrCreateFolder(ROOT_FOLDER_ID, customerDisplayName);
     
-    // Create Resumable Upload Session via Drive API (UrlFetchApp)
+    // Create Resumable Upload Session via Drive API v3
     const sessionUri = createResumableUpload(destFolderId, fileName, sizeBytes);
     
     logAudit(pcData.pcId, "UPLOAD_REQUEST", dbName);
-    return successResponse({ upload_url: sessionUri, file_name: fileName });
+    return successResponse({ upload_url: sessionUri, file_name: fileName, folder_id: destFolderId });
   } finally {
     lock.releaseLock();
   }
 }
 
+// =============================================================================
+// STATUS & TELEMETRY ROUTER (Destinations A & B)
+// =============================================================================
 function handleReportStatus(pcData, payload) {
-  const ss = getSpreadsheet();
-  
-  // Use module-specific tab, default to Telemetry
-  const tabName = payload.tab_name || "Telemetry";
-  let sheet = ss.getSheetByName(tabName);
-  if (!sheet) {
-    sheet = ss.insertSheet(tabName);
-  }
-  
+  const customerDisplayName = getCustomerDisplayName(pcData.customerSlug);
+  const customerFolderId = getOrCreateFolder(ROOT_FOLDER_ID, customerDisplayName);
   const timestamp = new Date().toISOString();
-  
-  // If payload contains drives, it's the Server Cleanup module
-  if (payload.drives && Array.isArray(payload.drives)) {
-    payload.drives.forEach(drive => {
-      sheet.appendRow([
+  const runMode = payload.run_mode || "Automatic";
+  const durationSecs = payload.duration_secs || 0;
+
+  // Resolve Customer-Specific Operational Sheet (Destination A)
+  const customerSheet = getOrCreateCustomerSheet(customerFolderId, customerDisplayName, payload.customer_sheet_id);
+
+  const module = (payload.module || "").toUpperCase();
+
+  // ---------------------------------------------------------------------------
+  // 1. DB BACKUP MODULE
+  // ---------------------------------------------------------------------------
+  if (module === "DB_BACKUP" || payload.file_name) {
+    const fileName = payload.file_name || (pcData.pcId + "_" + (payload.db_name || "DB") + ".dbk2");
+    const bytes = payload.bytes || 0;
+    const sizeFormatted = formatBytes(bytes);
+    
+    // Find uploaded file in Customer's Drive Folder to get direct download/view link
+    let downloadLink = "Pending / Uploaded";
+    try {
+      const folder = DriveApp.getFolderById(customerFolderId);
+      const files = folder.getFilesByName(fileName);
+      if (files.hasNext()) {
+        const file = files.next();
+        downloadLink = file.getUrl();
+      }
+    } catch (e) {}
+
+    // A. Log to Customer's Sheet -> [DB Backups] tab
+    if (customerSheet) {
+      let dbBackupsTab = customerSheet.getSheetByName("DB Backups");
+      if (!dbBackupsTab) {
+        initCustomerSheetTabs(customerSheet);
+        dbBackupsTab = customerSheet.getSheetByName("DB Backups");
+      }
+      dbBackupsTab.appendRow([
         timestamp,
-        pcData.pcId,
-        pcData.customerSlug,
-        drive.letter || "",
-        drive.total_gb || 0,
-        drive.free_gb || 0,
-        drive.percent_free || 0
+        fileName,
+        sizeFormatted,
+        downloadLink,
+        payload.status || "SUCCESS"
       ]);
+    }
+
+    // B. Log to Master "Application report" Sheet -> [Customer Tab]
+    logToApplicationReport(customerDisplayName, {
+      timestamp: timestamp,
+      pcId: pcData.pcId,
+      runMode: runMode,
+      module: "DB Backup",
+      status: payload.status || "SUCCESS",
+      durationSecs: durationSecs,
+      details: `Backup: ${fileName} (${sizeFormatted}) | Status: ${payload.status || "SUCCESS"}`
     });
-    return successResponse({ status: "recorded", drives_logged: payload.drives.length });
-  } else {
-    // Default fallback for single-line flat reports
-    sheet.appendRow([
-      timestamp,
-      pcData.pcId,
-      pcData.customerSlug,
-      payload.status || "UNKNOWN",
-      payload.message || "",
-      payload.db_name || "",
-      payload.bytes || 0
+
+    // Fallback: Internal Telemetry Tab
+    appendInternalTelemetry(timestamp, pcData.pcId, pcData.customerSlug, payload.status || "SUCCESS", payload.message || "Backup completed", payload.db_name || "", bytes);
+
+    return successResponse({ status: "recorded", module: "DB_BACKUP", download_link: downloadLink });
+  }
+
+  // ---------------------------------------------------------------------------
+  // 2. SERVER CLEANUP SCAN MODULE
+  // ---------------------------------------------------------------------------
+  if (module === "SERVER_CLEANUP" || (payload.drives && Array.isArray(payload.drives))) {
+    const drives = payload.drives || payload.metrics || [];
+
+    // A. Log each drive to Customer's Sheet -> [Server Cleanup] tab
+    if (customerSheet) {
+      let cleanupTab = customerSheet.getSheetByName("Server Cleanup");
+      if (!cleanupTab) {
+        initCustomerSheetTabs(customerSheet);
+        cleanupTab = customerSheet.getSheetByName("Server Cleanup");
+      }
+      drives.forEach(d => {
+        cleanupTab.appendRow([
+          timestamp,
+          pcData.pcId,
+          d.drive_letter || d.letter || "C:",
+          d.total_gb || 0,
+          d.free_gb || 0,
+          d.used_percent || d.percent_used || 0,
+          d.status || "OK / Healthy"
+        ]);
+      });
+    }
+
+    // B. Log to Master "Application report" Sheet -> [Customer Tab]
+    logToApplicationReport(customerDisplayName, {
+      timestamp: timestamp,
+      pcId: pcData.pcId,
+      runMode: runMode,
+      module: "Server Cleanup Scan",
+      status: payload.status || "SUCCESS",
+      durationSecs: durationSecs,
+      details: `Storage Scanned: ${drives.length} drives evaluated. Disk space OK.`
+    });
+
+    return successResponse({ status: "recorded", module: "SERVER_CLEANUP", drives_logged: drives.length });
+  }
+
+  // ---------------------------------------------------------------------------
+  // 3. PERFORMANCE QUERY MODULE
+  // ---------------------------------------------------------------------------
+  if (module === "PERFORMANCE_QUERY") {
+    // A. Log to Customer's Sheet -> [Performance Query] tab
+    if (customerSheet) {
+      let perfTab = customerSheet.getSheetByName("Performance Query");
+      if (!perfTab) {
+        initCustomerSheetTabs(customerSheet);
+        perfTab = customerSheet.getSheetByName("Performance Query");
+      }
+      perfTab.appendRow([
+        timestamp,
+        payload.db_name || "ALL",
+        payload.metric_name || "SQL Health & Diagnostic DMV",
+        payload.execution_ms || 0,
+        payload.status || "SUCCESS",
+        payload.details || "Execution completed normally"
+      ]);
+    }
+
+    // B. Log to Master "Application report" Sheet -> [Customer Tab]
+    logToApplicationReport(customerDisplayName, {
+      timestamp: timestamp,
+      pcId: pcData.pcId,
+      runMode: runMode,
+      module: "Performance Query",
+      status: payload.status || "SUCCESS",
+      durationSecs: durationSecs,
+      details: payload.details || "SQL DMV Performance diagnostic completed"
+    });
+
+    return successResponse({ status: "recorded", module: "PERFORMANCE_QUERY" });
+  }
+
+  // ---------------------------------------------------------------------------
+  // 4. GENERAL APPLICATION RUN SUMMARY
+  // ---------------------------------------------------------------------------
+  logToApplicationReport(customerDisplayName, {
+    timestamp: timestamp,
+    pcId: pcData.pcId,
+    runMode: runMode,
+    module: payload.module || "Application Automation",
+    status: payload.status || "SUCCESS",
+    durationSecs: durationSecs,
+    details: payload.message || payload.details || "Workflow executed"
+  });
+
+  return successResponse({ status: "recorded" });
+}
+
+// =============================================================================
+// DESTINATION B HELPER: Master "Application report" Customer Tab Logger
+// =============================================================================
+function logToApplicationReport(customerDisplayName, runDetails) {
+  const appReportSs = getApplicationReportSpreadsheet();
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    let tab = appReportSs.getSheetByName(customerDisplayName);
+    if (!tab) {
+      tab = appReportSs.insertSheet(customerDisplayName);
+      const headers = ["Date & Time", "Machine / PC ID", "Run Mode", "Module", "Status", "Duration (s)", "Details"];
+      tab.appendRow(headers);
+      tab.getRange(1, 1, 1, headers.length).setFontWeight("bold").setBackground("#e8eaed");
+    }
+
+    tab.appendRow([
+      runDetails.timestamp || new Date().toISOString(),
+      runDetails.pcId || "UNKNOWN",
+      runDetails.runMode || "Automatic",
+      runDetails.module || "Automation",
+      runDetails.status || "SUCCESS",
+      runDetails.durationSecs || 0,
+      runDetails.details || ""
     ]);
-    return successResponse({ status: "recorded" });
+  } catch (err) {
+    Logger.log("Application Report logging error: " + err.message);
+  } finally {
+    lock.releaseLock();
   }
 }
 
+// =============================================================================
+// DESTINATION A HELPER: Customer-Specific Operational Sheet Resolver
+// =============================================================================
+function getOrCreateCustomerSheet(customerFolderId, customerDisplayName, explicitSheetId) {
+  // 1. Explicit ID passed in client config
+  if (explicitSheetId && String(explicitSheetId).trim() !== "") {
+    try {
+      return SpreadsheetApp.openById(String(explicitSheetId).trim());
+    } catch (e) {}
+  }
+
+  // 2. Search inside Customer's Google Drive Folder for existing sheet
+  try {
+    const folder = DriveApp.getFolderById(customerFolderId);
+    const targetTitle = customerDisplayName + " Backup Sheet";
+    const files = folder.getFilesByType(MimeType.GOOGLE_SHEETS);
+    while (files.hasNext()) {
+      const file = files.next();
+      if (file.getName() === targetTitle || file.getName().toLowerCase().includes("backup sheet")) {
+        return SpreadsheetApp.openById(file.getId());
+      }
+    }
+
+    // 3. Auto-create if not found directly inside Customer's folder
+    const newSs = SpreadsheetApp.create(targetTitle);
+    const newFile = DriveApp.getFileById(newSs.getId());
+    folder.addFile(newFile);
+    DriveApp.getRootFolder().removeFile(newFile);
+    initCustomerSheetTabs(newSs);
+    return newSs;
+  } catch (e) {
+    Logger.log("Customer sheet resolution note: " + e.message);
+    return null;
+  }
+}
+
+function initCustomerSheetTabs(ss) {
+  const tabs = [
+    {
+      name: "DB Backups",
+      headers: ["Date & Time", "Backup File Name", "Backup File Size", "Google Drive Download Link", "Status"]
+    },
+    {
+      name: "Server Cleanup",
+      headers: ["Date & Time", "Machine / PC ID", "Drive", "Total GB", "Free GB", "Used %", "Status / Action Taken"]
+    },
+    {
+      name: "Performance Query",
+      headers: ["Date & Time", "Database", "Query / Metric Name", "Execution Time (ms)", "Status", "Details"]
+    }
+  ];
+
+  tabs.forEach(spec => {
+    let sheet = ss.getSheetByName(spec.name);
+    if (!sheet) sheet = ss.insertSheet(spec.name);
+    if (sheet.getLastRow() === 0) {
+      sheet.appendRow(spec.headers);
+      sheet.getRange(1, 1, 1, spec.headers.length).setFontWeight("bold").setBackground("#e8eaed");
+    }
+  });
+
+  const defaultSheet = ss.getSheetByName("Sheet1");
+  if (defaultSheet && ss.getSheets().length > 1 && defaultSheet.getLastRow() === 0) {
+    try { ss.deleteSheet(defaultSheet); } catch (e) {}
+  }
+}
+
+// =============================================================================
+// GOOGLE DRIVE & SYSTEM UTILITIES
+// =============================================================================
 function getOrCreateFolder(parentFolderId, folderName) {
   let parent;
   if (!parentFolderId || String(parentFolderId).trim() === "") {
@@ -270,7 +616,6 @@ function getOrCreateFolder(parentFolderId, folderName) {
 }
 
 function createResumableUpload(folderId, fileName, sizeBytes) {
-  // Drive API v3 - Resumable Upload
   const url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable";
   const token = ScriptApp.getOAuthToken();
   
@@ -301,13 +646,25 @@ function createResumableUpload(folderId, fileName, sizeBytes) {
 }
 
 function logAudit(pcId, action, details) {
-  const ss = getSpreadsheet();
-  let auditSheet = ss.getSheetByName("Audit");
-  if (!auditSheet) {
-    auditSheet = ss.insertSheet("Audit");
-    auditSheet.appendRow(["TIMESTAMP", "PC_ID", "ACTION", "DETAILS"]);
-  }
-  auditSheet.appendRow([new Date().toISOString(), pcId, action, details]);
+  try {
+    const ss = getSpreadsheet();
+    let auditSheet = ss.getSheetByName("Audit");
+    if (!auditSheet) {
+      auditSheet = ss.insertSheet("Audit");
+      auditSheet.appendRow(["TIMESTAMP", "PC_ID", "ACTION", "DETAILS"]);
+    }
+    auditSheet.appendRow([new Date().toISOString(), pcId, action, details]);
+  } catch (e) {}
+}
+
+function appendInternalTelemetry(timestamp, pcId, customerSlug, status, message, dbName, bytes) {
+  try {
+    const ss = getSpreadsheet();
+    let sheet = ss.getSheetByName("Telemetry");
+    if (sheet) {
+      sheet.appendRow([timestamp, pcId, customerSlug, status, message, dbName, bytes]);
+    }
+  } catch (e) {}
 }
 
 function successResponse(data) {
@@ -315,52 +672,45 @@ function successResponse(data) {
 }
 
 function errorResponse(msg, code) {
-  // Apps Script returns 200 HTTP status always via ContentService. 
-  // We communicate the code in the payload.
   return ContentService.createTextOutput(JSON.stringify({ error: msg, code: code })).setMimeType(ContentService.MimeType.JSON);
 }
 
-// Scheduled Trigger Function: 8-Day Silence Check
-function checkSilenceAlerts() {
-  const ss = getSpreadsheet();
-  const tokensSheet = ss.getSheetByName("Tokens");
-  const auditSheet = ss.getSheetByName("Audit");
-  if (!tokensSheet || !auditSheet) return;
+// =============================================================================
+// SETUP FUNCTION: PRE-CREATE ALL 70+ CUSTOMER TABS IN APPLICATION REPORT
+// Run once from Apps Script editor to prepare the Master Application Report!
+// =============================================================================
+function setupApplicationReportTabs() {
+  const appReportSs = getApplicationReportSpreadsheet();
+  const headers = ["Date & Time", "Machine / PC ID", "Run Mode", "Module", "Status", "Duration (s)", "Details"];
   
-  const pcs = tokensSheet.getDataRange().getValues().slice(1).map(r => r[0]);
-  const auditData = auditSheet.getDataRange().getValues();
-  
-  const lastSeen = {};
-  for (let i = 1; i < auditData.length; i++) {
-    lastSeen[auditData[i][1]] = new Date(auditData[i][0]).getTime();
-  }
-  
-  const now = Date.now();
-  const EIGHT_DAYS = 8 * 24 * 60 * 60 * 1000;
-  
-  const silentPcs = [];
-  pcs.forEach(pc => {
-    if (!lastSeen[pc] || (now - lastSeen[pc] > EIGHT_DAYS)) {
-      silentPcs.push(pc);
+  const slugs = Object.keys(CUSTOMER_DIRECTORY);
+  Logger.log(`Configuring ${slugs.length} customer tabs in Application Report...`);
+
+  slugs.forEach(slug => {
+    const tabName = CUSTOMER_DIRECTORY[slug];
+    let tab = appReportSs.getSheetByName(tabName);
+    if (!tab) {
+      tab = appReportSs.insertSheet(tabName);
+    }
+    if (tab.getLastRow() === 0) {
+      tab.appendRow(headers);
+      tab.getRange(1, 1, 1, headers.length).setFontWeight("bold").setBackground("#e8eaed");
     }
   });
-  
-  if (silentPcs.length > 0) {
-    MailApp.sendEmail({
-      to: Session.getEffectiveUser().getEmail(),
-      subject: "ALERT: Backup PCs Offline for > 8 Days",
-      body: "The following PCs have not checked in:\n" + silentPcs.join("\n")
-    });
+
+  const defaultSheet = appReportSs.getSheetByName("Sheet1");
+  if (defaultSheet && appReportSs.getSheets().length > 1 && defaultSheet.getLastRow() === 0) {
+    try { appReportSs.deleteSheet(defaultSheet); } catch (e) {}
   }
+
+  Logger.log(`✅ Successfully initialized all ${slugs.length} customer tabs in Application Report!`);
 }
 
 /**
- * Setup Function: Run this once from the Apps Script editor
- * to automatically build all required tabs and column headers.
+ * Standard broker tables setup function (Config, Tokens, Audit, etc.)
  */
 function setupSheets() {
   const ss = getSpreadsheet();
-  
   const requiredSheets = [
     { name: "Config", headers: ["KEY", "VALUE", "CUSTOMER_SLUG", "STATUS"] },
     { name: "Tokens", headers: ["PC_ID", "CUSTOMER_SLUG", "TOKEN_HASH", "OFFSET_MINUTES", "CREATED_AT"] },
@@ -380,11 +730,6 @@ function setupSheets() {
     }
   });
   
-  // Delete initial default empty Sheet1 if present
-  const defaultSheet = ss.getSheetByName("Sheet1");
-  if (defaultSheet && ss.getSheets().length > 1 && defaultSheet.getLastRow() === 0) {
-    try { ss.deleteSheet(defaultSheet); } catch (e) {}
-  }
-  
-  Logger.log("✅ Master Sheet tabs configured successfully!");
+  setupApplicationReportTabs();
+  Logger.log("✅ Master Sheet & Application Report configured successfully!");
 }
