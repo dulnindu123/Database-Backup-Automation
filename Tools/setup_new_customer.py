@@ -1,12 +1,14 @@
 """
-Setup New Customer Script
+Setup New Customer Script (Admin Provisioning Suite v4.2.0)
+=============================================================================
+Automates generation of customer RSA keys, creates the secure signed bundle.json,
+and prepares a final deployment package folder containing everything the customer needs.
 
-Automates generation of customer RSA keys, creates the secure bundle.json,
-and prepares a final folder containing everything the customer needs.
-
-It replaces the manual steps of:
-1. Running generate_keys.py twice.
-2. Running sign_bundle.py with long command line arguments.
+Key capabilities:
+1. Generates 4096-bit RSA primary and escrow keypairs.
+2. Generates random enrollment codes for zero-typing setup.
+3. Cryptographically signs bundle.json with Admin Ed25519 signing key.
+4. Segregates customer private keys to offline _keys folder.
 """
 import os
 import sys
@@ -16,21 +18,30 @@ import base64
 import getpass
 import hashlib
 import re
+import secrets
+import shutil
 
-# Insert parent directory into path so we can import admin.sign_bundle
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# Resilient imports (standalone inside folder or within repository)
+try:
+    from sign_bundle import build_bundle, sign_bundle, load_private, init_key, BundleError, in_sync_folder
+except ImportError:
+    try:
+        from admin.sign_bundle import build_bundle, sign_bundle, load_private, init_key, BundleError, in_sync_folder
+    except ImportError:
+        sys.path.insert(0, os.path.dirname(__file__))
+        from sign_bundle import build_bundle, sign_bundle, load_private, init_key, BundleError, in_sync_folder
 
 try:
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import rsa
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-    from admin.sign_bundle import build_bundle, sign_bundle, load_private, init_key, BundleError
 except ImportError as e:
-    print(f"Error importing dependencies. Ensure you have installed 'cryptography': {e}")
+    print(f"Error importing dependencies. Ensure you run 'Setup_Admin_Environment.bat' or 'pip install -r requirements.txt': {e}")
     sys.exit(1)
 
 SLUG_RE = re.compile(r"^[a-z0-9]{2,24}$")
 URL_RE = re.compile(r"^https://script\.google\.com/macros/s/[A-Za-z0-9_-]{20,200}/exec$")
+
 
 def generate_rsa_keypair(passphrase: str) -> tuple:
     """Generates a 4096-bit RSA key and returns (private_pem_bytes, public_pem_bytes)"""
@@ -46,11 +57,12 @@ def generate_rsa_keypair(passphrase: str) -> tuple:
     )
     return priv, pub
 
+
 def main():
     print("=" * 60)
-    print("   EASY CUSTOMER SETUP WIZARD (Zero-Trust Provisioning)")
+    print("   EASY CUSTOMER SETUP WIZARD (Admin Zero-Trust Provisioning)")
     print("=" * 60)
-    print("This script will generate secure keys and a signed bundle for a new customer.\n")
+    print("This tool generates secure keys and a signed bundle for a new customer.\n")
 
     # 1. Customer Details
     while True:
@@ -83,21 +95,19 @@ def main():
     print("Keys generated successfully.")
 
     print("\n[Bundle Signing]")
-    # Determine a safe default path for the admin key
     default_admin_key = "admin_ed25519.pem"
     try:
-        from admin.sign_bundle import in_sync_folder
         if in_sync_folder(os.path.abspath(default_admin_key)):
             safe_path = "C:\\admin_ed25519.pem"
             if not in_sync_folder(safe_path):
                 default_admin_key = safe_path
-    except ImportError:
+    except Exception:
         pass
 
     admin_key_path = input(f"Enter path to your Admin Ed25519 Private Key [default: {default_admin_key}]: ").strip()
     if not admin_key_path:
         admin_key_path = default_admin_key
-        
+
     if not os.path.exists(admin_key_path):
         print(f"\nAdmin key '{admin_key_path}' not found.")
         ans = input("Would you like to initialize a new Admin Signing Key now? (y/N): ").strip().lower()
@@ -113,7 +123,7 @@ def main():
                 print("Passphrases do not match. Try again.")
             try:
                 pub_pem_str = init_key(admin_key_path, admin_pw)
-                print(f"Admin key created at '{admin_key_path}'. (The public key must be embedded in the installer in version.py!)")
+                print(f"Admin key created at '{admin_key_path}'.")
             except BundleError as e:
                 print(f"Failed to create admin key: {e}")
                 sys.exit(1)
@@ -130,7 +140,6 @@ def main():
             print(f"Failed to load admin key (wrong passphrase?): {e}")
 
     # Generate a random enrollment code for zero-typing
-    import secrets
     enroll_code = secrets.token_urlsafe(16)
 
     try:
@@ -140,10 +149,10 @@ def main():
         print(f"\nFailed to build or sign bundle: {e}")
         sys.exit(1)
 
-    # Output paths
-    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    out_dir_pkg = os.path.join(base_dir, "customers", f"{slug}_package")
-    out_dir_keys = os.path.join(base_dir, "customers", f"{slug}_keys")
+    # Output paths (store in customers folder inside admin package root)
+    admin_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    out_dir_pkg = os.path.join(admin_root, "customers", f"{slug}_package")
+    out_dir_keys = os.path.join(admin_root, "customers", f"{slug}_keys")
     os.makedirs(out_dir_pkg, exist_ok=True)
     os.makedirs(out_dir_keys, exist_ok=True)
 
@@ -173,36 +182,38 @@ def main():
     print(f"\n👉 NEXT STEP (Google Sheet Config tab):")
     print("Paste this as one row starting at column A (A=ENROLL_CODE, B=code, C=slug):")
     print(f"ENROLL_CODE\t{enroll_code}\t{slug}")
-    print(f"\nSECURE OFFLINE KEYS saved to:\n  {out_dir_keys}\n  (DO NOT send these to the customer. Keep them safe.)\n")
-    print(f"CUSTOMER PACKAGE saved to:\n  {out_dir_pkg}")
-    print(f"\nCUSTOMER DEPLOYMENT:")
+    print(f"\nSECURE OFFLINE KEYS saved to:\n  {out_dir_keys}\n  (DO NOT send these to the customer. Keep them safely offline!)")
+    print(f"\nCUSTOMER PACKAGE saved to:\n  {out_dir_pkg}")
     
-    # Auto-copy installer and AppFiles if they exist
-    client_pkg_dir = os.path.abspath(os.path.join(base_dir, "..", "Client_Installation_Package"))
-    dist_dir = os.path.join(base_dir, "dist")
-    
-    installer_src = os.path.join(client_pkg_dir, "Setup_DatabaseBackup.exe")
-    if not os.path.exists(installer_src):
-        installer_src = os.path.join(dist_dir, "Setup_DatabaseBackup.exe")
-        
-    appfiles_src = os.path.join(client_pkg_dir, "AppFiles")
-    if not os.path.exists(appfiles_src):
-        appfiles_src = os.path.join(dist_dir, "AppFiles")
+    # Check if Client_Installation_Package is available to auto-copy
+    candidate_client_pkg = [
+        os.path.abspath(os.path.join(admin_root, "..", "Client_Installation_Package")),
+        os.path.abspath(os.path.join(admin_root, "..", "BackupAutomation", "Client_Installation_Package"))
+    ]
+    client_pkg_dir = next((p for p in candidate_client_pkg if os.path.exists(p)), None)
 
-    copied_installer = False
-    if os.path.exists(installer_src):
-        import shutil
-        shutil.copy2(installer_src, os.path.join(out_dir_pkg, "Setup_DatabaseBackup.exe"))
+    if client_pkg_dir:
+        installer_src = os.path.join(client_pkg_dir, "Setup_DatabaseBackup.exe")
+        appfiles_src = os.path.join(client_pkg_dir, "AppFiles")
+        shell_src = os.path.join(client_pkg_dir, "shell_client")
+
+        if os.path.exists(installer_src):
+            shutil.copy2(installer_src, os.path.join(out_dir_pkg, "Setup_DatabaseBackup.exe"))
         if os.path.exists(appfiles_src):
             shutil.copytree(appfiles_src, os.path.join(out_dir_pkg, "AppFiles"), dirs_exist_ok=True)
-        copied_installer = True
-        print(f"1. ✅ Automatically copied Setup_DatabaseBackup.exe and AppFiles into {out_dir_pkg}")
-        print(f"2. Zip the '{slug}_package' folder and send it to the customer.")
-        print(f"3. When they run the installer, it will zero-typing auto-configure everything!")
+        if os.path.exists(shell_src):
+            shutil.copytree(shell_src, os.path.join(out_dir_pkg, "shell_client"), dirs_exist_ok=True)
+            
+        for root_file in ["Uninstall.bat", "Update_App.bat", "CLIENT_INSTALLATION_GUIDE.md", "READ_ME_FIRST.txt"]:
+            src_rf = os.path.join(client_pkg_dir, root_file)
+            if os.path.exists(src_rf):
+                shutil.copy2(src_rf, os.path.join(out_dir_pkg, root_file))
+            
+        print(f"\n✅ Automatically mirrored client installer, shell client, uninstaller, and docs to {out_dir_pkg}")
+        print(f"👉 Simply zip the folder '{slug}_package' and provide it to customer '{slug}'.")
     else:
-        print(f"1. Copy 'Setup_DatabaseBackup.exe' and the 'AppFiles' folder into {out_dir_pkg}")
-        print("2. Zip the folder and send it to the customer.")
-        print("3. When they run the installer, it will zero-typing auto-configure everything!")
+        print("\nNote: Copy Setup_DatabaseBackup.exe or shell_client into the package folder before delivery.")
+
 
 if __name__ == "__main__":
     try:
