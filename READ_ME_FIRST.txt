@@ -1,70 +1,62 @@
 ================================================================================
-  ENTERPRISE DATABASE CLOUD BACKUP & AUDIT LOG SYSTEM (Zero-Trust v4.2.0)
-  Administrator Provisioning & Deployment Quick Reference
+  ENTERPRISE DATABASE CLOUD BACKUP & MAINTENANCE SUITE (v4.2.0)
+  Client / Customer Quick Start Guide
 ================================================================================
 
-Welcome to the Enterprise Database Cloud Backup system. This package delivers 
-an air-gapped, zero-trust disaster recovery solution. Backups are encrypted 
-with AES-256-GCM + RSA-4096 (DBK2 format) and securely uploaded via a Google 
-Apps Script Web App Broker to a retention-locked Google Drive.
+Welcome to the Enterprise Database Cloud Backup & Maintenance Suite.
+This package contains everything needed to install the automated backup agent,
+storage monitor, and database performance maintenance tasks on this server.
 
 --------------------------------------------------------------------------------
-ZERO-TRUST SECURITY ARCHITECTURE:
+QUICK INSTALLATION (TWO EASY OPTIONS):
 --------------------------------------------------------------------------------
-- ZERO Google Credentials on Client PCs: A compromised client cannot read, list, 
-  or delete any backup files stored in the cloud.
-- Air-Gapped Keypairs: Backups are encrypted locally using public keys. 
-  Private decryption keys remain strictly offline on admin hardware.
-- Zero-Typing Installation: The customer executes the installer, and it securely
-  authenticates using a cryptographic bundle signed by the Admin. No typing required!
 
---------------------------------------------------------------------------------
-HOW TO PROVISION A NEW CUSTOMER (ADMINISTRATOR SETUP):
---------------------------------------------------------------------------------
-We have fully automated the setup process with an Easy Setup Wizard. You only
-need to run this once per customer.
+OPTION 1: NATIVE WINDOWS POWERSHELL AGENT (RECOMMENDED FOR SERVERS)
+   Zero external dependencies. Zero Python installation required.
+   
+   1. Open an elevated PowerShell prompt (Right-click -> Run as Administrator).
+   2. Navigate to the shell_client folder:
+      cd shell_client
+   3. Run the installer script:
+      powershell.exe -ExecutionPolicy Bypass -File .\install_agent.ps1
+   4. The agent will configure local directories and register the scheduled tasks:
+      - DatabaseBackup_Daily
+      - DatabaseBackup_StorageCleanup
+      - DatabaseBackup_PerformanceMaintenance
 
-1. INITIAL GOOGLE SHEET SETUP (One-time only)
-   - Ensure your Google Apps Script (`apps_script_broker/Code.gs`) is deployed
-     as a Web App.
-   - Keep your Google Apps Script URL handy.
-
-2. RUN THE SETUP WIZARD
-   - Open a terminal in the `BackupAutomation` folder.
-   - Run: `python Tools\setup_new_customer.py`
-   - The wizard will ask for:
-     * Customer Slug (e.g. 'acme')
-     * Your Apps Script URL
-     * A strong passphrase for the new customer's keys
-     * Your Admin Signing Key (it will help you create one if you don't have one)
-
-3. UPDATE THE GOOGLE SHEET
-   - The script will output a success message and an `ENROLL_CODE`.
-   - Open your Google Sheet, go to the "Config" tab.
-   - Paste the `ENROLL_CODE` into the cell next to "ENROLL_CODE".
-
-4. SEND THE PACKAGE TO THE CUSTOMER
-   - The script automatically generated a complete, ready-to-send folder located at:
-     `BackupAutomation\customers\<slug>_package`
-   - Zip this folder and send it to your customer. 
-   - (Keep the `_keys` folder safely offline!)
+OPTION 2: GRAPHICAL SETUP WIZARD (DESKTOP APPLICATION)
+   1. Right-click Setup_DatabaseBackup.exe -> Run as administrator.
+   2. Follow the on-screen installation prompts.
+   3. The installer will set up the program files, register background services,
+      and add a desktop shortcut.
 
 --------------------------------------------------------------------------------
-CUSTOMER EXPERIENCE (INSTALLATION):
+MAINTENANCE MODULES INCLUDED:
 --------------------------------------------------------------------------------
-OPTION A: 100% NATIVE POWERSHELL AGENT (No Python Required)
-1. Customer extracts the package.
-2. In an elevated PowerShell prompt (Run as Administrator):
-   cd shell_client
-   powershell.exe -ExecutionPolicy Bypass -File .\install_agent.ps1
-3. The script auto-detects bundle.json, enrolls with your Google Sheet broker, 
-   seals the machine token into Windows DPAPI, and registers Scheduled Tasks.
+- MODULE 1: Database Backup Engine (backup_agent.ps1)
+  Performs compressed, AES-256-GCM + RSA-4096 dual-envelope encrypted backups
+  and uploads directly to your dedicated cloud folder.
+  
+- MODULE 2: Server Cleanup Scan (storage_monitor.ps1)
+  Monitors server disk space, cleans expired local staging archives, and rotates logs.
+  
+- MODULE 3: Database Performance Maintenance (performance_query.ps1)
+  Inspects table index fragmentation, executes a safety pre-backup, performs
+  database consistency check (DBCC CHECKDB), rebuilds indexes (DBCC DBREINDEX 80),
+  updates optimizer statistics (sp_updatestats), and reports metrics to cloud telemetry.
 
-OPTION B: STANDALONE GRAPHICAL INSTALLER (GUI)
-1. The customer extracts the ZIP file.
-2. They Right-Click `Setup_DatabaseBackup.exe` and choose "Run as Administrator".
-3. The installer detects `bundle.json`, verifies your Admin signature, and 
-   automatically grabs their PC name and securely registers it with your Google Sheet.
-4. They simply select their backup folder and click "Save". Zero typing!
+--------------------------------------------------------------------------------
+SECURITY ASSURANCE:
+--------------------------------------------------------------------------------
+- All database backups are encrypted client-side using public keys.
+- Even if this server were compromised, the encrypted backups cannot be decrypted
+  without the administrator's offline private keys.
+- No Google accounts or administrative cloud passwords are stored on this machine.
 
+--------------------------------------------------------------------------------
+DOCUMENTATION & SUPPORT:
+--------------------------------------------------------------------------------
+- Full installation guide: CLIENT_INSTALLATION_GUIDE.md
+- Technical details: README.md
+- Shell client guide: shell_client\README.md
 ================================================================================

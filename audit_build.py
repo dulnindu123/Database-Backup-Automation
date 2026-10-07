@@ -18,6 +18,7 @@ ALLOWED_PACKAGE_ROOT_FILES = {
     "Update_App.bat",
     "READ_ME_FIRST.txt",
     "README.md",
+    "CLIENT_INSTALLATION_GUIDE.md",
     "app_icon.ico",
     "app_icon.png",
     "sha256_manifest.json",
@@ -26,7 +27,6 @@ ALLOWED_PACKAGE_ROOT_FILES = {
 
 ALLOWED_PACKAGE_ROOT_DIRS = {
     "AppFiles",
-    "Tools",
     "shell_client",
 }
 
@@ -54,6 +54,22 @@ FORBIDDEN_SECRET_FILES = [
     "drive_folder.txt",
     "sheet_id.txt",
     "backup_log.txt",
+]
+
+FORBIDDEN_ADMIN_FILES = [
+    "decrypt_backup.py",
+    "decrypt_backup.ps1",
+    "decrypt_gui.py",
+    "setup_new_customer.py",
+    "batch_setup_customers.py",
+    "customer_slugs.txt",
+    "generate_keys.py",
+    "sign_bundle.py",
+    "admin_ed25519_private.pem",
+    "backup_private.pem",
+    "escrow_private.pem",
+    "pull_backup.py",
+    "Code.gs",
 ]
 
 
@@ -109,6 +125,22 @@ def audit_master_package(pkg_dir):
                 errors.append(f"Master config.json violation: GOOGLE_SHEET_ID must be empty (Found: '{sheet_id}')")
         except Exception as e:
             errors.append(f"Failed to parse AppFiles/config.json: {e}")
+
+    # 4. Check for forbidden admin tools and secrets across entire package
+    for root, dirs, files in os.walk(pkg_dir):
+        for f in files:
+            if f.lower() in [s.lower() for s in FORBIDDEN_SECRET_FILES]:
+                errors.append(f"Forbidden secret file discovered in client package: '{os.path.join(root, f)}'")
+            if f.lower() in [s.lower() for s in FORBIDDEN_ADMIN_FILES]:
+                errors.append(f"Forbidden admin tool/file leaked into client package: '{os.path.join(root, f)}'")
+            if f.endswith(".pem"):
+                p = os.path.join(root, f)
+                try:
+                    with open(p, "r", encoding="utf-8", errors="ignore") as fp:
+                        if "PRIVATE KEY" in fp.read():
+                            errors.append(f"Private encryption key leaked in client package: '{p}'")
+                except Exception:
+                    pass
 
     return errors
 
