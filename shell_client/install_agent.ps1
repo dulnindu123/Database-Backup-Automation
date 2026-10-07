@@ -216,7 +216,7 @@ if (-not (Test-Path $BackupFolder)) {
 }
 
 $currentScriptDir = $PSScriptRoot
-$filesToCopy = @("backup_agent.ps1", "storage_monitor.ps1", "decrypt_backup.ps1", "backup_public.pem", "escrow_public.pem")
+$filesToCopy = @("backup_agent.ps1", "storage_monitor.ps1", "performance_query.ps1", "run_automation.ps1", "backup_public.pem", "escrow_public.pem")
 
 foreach ($f in $filesToCopy) {
     $src = Join-Path $currentScriptDir $f
