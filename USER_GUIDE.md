@@ -60,6 +60,7 @@ Installing the software on a client machine requires **no technical knowledge** 
 ### Prerequisites:
 * **Operating System**: Windows 10, Windows 11, or Windows Server 2016/2019/2022/2025.
 * **Privileges**: Administrator rights (required for Windows Task Scheduler and DPAPI machine-scope protection).
+* **Python Dependency**: **NONE** (Pre-compiled standalone `.exe` with embedded runtime in `_internal`; Python is NOT required on client PCs).
 * **Network**: Outbound HTTPS access (Port 443) to `script.google.com` and `drive.google.com`.
 
 ### Installation Steps:

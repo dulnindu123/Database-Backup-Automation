@@ -26,11 +26,13 @@ flowchart TD
 | **Operating System** | Windows 10, Windows 11, Windows Server 2016, 2019, 2022, 2025 (64-bit) |
 | **Permissions** | Local Administrator rights (required for Windows Scheduled Task and DPAPI vault) |
 | **Database Engines** | Microsoft SQL Server (2012–2022), MySQL (5.7, 8.0+), PostgreSQL (12+) |
+| **Python Required on Client?** | **NO** — Fully standalone `.exe` bundle (Python runtime is pre-packaged in `_internal`) |
 | **Network Access** | Outbound HTTPS (Port 443) to `script.google.com` and `drive.google.com` |
 | **Disk Space** | Minimum 500 MB free for application files; local staging folder requires 2.5× database size |
 
 > [!IMPORTANT]
-> **No Cloud Credentials Needed**: The client machine requires **no** Google account logins, OAuth tokens, or service account keys. All communications are mediated through the stateless Zero-Trust Upload Broker.
+> - **Zero Python Dependency on Client**: End-users do **NOT** need Python installed on their machines. The installer and app run as native, standalone Windows executables (`.exe`). Python is only required on the **administrator's management machine** for running offline key generation and recovery tools.
+> - **No Cloud Credentials Needed**: The client machine requires **no** Google account logins, OAuth tokens, or service account keys. All communications are mediated through the stateless Zero-Trust Upload Broker.
 
 ---
 
