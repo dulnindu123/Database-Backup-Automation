@@ -10,7 +10,8 @@
 
 [CmdletBinding()]
 param(
-    [string]$ConfigDir = "C:\ProgramData\DatabaseBackupApp"
+    [string]$ConfigDir = "C:\ProgramData\DatabaseBackupApp",
+    [string]$RunMode = "Automatic"
 )
 
 Add-Type -AssemblyName System.Security
@@ -68,15 +69,18 @@ Write-Log "Collected storage telemetry across $($drives.Count) drives." "INFO"
 
 # Send telemetry to broker
 $telemetryPayload = @{
-    action  = "report_status"
-    token   = $bearerToken
-    status  = "TELEMETRY"
-    db_name = "DISK_HEALTH"
-    file_name = "STORAGE_TELEMETRY"
-    bytes   = 0
-    sha256  = "STORAGE_PROBE"
-    duration_secs = 1
-    metrics = $diskMetrics
+    action            = "report_status"
+    token             = $bearerToken
+    module            = "SERVER_CLEANUP"
+    run_mode          = $RunMode
+    status            = "SUCCESS"
+    db_name           = "DISK_HEALTH"
+    file_name         = "STORAGE_TELEMETRY"
+    bytes             = 0
+    sha256            = "STORAGE_PROBE"
+    duration_secs     = 1
+    metrics           = $diskMetrics
+    customer_sheet_id = if ($config.CUSTOMER_SHEET_ID) { $config.CUSTOMER_SHEET_ID } else { "" }
 }
 
 $json = $telemetryPayload | ConvertTo-Json -Depth 4 -Compress
