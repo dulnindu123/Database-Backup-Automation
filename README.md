@@ -12,7 +12,10 @@
     <img src="https://img.shields.io/badge/Platform-Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white">
   </p>
   <h3>Autonomous, Zero-Knowledge Cloud Disaster Recovery for SQL Server, MySQL & PostgreSQL</h3>
-  <p><b>👉 For Reviewers:</b> Please refer to the <a href="CODE_REVIEW.md"><b>Senior Engineer Code Review Guide</b></a> for detailed architectural invariants, threat models, and verification steps.</p>
+  <p>
+    <b>📖 User Installation:</b> See the complete <a href="INSTALLATION_GUIDE.md"><b>User Installation & Deployment Guide</b></a> |
+    <b>🔍 Reviewers:</b> See the <a href="CODE_REVIEW.md"><b>Senior Engineer Code Review Guide</b></a>
+  </p>
 </div>
 
 ---
