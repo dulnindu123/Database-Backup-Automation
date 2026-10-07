@@ -131,7 +131,7 @@ BackupAutomation/
 ├── Tools/
 │   ├── batch_setup_customers.py  ← Generate all 61 customer packages in one run
 │   ├── setup_new_customer.py     ← Generate a single customer package interactively
-│   ├── customer_slugs.txt        ← Full list of 61 customer slugs (spillabs.com)
+│   ├── customer_slugs.txt        ← Customer tenant slugs list
 │   ├── decrypt_backup.py         ← Decrypt a .dbk2 file for disaster recovery
 │   └── generate_keys.py          ← Standalone RSA-4096 keypair generator
 │
@@ -194,7 +194,7 @@ python batch_setup_customers.py
 
 When prompted:
 - Enter the **Web App URL** from Step 1.
-- Enter the shared passphrase: `spil@123SPIL` (or your chosen passphrase — used to encrypt all private keys).
+- Enter a strong passphrase (used to encrypt all private keys offline).
 - The script generates 61 customer folders in `customers/`.
 - It also creates `customers/enroll_codes_for_sheet.tsv`.
 
@@ -303,12 +303,3 @@ This system is designed to align with:
 - **SOC 2 Type II** — Access controls, logging, and incident alerting built-in.
 - **Ransomware Immunity** — Client machines have upload-only access (no delete/list/read permissions on existing backups).
 
----
-
-## 👤 About
-
-Developed and maintained by **SPIL Labs** (`spillabs.com`).  
-For support, contact the SPIL Labs internal platform team.
-
-> All 61 customer deployments are managed through a single Google Apps Script Broker and a single Master Google Sheet.  
-> Private keys are **never** stored in this repository, in the cloud, or on customer machines.

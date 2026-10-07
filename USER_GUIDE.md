@@ -5,7 +5,7 @@
 **Classification:** Engineering, DevOps & Client Deployment Runbook  
 **Target Operating Systems:** Windows 10, 11 | Windows Server 2016, 2019, 2022, 2025  
 **Supported Database Engines:** Microsoft SQL Server (2012–2022), MySQL (5.7, 8.0+), PostgreSQL (12+)  
-**Author / Engineering Team:** Dulnindu Saranga / SPIL Labs  
+**Author / Chief Architect:** Dulnindu Saranga  
 **Last Revised & Verified:** October 2026  
 
 ---
