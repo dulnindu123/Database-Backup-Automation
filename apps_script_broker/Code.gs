@@ -450,6 +450,16 @@ function handleReportStatus(pcData, payload) {
   // 3. PERFORMANCE QUERY MODULE
   // ---------------------------------------------------------------------------
   if (module === "PERFORMANCE_QUERY") {
+    const customerStartTime = payload.task_start_time || timestamp;
+    const queryExecTime = payload.query_exec_time || timestamp;
+    const sqlVersion = payload.sql_version || "Microsoft SQL Server";
+    const dbSizeMB = payload.db_size_mb || 0;
+    const preBackup = payload.pre_backup_status || "N/A";
+    const fragBefore = (payload.frag_before_max !== undefined) ? (payload.frag_before_max + "%") : "N/A";
+    const fragAfter = (payload.frag_after_max !== undefined) ? (payload.frag_after_max + "%") : "N/A";
+    const checkdb = payload.checkdb_status || "Clean (0 errors)";
+    const reindex = payload.reindex_status || "Completed";
+
     // A. Log to Customer's Sheet -> [Performance Query] tab
     if (customerSheet) {
       let perfTab = customerSheet.getSheetByName("Performance Query");
@@ -458,24 +468,31 @@ function handleReportStatus(pcData, payload) {
         perfTab = customerSheet.getSheetByName("Performance Query");
       }
       perfTab.appendRow([
-        timestamp,
+        customerStartTime,
+        queryExecTime,
         payload.db_name || "ALL",
-        payload.metric_name || "SQL Health & Diagnostic DMV",
-        payload.execution_ms || 0,
-        payload.status || "SUCCESS",
-        payload.details || "Execution completed normally"
+        sqlVersion,
+        dbSizeMB,
+        preBackup,
+        fragBefore,
+        fragAfter,
+        checkdb,
+        reindex,
+        durationSecs,
+        runMode,
+        payload.status || "SUCCESS"
       ]);
     }
 
     // B. Log to Master "Application report" Sheet -> [Customer Tab]
     logToApplicationReport(customerDisplayName, {
-      timestamp: timestamp,
+      timestamp: customerStartTime,
       pcId: pcData.pcId,
       runMode: runMode,
       module: "Performance Query",
       status: payload.status || "SUCCESS",
       durationSecs: durationSecs,
-      details: payload.details || "SQL DMV Performance diagnostic completed"
+      details: `SQL ${sqlVersion} | DB: ${dbSizeMB} MB | Frag: ${fragBefore} -> ${fragAfter} | ${reindex} | CHECKDB: ${checkdb}`
     });
 
     return successResponse({ status: "recorded", module: "PERFORMANCE_QUERY" });
@@ -577,7 +594,21 @@ function initCustomerSheetTabs(ss) {
     },
     {
       name: "Performance Query",
-      headers: ["Date & Time", "Database", "Query / Metric Name", "Execution Time (ms)", "Status", "Details"]
+      headers: [
+        "Task Start Time (Customer TZ)",
+        "Query Execution Time",
+        "Database",
+        "SQL Server Version",
+        "DB Size (MB)",
+        "Pre-Maintenance Backup",
+        "Index Frag Before",
+        "Index Frag After",
+        "CHECKDB Status",
+        "Reindexing & Stats",
+        "Run Time (s)",
+        "Run Mode",
+        "Status"
+      ]
     }
   ];
 

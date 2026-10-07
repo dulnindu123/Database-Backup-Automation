@@ -27,8 +27,11 @@
     "STORAGE_ALERT_SENDER_PASSWORD": "",
     "STORAGE_SHEET_TAB_NAME": "Storage Monitor",
     "STORAGE_SCAN_FREQUENCY": "Daily",
+    "PERFORMANCE_SCHEDULE_TIME": "03:30",
+    "PERFORMANCE_SCHEDULE_DAY": "Sunday",
     "SHEET_TABS": {
-        "BACKUP": "Backup Automation",
-        "CLEANUP": "Server Cleanup"
+        "BACKUP": "DB Backups",
+        "CLEANUP": "Server Cleanup",
+        "PERFORMANCE": "Performance Query"
     }
 }

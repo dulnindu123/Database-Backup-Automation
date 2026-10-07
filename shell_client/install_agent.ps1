@@ -27,7 +27,9 @@ param(
     [string]$BackupFolder = "C:\SQLBackups",
     [string]$DatabaseEngine = "MSSQL",
     [string]$DatabaseName = "",
-    [string]$ServerInstance = "localhost"
+    [string]$ServerInstance = "localhost",
+    [string]$PerformanceScheduleTime = "03:30",
+    [string]$PerformanceScheduleDay  = "Sunday"
 )
 
 # ------------------------------------------------------------------------------
@@ -241,9 +243,11 @@ $config = @{
     DATABASE_ENGINE        = $DatabaseEngine
     DATABASE_NAME          = $DatabaseName
     SQL_SERVER_INSTANCE    = $ServerInstance
-    OFFSET_MINUTES         = $offsetMinutes
-    PRIMARY_PUBLIC_KEY     = "backup_public.pem"
-    ESCROW_PUBLIC_KEY      = "escrow_public.pem"
+    OFFSET_MINUTES             = $offsetMinutes
+    PRIMARY_PUBLIC_KEY         = "backup_public.pem"
+    ESCROW_PUBLIC_KEY          = "escrow_public.pem"
+    PERFORMANCE_SCHEDULE_TIME  = $PerformanceScheduleTime
+    PERFORMANCE_SCHEDULE_DAY   = $PerformanceScheduleDay
 }
 $configPath = Join-Path $DataDir "config.json"
 $config | ConvertTo-Json -Depth 4 | Set-Content $configPath -Encoding UTF8
@@ -258,8 +262,9 @@ Write-Host "    [OK] Configuration written to: $configPath" -ForegroundColor Gre
 # ------------------------------------------------------------------------------
 Write-Host "[+] Registering Windows Scheduled Tasks..." -ForegroundColor Yellow
 
-$backupScript = Join-Path $InstallDir "backup_agent.ps1"
+$backupScript  = Join-Path $InstallDir "backup_agent.ps1"
 $monitorScript = Join-Path $InstallDir "storage_monitor.ps1"
+$perfScript    = Join-Path $InstallDir "performance_query.ps1"
 
 # Compute staggered time (e.g., 02:00 AM + offset minutes)
 $baseHour = 2
@@ -280,6 +285,16 @@ $action2 = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-Executi
 $trigger2 = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Hours 1)
 Register-ScheduledTask -TaskName "DatabaseBackup_StorageMonitor" -Action $action2 -Trigger $trigger2 -Principal $principal1 -Settings $settings1 -Force | Out-Null
 Write-Host "    [OK] Scheduled Task registered: 'DatabaseBackup_StorageMonitor' (Hourly)" -ForegroundColor Green
+
+# Task 3: Performance Maintenance & Re-indexing (Fixed Time: e.g. Sunday at 03:30 AM or Daily)
+$action3 = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -File `"$perfScript`" -Mode Automatic"
+if ($PerformanceScheduleDay -eq "Daily") {
+    $trigger3 = New-ScheduledTaskTrigger -Daily -At $PerformanceScheduleTime
+} else {
+    $trigger3 = New-ScheduledTaskTrigger -Weekly -DaysOfWeek $PerformanceScheduleDay -At $PerformanceScheduleTime
+}
+Register-ScheduledTask -TaskName "DatabaseBackup_PerformanceMaintenance" -Action $action3 -Trigger $trigger3 -Principal $principal1 -Settings $settings1 -Force | Out-Null
+Write-Host "    [OK] Scheduled Task registered: 'DatabaseBackup_PerformanceMaintenance' ($PerformanceScheduleDay at $PerformanceScheduleTime)" -ForegroundColor Green
 
 Write-Host "================================================================================" -ForegroundColor Cyan
 Write-Host "  INSTALLATION COMPLETE! Native PowerShell Agent is fully configured." -ForegroundColor Green
