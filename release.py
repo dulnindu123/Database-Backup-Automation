@@ -178,9 +178,9 @@ def sync_to_client_package(build_info: dict):
         f.write(info_json)
     print("[SYNC] Synchronized build_info.json to AppFiles and package root.")
 
-    # 5. Sync batch scripts, docs, and Tools
+    # 5. Sync batch scripts, docs, Tools, and shell_client
     print("[SYNC] Copying root scripts and documentation...")
-    for file in ['Update_App.bat', 'READ_ME_FIRST.txt']:
+    for file in ['Update_App.bat', 'READ_ME_FIRST.txt', 'README.md']:
         if os.path.exists(file):
             shutil.copy2(file, os.path.join(PKG_DIR, file))
     
@@ -192,6 +192,12 @@ def sync_to_client_package(build_info: dict):
         # Clean up any leftover make_token.py in the target
         make_token = os.path.join(dst_tools, 'make_token.py')
         if os.path.exists(make_token): os.remove(make_token)
+
+    src_shell = 'shell_client'
+    dst_shell = os.path.join(PKG_DIR, 'shell_client')
+    if os.path.exists(src_shell):
+        print(f"[SYNC] Syncing shell_client folder: {src_shell} -> {dst_shell}")
+        shutil.copytree(src_shell, dst_shell, dirs_exist_ok=True)
 
     # 6. Audit Client_Installation_Package
     pkg_errors = audit_master_package(PKG_DIR)

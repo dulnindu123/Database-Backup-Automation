@@ -17,6 +17,7 @@ ALLOWED_PACKAGE_ROOT_FILES = {
     "Setup_DatabaseBackup.exe",
     "Update_App.bat",
     "READ_ME_FIRST.txt",
+    "README.md",
     "app_icon.ico",
     "app_icon.png",
     "sha256_manifest.json",
@@ -26,6 +27,7 @@ ALLOWED_PACKAGE_ROOT_FILES = {
 ALLOWED_PACKAGE_ROOT_DIRS = {
     "AppFiles",
     "Tools",
+    "shell_client",
 }
 
 ALLOWED_APPFILES_FILES = {

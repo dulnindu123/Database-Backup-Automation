@@ -52,9 +52,18 @@ need to run this once per customer.
 --------------------------------------------------------------------------------
 CUSTOMER EXPERIENCE (INSTALLATION):
 --------------------------------------------------------------------------------
-1. The customer extracts the ZIP file you sent them.
+OPTION A: 100% NATIVE POWERSHELL AGENT (No Python Required)
+1. Customer extracts the package.
+2. In an elevated PowerShell prompt (Run as Administrator):
+   cd shell_client
+   powershell.exe -ExecutionPolicy Bypass -File .\install_agent.ps1
+3. The script auto-detects bundle.json, enrolls with your Google Sheet broker, 
+   seals the machine token into Windows DPAPI, and registers Scheduled Tasks.
+
+OPTION B: STANDALONE GRAPHICAL INSTALLER (GUI)
+1. The customer extracts the ZIP file.
 2. They Right-Click `Setup_DatabaseBackup.exe` and choose "Run as Administrator".
-3. The installer detects the `bundle.json`, verifies your Admin signature, and 
+3. The installer detects `bundle.json`, verifies your Admin signature, and 
    automatically grabs their PC name and securely registers it with your Google Sheet.
 4. They simply select their backup folder and click "Save". Zero typing!
 
