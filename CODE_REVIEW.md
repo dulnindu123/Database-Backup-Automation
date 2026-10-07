@@ -50,14 +50,18 @@ When reviewing the implementation, observe these key design guarantees:
 - **[`shell_client/install_agent.ps1`](shell_client/install_agent.ps1)**: Elevated native installer script. Auto-reads `bundle.json`, extracts hardware fingerprint via WMI/CIM (`Win32_ComputerSystemProduct.UUID`, `Win32_Processor.ProcessorId`, MAC), enrolls with Google Apps Script broker via .NET `HttpWebRequest` (with 302 redirect resolution), seals machine token in Windows DPAPI (`token.dpapi`), hardens NTFS ACLs with `icacls`, and registers `DatabaseBackup_AutomatedTask` and `DatabaseBackup_StorageMonitor` in Windows Task Scheduler.
 - **[`shell_client/backup_agent.ps1`](shell_client/backup_agent.ps1)**: Autonomous backup script. Unprotects DPAPI token, dumps database (`sqlcmd`, `mysqldump`, `pg_dump`), compresses into ZIP, generates AES-256 ephemeral key, dual-wraps key with RSA-4096 (.NET `RSACng` OAEP-SHA256) for primary + escrow, streams chunked HTTP PUT with `Content-Range` headers to Google Drive resumable upload URI, and logs telemetry to Master Google Sheet.
 - **[`shell_client/storage_monitor.ps1`](shell_client/storage_monitor.ps1)**: Background storage health monitor for all fixed drives reporting telemetry via broker to the Google Sheet.
-- **[`shell_client/decrypt_backup.ps1`](shell_client/decrypt_backup.ps1)**: Native PowerShell disaster recovery decryption utility (.NET `RSACng` + AES decrypt).
 - **[`shell_client/README.md`](shell_client/README.md)**: Dedicated sysadmin operational runbook and architecture specification.
+
+### Admin Disaster Recovery Suite (`admin_recovery_tool/`) — Our Side Only!
+- **[`admin_recovery_tool/decrypt_gui.py`](admin_recovery_tool/decrypt_gui.py)**: Standalone 1-click Graphical Recovery Wizard (Tkinter). Allows administrators to browse `.dbk2` archives, select offline RSA-4096 private keys, authenticate MAC tags, verify context binding (database name, host, timestamp), and restore plaintext `.zip`/`.bak` files.
+- **[`admin_recovery_tool/decrypt_backup.py`](admin_recovery_tool/decrypt_backup.py)**: Headless CLI disaster recovery script for automated or air-gapped terminal recovery.
+- **[`admin_recovery_tool/decrypt_backup.ps1`](admin_recovery_tool/decrypt_backup.ps1)**: Pure PowerShell disaster recovery decryption script for Windows workstations without Python.
+- **[`admin_recovery_tool/Launch_Recovery_Wizard.bat`](admin_recovery_tool/Launch_Recovery_Wizard.bat)**: 1-click desktop launcher for the recovery wizard.
 
 ### Setup & Onboarding Pipeline
 - **[`installer_gui.py`](installer_gui.py)**: Zero-typing installation wizard compiled with PyInstaller (`uac_admin=True`). Verifies Ed25519 signed `bundle.json`, executes pre-flight diagnostics, enrolls machine with broker, seals token into DPAPI, and configures Windows Scheduled Tasks.
 - **[`Tools/setup_new_customer.py`](Tools/setup_new_customer.py)**: Interactive admin CLI for onboarding a single customer. Generates RSA keypairs, signs deployment bundle, and provisions ready-to-deploy customer zip.
 - **[`Tools/batch_setup_customers.py`](Tools/batch_setup_customers.py)**: Bulk onboarding engine for multi-tenant deployment. Processes batch customer slugs, generates isolated keypairs, writes `enroll_codes_for_sheet.tsv`, and generates customer packages.
-- **[`Tools/decrypt_backup.py`](Tools/decrypt_backup.py)**: Disaster recovery CLI. Authenticates GCM tag and decrypts `.dbk2` archive using air-gapped RSA private key.
 
 ### Cloud Broker (Zero-Billing)
 - **[`apps_script_broker/Code.gs`](apps_script_broker/Code.gs)**: Serverless upload broker deployed as a Google Apps Script Web App. Manages enrollment, token authentication, upload session generation via Google Drive API, daily rate limiting, and structured telemetry logging to Google Sheets.

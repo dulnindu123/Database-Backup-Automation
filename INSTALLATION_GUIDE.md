@@ -190,4 +190,5 @@ C:\ProgramData\DatabaseBackupApp\backup_log.txt
 
 * **Where are backups stored?** Encrypted `.dbk2` archives are uploaded to the organization's Google Drive.
 * **Can Google read the backups?** No. Backups are encrypted with AES-256-GCM using client-side RSA-4096 envelope keys before uploading. Google sees only opaque ciphertext.
-* **How are backups restored?** Restores are performed offline using the administrator's private key and `Tools/decrypt_backup.py`.
+* **Can customers decrypt backups?** No. Customers hold only public keys. Private keys and the decryption suite are retained exclusively by the administrator.
+* **How are backups restored?** Restores are performed offline on an air-gapped admin workstation using `admin_recovery_tool/Launch_Recovery_Wizard.bat` or `admin_recovery_tool/decrypt_backup.py`.

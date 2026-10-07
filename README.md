@@ -132,10 +132,16 @@ BackupAutomation/
 │   ├── install_agent.ps1         ← Elevated native installer (enrollment, DPAPI, task scheduler)
 │   ├── backup_agent.ps1          ← Autonomous backup & streaming chunked upload agent
 │   ├── storage_monitor.ps1       ← Storage telemetry & health reporter
-│   ├── decrypt_backup.ps1        ← Offline DR decryption utility (.dbk2 -> .bak)
 │   ├── backup_public.pem         ← RSA-4096 primary public key
 │   ├── escrow_public.pem         ← RSA-4096 escrow public key
 │   └── README.md                 ← Sysadmin deployment guide
+│
+├── admin_recovery_tool/          ← Dedicated Admin Disaster Recovery Suite (Our Side Only!)
+│   ├── decrypt_gui.py            ← 1-Click Graphical Recovery Wizard (Tkinter)
+│   ├── decrypt_backup.py         ← CLI decryption utility (.dbk2 -> .zip/.bak)
+│   ├── decrypt_backup.ps1        ← Pure PowerShell decryption utility
+│   ├── Launch_Recovery_Wizard.bat← 1-Click batch launcher
+│   └── README.md                 ← Admin disaster recovery runbook
 │
 ├── apps_script_broker/
 │   ├── Code.gs                   ← Serverless broker (paste into Apps Script)
@@ -281,19 +287,29 @@ Every day (or on demand from the GUI):
 
 ---
 
-## 🚨 Disaster Recovery
+## 🚨 Disaster Recovery (Admin Workstation Only)
 
-To restore a backup:
+Customer backups can **only** be decrypted from your administrative side using the dedicated [`admin_recovery_tool/`](admin_recovery_tool/). Customer servers have no access to decryption keys.
 
+### 🖥️ Option 1: Graphical Recovery Wizard (1-Click GUI)
+Double-click **`admin_recovery_tool/Launch_Recovery_Wizard.bat`** (or run `python admin_recovery_tool/decrypt_gui.py`):
+1. Browse and select the encrypted `.dbk2` file.
+2. Select your offline RSA private key (`backup_private.pem` or `escrow_private.pem`).
+3. Enter your private key passphrase.
+4. Click **`[⚡ Decrypt & Verify Integrity]`** to restore the verified database dump (`.zip` / `.bak`).
+
+### ⌨️ Option 2: Command-Line Recovery (CLI)
 ```bash
-python Tools/decrypt_backup.py path/to/backup.dbk2 path/to/output.bak
+python admin_recovery_tool/decrypt_backup.py path/to/backup.dbk2 path/to/output.zip path/to/backup_private.pem
 ```
 
-You will be prompted for:
-- The **private key** file (`backup_private.pem` or `escrow_private.pem`) — stored securely offline by the admin.
-- The **passphrase** protecting the key file.
-
-The tool authenticates the GCM tag, decrypts the archive, and writes the restored `.bak` / `.sql` file.
+### 🐚 Option 3: Native PowerShell Recovery (No Python Required)
+```powershell
+powershell -ExecutionPolicy Bypass -File .\admin_recovery_tool\decrypt_backup.ps1 `
+    -InputFile "path\to\backup.dbk2" `
+    -OutputFile "path\to\output.zip" `
+    -PrivateKeyFile "path\to\backup_private.pem"
+```
 
 ---
 

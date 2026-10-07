@@ -25,7 +25,8 @@ This directory provides a **100% native Windows PowerShell shell agent** for the
 | **`install_agent.ps1`** | Elevated setup script: computes hardware fingerprint, auto-enrolls with broker, seals machine token in DPAPI, registers Windows Scheduled Tasks. |
 | **`backup_agent.ps1`** | Autonomous backup executor: dumps database, compresses to `.zip`, encrypts into `.dbk2`, streams chunked PUT to Google Drive, reports status to Google Sheet. |
 | **`storage_monitor.ps1`** | Hourly storage health scanner: monitors fixed drives and reports disk pressure to Google Sheet. |
-| **`decrypt_backup.ps1`** | Offline recovery utility for decrypting `.dbk2` archives using private keys. |
+
+> 🔒 **Decryption Security Note**: Client machines hold **only public keys** and cannot decrypt backups. Decryption is performed strictly by authorized administrators on an air-gapped machine using **`admin_recovery_tool/`**.
 
 ---
 
