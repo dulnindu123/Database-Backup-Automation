@@ -148,14 +148,24 @@ def sync_to_client_package(build_info: dict):
     # 1. Copy Setup_DatabaseBackup.exe
     src_installer = os.path.join(DIST_DIR, "Setup_DatabaseBackup.exe")
     dst_installer = os.path.join(PKG_DIR, "Setup_DatabaseBackup.exe")
-    print(f"[SYNC] Copying installer: {src_installer} -> {dst_installer}")
-    shutil.copy2(src_installer, dst_installer)
+    if os.path.exists(src_installer):
+        print(f"[SYNC] Copying installer: {src_installer} -> {dst_installer}")
+        shutil.copy2(src_installer, dst_installer)
+    elif os.path.exists(dst_installer):
+        print(f"[SYNC] Retaining verified installer in: {dst_installer}")
+    else:
+        raise FileNotFoundError(f"Setup_DatabaseBackup.exe not found at {src_installer} or {dst_installer}")
 
     # 2. Copy DatabaseBackupApp.exe
     src_app = os.path.join(DIST_DIR, "DatabaseBackupApp", "DatabaseBackupApp.exe")
     dst_app = os.path.join(app_files_dir, "DatabaseBackupApp.exe")
-    print(f"[SYNC] Copying app binary: {src_app} -> {dst_app}")
-    shutil.copy2(src_app, dst_app)
+    if os.path.exists(src_app):
+        print(f"[SYNC] Copying app binary: {src_app} -> {dst_app}")
+        shutil.copy2(src_app, dst_app)
+    elif os.path.exists(dst_app):
+        print(f"[SYNC] Retaining verified app binary in: {dst_app}")
+    else:
+        raise FileNotFoundError(f"DatabaseBackupApp.exe not found at {src_app} or {dst_app}")
 
     # 3. Copy _internal directory
     src_internal = os.path.join(DIST_DIR, "DatabaseBackupApp", "_internal")
@@ -180,9 +190,13 @@ def sync_to_client_package(build_info: dict):
 
     # 5. Sync batch scripts, docs, and shell_client (NO ADMIN TOOLS IN CLIENT PACKAGE)
     print("[SYNC] Copying root scripts and documentation...")
-    for file in ['Update_App.bat', 'READ_ME_FIRST.txt', 'README.md', 'CLIENT_INSTALLATION_GUIDE.md']:
+    for file in ['Update_App.bat', 'Uninstall.bat', 'READ_ME_FIRST.txt', 'README.md', 'CLIENT_INSTALLATION_GUIDE.md']:
         if os.path.exists(file):
             shutil.copy2(file, os.path.join(PKG_DIR, file))
+
+    if os.path.exists('Uninstall.bat'):
+        shutil.copy2('Uninstall.bat', os.path.join(app_files_dir, 'Uninstall.bat'))
+        print("[SYNC] Synchronized Uninstall.bat into AppFiles.")
     
     # Strictly remove Tools folder from Client Package if present
     dst_tools = os.path.join(PKG_DIR, 'Tools')

@@ -1,11 +1,25 @@
 @echo off
 setlocal EnableDelayedExpansion
-title Database Cloud Backup - Clean Uninstaller
+title Enterprise Database Cloud Backup - Clean Uninstaller
 
-REM 1. Identify Target Installation Directory
+:: -----------------------------------------------------------------------------
+:: 1. Self-Elevation Check (Run as Administrator)
+:: -----------------------------------------------------------------------------
+net session >nul 2>&1
+if %ERRORLEVEL% NEQ 0 (
+    echo [!] Administrator privileges required. Elevating...
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process cmd.exe -ArgumentList '/c \"\"%~f0\" %*\"' -Verb RunAs"
+    exit /b
+)
+
+cd /d "%~dp0"
+
+:: -----------------------------------------------------------------------------
+:: 2. Identify Target Directories
+:: -----------------------------------------------------------------------------
 set "TARGET_DIR="
 
-REM Check registry for InstallLocation
+:: Check registry for InstallLocation
 for /f "tokens=2*" %%A in ('reg.exe query "HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\DatabaseBackupApp" /v "InstallLocation" 2^>nul') do (
     set "TARGET_DIR=%%B"
 )
@@ -15,14 +29,14 @@ if "!TARGET_DIR!"=="" (
     )
 )
 
-REM If not found in registry, check standard Program Files
+:: Fallback check standard Program Files
 if "!TARGET_DIR!"=="" (
-    if exist "%ProgramFiles%\DatabaseBackupApp\DatabaseBackupApp.exe" (
+    if exist "%ProgramFiles%\DatabaseBackupApp" (
         set "TARGET_DIR=%ProgramFiles%\DatabaseBackupApp"
     )
 )
 
-REM If running directly inside the installed application directory (not installer package)
+:: If running inside installed application directory
 if "!TARGET_DIR!"=="" (
     set "CURR_DIR=%~dp0"
     if "!CURR_DIR:~-1!"=="\" set "CURR_DIR=!CURR_DIR:~0,-1!"
@@ -31,91 +45,102 @@ if "!TARGET_DIR!"=="" (
     )
 )
 
-REM Safety check: Never delete the installer package directory itself!
-set "SCRIPT_DIR=%~dp0"
-if "!SCRIPT_DIR:~-1!"=="\" set "SCRIPT_DIR=!SCRIPT_DIR:~0,-1!"
-if exist "!SCRIPT_DIR!\Setup_DatabaseBackup.exe" (
-    if /i "!TARGET_DIR!"=="!SCRIPT_DIR!" (
-        set "TARGET_DIR=%ProgramFiles%\DatabaseBackupApp"
-    )
+if "!TARGET_DIR!"=="" (
+    set "TARGET_DIR=%ProgramFiles%\DatabaseBackupApp"
 )
-
-if not "!TARGET_DIR!"=="" (
-    if "!TARGET_DIR:~-1!"=="\" set "TARGET_DIR=!TARGET_DIR:~0,-1!"
-)
+if "!TARGET_DIR:~-1!"=="\" set "TARGET_DIR=!TARGET_DIR:~0,-1!"
 
 set "DATA_DIR=%ALLUSERSPROFILE%\DatabaseBackupApp"
 
-REM 2. Interactive Confirmation (only if not silent)
+:: -----------------------------------------------------------------------------
+:: 3. Interactive Confirmation (Unless Silent)
+:: -----------------------------------------------------------------------------
 if /i not "%~1"=="/silent" if /i not "%~1"=="/quiet" (
     cls
     echo ============================================================
-    echo   DATABASE CLOUD BACKUP - UNINSTALLER
+    echo   DATABASE CLOUD BACKUP - ENTERPRISE UNINSTALLER (v4.2.0)
     echo ============================================================
     echo.
     echo Target Installation Directory:
     echo   !TARGET_DIR!
+    echo Target Data Directory:
+    echo   !DATA_DIR!
     echo.
-    echo This will cleanly remove:
-    echo   - Running application processes
-    echo   - Windows Task Scheduler automated backup jobs
-    echo   - Desktop and Start Menu shortcuts
-    echo   - Windows Installed Apps registry entries
-    echo   - Application binaries and configurations
+    echo This will completely and cleanly remove:
+    echo   [x] All Windows Scheduled Tasks (Daily Backups, Cleanup, Performance)
+    echo   [x] Active application and background agent processes
+    echo   [x] Machine DPAPI authentication vault (token.dpapi)
+    echo   [x] Desktop and Start Menu shortcuts
+    echo   [x] Windows Registry Installed Apps entries
+    echo   [x] Application binaries, scripts, and local configurations
     echo.
     set /p CONFIRM="Are you sure you want to completely uninstall? (Y/N): "
     if /i not "!CONFIRM!"=="Y" (
         echo.
         echo Uninstallation cancelled by user.
-        ping 127.0.0.1 -n 3 >nul
+        ping 127.0.0.1 -n 2 >nul
         exit /b 0
     )
     
-    REM Prompt to archive the single unified backup_log.txt
+    :: Option to preserve audit logs
     set "ARCHIVE_LOG=Y"
-    set /p ARCHIVE_LOG="Preserve single audit log [backup_log.txt] to your Desktop? (Y/N, default Y): "
+    set /p ARCHIVE_LOG="Preserve audit logs to your Desktop? (Y/N, default Y): "
     if /i not "!ARCHIVE_LOG!"=="N" (
+        if exist "!DATA_DIR!\logs" (
+            mkdir "%USERPROFILE%\Desktop\DatabaseBackup_Logs_Archive" >nul 2>&1
+            copy /y "!DATA_DIR!\logs\*" "%USERPROFILE%\Desktop\DatabaseBackup_Logs_Archive\" >nul 2>&1
+            echo       [OK] Audit logs exported to Desktop\DatabaseBackup_Logs_Archive
+        )
         if exist "!DATA_DIR!\backup_log.txt" (
             copy /y "!DATA_DIR!\backup_log.txt" "%USERPROFILE%\Desktop\backup_log_archive.txt" >nul 2>&1
-            echo       [OK] Audit log exported to %USERPROFILE%\Desktop\backup_log_archive.txt
-        ) else if exist "!TARGET_DIR!\backup_log.txt" (
-            copy /y "!TARGET_DIR!\backup_log.txt" "%USERPROFILE%\Desktop\backup_log_archive.txt" >nul 2>&1
-            echo       [OK] Audit log exported to %USERPROFILE%\Desktop\backup_log_archive.txt
+            echo       [OK] Log exported to %USERPROFILE%\Desktop\backup_log_archive.txt
         )
     )
 )
 
 echo.
-echo [1/5] Terminating active application processes...
+echo [1/6] Terminating active processes...
 taskkill /F /IM DatabaseBackupApp.exe >nul 2>&1
 taskkill /F /IM python.exe /FI "WINDOWTITLE eq Enterprise Database Backup*" >nul 2>&1
 taskkill /F /IM sqlcmd.exe /FI "WINDOWTITLE eq Enterprise Database Backup*" >nul 2>&1
-ping 127.0.0.1 -n 2 >nul
+powershell -NoProfile -Command "Get-WmiObject Win32_Process -Filter \"Name like 'powershell%%'\" | Where-Object { $_.CommandLine -match 'backup_agent|performance_query|storage_monitor|run_automation' } | Stop-Process -Force -ErrorAction SilentlyContinue" >nul 2>&1
 
-echo [2/5] Removing Windows Task Scheduler tasks...
+echo [2/6] Removing Windows Scheduled Tasks...
+schtasks /delete /tn "DatabaseBackup_AutomatedTask" /f >nul 2>&1
+schtasks /delete /tn "DatabaseBackup_Daily" /f >nul 2>&1
+schtasks /delete /tn "DatabaseBackup_StorageMonitor" /f >nul 2>&1
+schtasks /delete /tn "DatabaseBackup_StorageCleanup" /f >nul 2>&1
+schtasks /delete /tn "DatabaseBackup_PerformanceMaintenance" /f >nul 2>&1
+schtasks /delete /tn "DatabaseBackupApp" /f >nul 2>&1
 schtasks /delete /tn "Database Cloud Backup" /f >nul 2>&1
 schtasks /delete /tn "Database Cloud Backup (System Service)" /f >nul 2>&1
 schtasks /delete /tn "EnterpriseDatabaseBackup" /f >nul 2>&1
 
-echo [3/5] Removing Desktop and Start Menu shortcuts...
+echo [3/6] Shredding machine credentials...
+powershell -NoProfile -Command "foreach ($f in @('!DATA_DIR!\token.dpapi', '!TARGET_DIR!\token.dpapi')) { if (Test-Path $f) { $b = New-Object byte[] 256; (New-Object System.Security.Cryptography.RNGCryptoServiceProvider).GetBytes($b); [System.IO.File]::WriteAllBytes($f, $b); Remove-Item $f -Force -ErrorAction SilentlyContinue } }" >nul 2>&1
+
+echo [4/6] Removing shortcuts...
 del /f /q "%USERPROFILE%\Desktop\*Database*Backup*.lnk" >nul 2>&1
 del /f /q "%PUBLIC%\Desktop\*Database*Backup*.lnk" >nul 2>&1
 del /f /q "%APPDATA%\Microsoft\Windows\Start Menu\Programs\*Database*Backup*.lnk" >nul 2>&1
 del /f /q "%ALLUSERSPROFILE%\Microsoft\Windows\Start Menu\Programs\*Database*Backup*.lnk" >nul 2>&1
+del /f /q "%APPDATA%\Microsoft\Windows\Start Menu\Programs\*Uninstall*Database*.lnk" >nul 2>&1
+del /f /q "%ALLUSERSPROFILE%\Microsoft\Windows\Start Menu\Programs\*Uninstall*Database*.lnk" >nul 2>&1
 
-echo [4/5] Removing Windows Registry registration...
+echo [5/6] Removing Windows Registry entries...
 reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\DatabaseBackupApp" /f >nul 2>&1
 reg delete "HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\DatabaseBackupApp" /f >nul 2>&1
 
-echo [5/5] Purging application directory...
+echo [6/6] Purging application directories...
 cd /d "%TEMP%"
-start "" /b powershell -NoProfile -WindowStyle Hidden -Command "Start-Sleep -Seconds 1; Remove-Item -LiteralPath '!TARGET_DIR!' -Recurse -Force -ErrorAction SilentlyContinue; if (Test-Path '!DATA_DIR!') { Remove-Item -LiteralPath '!DATA_DIR!' -Recurse -Force -ErrorAction SilentlyContinue }"
+start "" /b powershell -NoProfile -WindowStyle Hidden -Command "Start-Sleep -Seconds 1; if (Test-Path '!TARGET_DIR!') { Remove-Item -LiteralPath '!TARGET_DIR!' -Recurse -Force -ErrorAction SilentlyContinue }; if (Test-Path '!DATA_DIR!') { Remove-Item -LiteralPath '!DATA_DIR!' -Recurse -Force -ErrorAction SilentlyContinue }"
 
 echo.
 echo ============================================================
-echo   UNINSTALLATION COMPLETE
+echo   UNINSTALLATION COMPLETE (100%% CLEAN)
 echo ============================================================
-echo Database Cloud Backup was completely and cleanly removed.
+echo All application files, background tasks, and registry entries
+echo have been completely removed from this computer.
 echo.
 
 if /i not "%~1"=="/silent" if /i not "%~1"=="/quiet" (

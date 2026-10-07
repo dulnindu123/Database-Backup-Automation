@@ -158,3 +158,31 @@ powershell.exe -ExecutionPolicy Bypass -File C:\ProgramData\DatabaseBackupApp\sh
 - **Performance Logs**: `C:\ProgramData\DatabaseBackupApp\logs\performance_query.log`
 - **Storage Cleanup Logs**: `C:\ProgramData\DatabaseBackupApp\logs\storage_cleanup.log`
 - **Scheduled Tasks**: Open Windows Task Scheduler (`taskschd.msc`) -> expand **Task Scheduler Library** -> view tasks prefixed with `DatabaseBackup_`.
+
+---
+
+## 🗑️ Clean Uninstallation
+
+If you ever need to completely remove the application and background tasks from the server, choose the method matching your deployment track:
+
+### Option A: Via Windows Settings or Start Menu (Desktop App Track)
+1. Open **Windows Settings** -> **Apps** -> **Installed apps** (or Control Panel `appwiz.cpl`).
+2. Locate **Database Cloud Backup** and click **Uninstall**.
+3. Alternatively, click the **Uninstall Database Cloud Backup** shortcut in the Windows Start Menu, or double-click `Uninstall.bat` in the application directory.
+4. The uninstaller terminates background processes, purges all Windows Scheduled Tasks, shreds machine credentials (`token.dpapi`), and removes all application files.
+
+### Option B: Via Native PowerShell Agent (Server Shell Track)
+Open an elevated PowerShell prompt (Run as Administrator) and execute:
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File "C:\Program Files\DatabaseBackupApp\uninstall_agent.ps1"
+```
+Or run directly from the installation package:
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\shell_client\uninstall_agent.ps1
+```
+
+**Parameters for Unattended / RMM Automation**:
+- `-Force`: Uninstalls silently without interactive confirmation prompts.
+- `-KeepLogs`: Automatically exports audit logs to the Desktop (`DatabaseBackup_Logs_Archive`) before deletion.
+- `-KeepBackups`: Keeps staging backup archives intact.
+

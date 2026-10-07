@@ -51,7 +51,13 @@ SECURITY ASSURANCE:
 - All database backups are encrypted client-side using public keys.
 - Even if this server were compromised, the encrypted backups cannot be decrypted
   without the administrator's offline private keys.
-- No Google accounts or administrative cloud passwords are stored on this machine.
+--------------------------------------------------------------------------------
+HOW TO UNINSTALL:
+--------------------------------------------------------------------------------
+- Via GUI / Windows: Open Windows Settings -> Apps -> Installed apps -> Uninstall,
+  or double-click Uninstall.bat in this package / application directory.
+- Via PowerShell Agent: Open elevated PowerShell and run:
+  powershell.exe -ExecutionPolicy Bypass -File .\shell_client\uninstall_agent.ps1
 
 --------------------------------------------------------------------------------
 DOCUMENTATION & SUPPORT:

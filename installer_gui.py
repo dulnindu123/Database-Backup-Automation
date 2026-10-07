@@ -731,14 +731,36 @@ class InstallerApp(ctk.CTk):
                 )
                 subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd], capture_output=True)
 
+            # Copy Uninstall.bat to target directory
+            uninst_candidates = [
+                os.path.join(self.source_app_dir, "Uninstall.bat"),
+                os.path.join(self.bundle_dir, "Uninstall.bat"),
+                os.path.join(os.path.dirname(self.source_app_dir), "Uninstall.bat")
+            ]
+            for u_src in uninst_candidates:
+                if os.path.exists(u_src):
+                    try:
+                        shutil.copy2(u_src, os.path.join(self.target_dir, "Uninstall.bat"))
+                        break
+                    except Exception:
+                        pass
+
             if self.cb_startmenu.get():
+                target_uninst = os.path.join(self.target_dir, "Uninstall.bat")
                 ps_cmd2 = (
                     f'$ws = New-Object -ComObject WScript.Shell; '
                     f'$sc = $ws.CreateShortcut([Environment]::GetFolderPath("Programs") + "\\Database Cloud Backup.lnk"); '
                     f'$sc.TargetPath = "{target_exe}"; '
                     f'$sc.WorkingDirectory = "{self.target_dir}"; '
                     f'if (Test-Path "{target_ico}") {{ $sc.IconLocation = "{target_ico},0" }}; '
-                    f'$sc.Save()'
+                    f'$sc.Save(); '
+                    f'if (Test-Path "{target_uninst}") {{ '
+                    f'  $sc2 = $ws.CreateShortcut([Environment]::GetFolderPath("Programs") + "\\Uninstall Database Cloud Backup.lnk"); '
+                    f'  $sc2.TargetPath = "{target_uninst}"; '
+                    f'  $sc2.WorkingDirectory = "{self.target_dir}"; '
+                    f'  if (Test-Path "{target_ico}") {{ $sc2.IconLocation = "{target_ico},0" }}; '
+                    f'  $sc2.Save(); '
+                    f'}}'
                 )
                 subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd2], capture_output=True)
 
@@ -755,11 +777,17 @@ class InstallerApp(ctk.CTk):
 
             # 5. Register in Windows Registry
             reg_key = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\DatabaseBackupApp"
+            uninstall_bat = os.path.join(self.target_dir, "Uninstall.bat")
             for cmd in [
                 ["reg.exe", "add", reg_key, "/v", "DisplayName", "/d", "Database Cloud Backup", "/t", "REG_SZ", "/f"],
                 ["reg.exe", "add", reg_key, "/v", "DisplayVersion", "/d", INSTALLER_VERSION, "/t", "REG_SZ", "/f"],
                 ["reg.exe", "add", reg_key, "/v", "Publisher", "/d", "Enterprise Cloud DR", "/t", "REG_SZ", "/f"],
-                ["reg.exe", "add", reg_key, "/v", "InstallLocation", "/d", self.target_dir, "/t", "REG_SZ", "/f"]
+                ["reg.exe", "add", reg_key, "/v", "InstallLocation", "/d", self.target_dir, "/t", "REG_SZ", "/f"],
+                ["reg.exe", "add", reg_key, "/v", "UninstallString", "/d", f'"{uninstall_bat}"', "/t", "REG_SZ", "/f"],
+                ["reg.exe", "add", reg_key, "/v", "QuietUninstallString", "/d", f'"{uninstall_bat}" /silent', "/t", "REG_SZ", "/f"],
+                ["reg.exe", "add", reg_key, "/v", "DisplayIcon", "/d", f'"{target_exe}",0', "/t", "REG_SZ", "/f"],
+                ["reg.exe", "add", reg_key, "/v", "NoModify", "/d", "1", "/t", "REG_DWORD", "/f"],
+                ["reg.exe", "add", reg_key, "/v", "NoRepair", "/d", "1", "/t", "REG_DWORD", "/f"]
             ]:
                 subprocess.run(cmd, capture_output=True)
 

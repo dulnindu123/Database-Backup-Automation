@@ -218,7 +218,7 @@ if (-not (Test-Path $BackupFolder)) {
 }
 
 $currentScriptDir = $PSScriptRoot
-$filesToCopy = @("backup_agent.ps1", "storage_monitor.ps1", "performance_query.ps1", "run_automation.ps1", "backup_public.pem", "escrow_public.pem")
+$filesToCopy = @("backup_agent.ps1", "storage_monitor.ps1", "performance_query.ps1", "run_automation.ps1", "uninstall_agent.ps1", "backup_public.pem", "escrow_public.pem")
 
 foreach ($f in $filesToCopy) {
     $src = Join-Path $currentScriptDir $f
@@ -300,4 +300,6 @@ Write-Host "====================================================================
 Write-Host "  INSTALLATION COMPLETE! Native PowerShell Agent is fully configured." -ForegroundColor Green
 Write-Host "  To run a manual test backup right now, execute:" -ForegroundColor White
 Write-Host "    powershell.exe -ExecutionPolicy Bypass -File `"$backupScript`"" -ForegroundColor Yellow
+Write-Host "  To cleanly uninstall this agent in the future, execute:" -ForegroundColor White
+Write-Host "    powershell.exe -ExecutionPolicy Bypass -File `"$(Join-Path $InstallDir 'uninstall_agent.ps1')`"" -ForegroundColor Yellow
 Write-Host "================================================================================" -ForegroundColor Cyan

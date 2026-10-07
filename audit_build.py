@@ -16,6 +16,7 @@ import json
 ALLOWED_PACKAGE_ROOT_FILES = {
     "Setup_DatabaseBackup.exe",
     "Update_App.bat",
+    "Uninstall.bat",
     "READ_ME_FIRST.txt",
     "README.md",
     "CLIENT_INSTALLATION_GUIDE.md",
@@ -32,6 +33,7 @@ ALLOWED_PACKAGE_ROOT_DIRS = {
 
 ALLOWED_APPFILES_FILES = {
     "DatabaseBackupApp.exe",
+    "Uninstall.bat",
     "backup_public.pem",
     "escrow_public.pem",
     "config.json",
