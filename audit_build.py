@@ -1,5 +1,5 @@
 """
-Zero-Trust Build & Package Allowlist Security Audit (v4.1.0)
+Zero-Trust Build & Package Allowlist Security Audit (v4.2.0)
 =============================================================================
 Enforces strict verification on Client_Installation_Package and dist/:
 1. Explicit Allowlist: Fails build if any unexpected file is present.

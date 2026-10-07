@@ -2,10 +2,12 @@
 App-side client for the upload broker. The app holds NO Google credentials.
 Its only secret is a per-PC broker token that can request "start an upload" and nothing else.
 """
-import os, time, base64, hashlib, requests
+import os, time, base64, hashlib, json, requests
+from urllib.parse import urljoin
 
 CHUNK = 8 * 1024 * 1024  # must be a multiple of 256 KiB for GCS resumable uploads
 RETRYABLE = (429, 500, 502, 503, 504)
+_REDIRECT_CODES = (301, 302, 303, 307, 308)
 
 
 # ---- token storage (Windows DPAPI, machine scope; native crypt32.dll + fallback) ----
@@ -163,6 +165,75 @@ def validate_broker_url(url):
     )
 
 
+def parse_broker_response(response):
+    """
+    Maps an Apps Script / HTTP response to (logical_status, data, error_message).
+    ContentService always returns HTTP 200; the real status is in JSON {error, code}.
+    """
+    text = (getattr(response, "text", None) or "")
+    data = {}
+    try:
+        if text:
+            parsed = response.json()
+            if isinstance(parsed, dict):
+                data = parsed
+    except Exception:
+        lower = text.lower()
+        if "<html" in lower or "sign in" in lower:
+            return 502, {}, "Broker returned an HTML page instead of JSON. Redeploy the Web App with access = Anyone."
+        return 502, {}, f"Broker returned non-JSON: {text[:120]}"
+
+    if data.get("error"):
+        try:
+            logical = int(data.get("code") or 400)
+        except (TypeError, ValueError):
+            logical = 400
+        return logical, data, str(data.get("error"))
+
+    http_status = getattr(response, "status_code", 200) or 200
+    if http_status >= 400:
+        return http_status, data, (text[:200] or f"HTTP {http_status}")
+    return http_status, data, None
+
+
+def post_broker(url, payload, timeout=30):
+    """
+    POST JSON to the Apps Script web app and retrieve the JSON response.
+    Apps Script processes doPost(e) and responds with a 302 redirect to
+    script.googleusercontent.com/macros/echo to deliver the ContentService payload via GET.
+    """
+    valid_url = validate_broker_url(url)
+    headers = {"Content-Type": "application/json; charset=utf-8"}
+    body = json.dumps(payload)
+    
+    response = requests.post(
+        valid_url, data=body, headers=headers, allow_redirects=False, timeout=timeout
+    )
+    if response.status_code in _REDIRECT_CODES:
+        location = response.headers.get("Location") or response.headers.get("location")
+        if location:
+            target = location if location.lower().startswith("http") else urljoin(valid_url, location)
+            if "googleusercontent.com" in target.lower() or response.status_code in (301, 302, 303):
+                return requests.get(target, timeout=timeout)
+            else:
+                return requests.post(target, data=body, headers=headers, allow_redirects=False, timeout=timeout)
+    return response
+
+
+def verify_broker_token(broker_url, token, timeout=10):
+    """Returns (ok, pc_id_or_error). Uses the Apps Script {action: verify} protocol."""
+    if not token or "." not in token:
+        return False, "Token format invalid (expected pc_id.secret)"
+    try:
+        r = post_broker(broker_url, {"action": "verify", "token": token}, timeout=timeout)
+        status, data, err = parse_broker_response(r)
+        if err or status >= 400:
+            return False, err or f"HTTP {status}"
+        return True, data.get("pc_id") or token.split(".", 1)[0]
+    except Exception as e:
+        return False, str(e)
+
+
 def import_and_protect_token(raw_token_input, target_path):
     """
     Imports a raw token (string or path to raw_token.txt), protects it locally
@@ -202,13 +273,17 @@ def enroll_pc(broker_url, enroll_code, pc_id, customer_slug, target_token_path, 
     Zero-billing enrollment protocol. Client generates token locally, sends to broker.
     Broker atomically registers it and returns a stagger offset.
     """
-    valid_url = validate_broker_url(broker_url)
-    import secrets, json
-    
-    # Generate token locally
-    secret = secrets.token_urlsafe(32)
+    import secrets
+
+    enroll_code = str(enroll_code or "").strip()
+    pc_id = str(pc_id or "").strip()
+    customer_slug = str(customer_slug or "").strip()
+    if not enroll_code or not pc_id or not customer_slug:
+        return False, "Enrollment requires enroll_code, pc_id, and customer_slug"
+
+    secret = secrets.token_urlsafe(32).replace(".", "_")
     token = f"{pc_id}.{secret}"
-    
+
     payload = {
         "action": "enroll",
         "enroll_code": enroll_code,
@@ -216,25 +291,18 @@ def enroll_pc(broker_url, enroll_code, pc_id, customer_slug, target_token_path, 
         "customer_slug": customer_slug,
         "token": token
     }
-    
+
     try:
-        r = requests.post(valid_url, json=payload, allow_redirects=True, timeout=30)
-        if r.status_code != 200:
-            raise RuntimeError(f"Enrollment failed: HTTP {r.status_code} - {r.text}")
-        
-        data = r.json()
-        if "error" in data:
-            raise RuntimeError(f"Enrollment error: {data['error']}")
-            
+        r = post_broker(broker_url, payload, timeout=30)
+        status, data, err = parse_broker_response(r)
+        if err or status >= 400:
+            return False, err or f"HTTP {status}"
+
         offset_minutes = data.get("offset_minutes", 0)
-        
-        # Save token via DPAPI
         import_and_protect_token(token, target_token_path)
-        
-        # Save offset config locally
+        os.makedirs(os.path.dirname(os.path.abspath(target_offset_path)), exist_ok=True)
         with open(target_offset_path, "w", encoding="utf-8") as f:
             json.dump({"offset_minutes": offset_minutes}, f)
-            
         return True, offset_minutes
     except Exception as e:
         return False, str(e)
@@ -250,11 +318,11 @@ def _md5_b64(path):
 
 
 def request_session(broker_url, token, db, size, seq=1):
-    valid_url = validate_broker_url(broker_url)
-    r = requests.post(valid_url,
-                      json={"action": "request_upload", "token": token, "db_name": db, "size_bytes": size, "seq": seq},
-                      allow_redirects=True, timeout=30)
-    return r
+    return post_broker(
+        broker_url,
+        {"action": "request_upload", "token": token, "db_name": db, "size_bytes": size, "seq": seq},
+        timeout=30,
+    )
 
 
 def _query_offset(uri, total):
@@ -269,6 +337,9 @@ def _query_offset(uri, total):
 
 
 def _put_all(uri, path, total, log, progress_cb, telemetry_cb, cancel_check):
+    if not uri:
+        log("Upload session URI is empty.", "error")
+        return None
     name = os.path.basename(path)
     start = time.time()
     pos, final = 0, None
@@ -351,7 +422,8 @@ def secure_upload(file_path, db_name, config, base_dir, log_cb=None, progress_cb
     token = load_token(token_path)
     total = os.path.getsize(file_path)
 
-    for seq in (1, 2, 3):  # 409 = slot used today (e.g. an earlier run); try the next slot
+    info = None
+    for seq in (1, 2, 3):
         try:
             r = request_session(broker_url, token, db_name, total, seq)
         except requests.RequestException as e:
@@ -360,13 +432,30 @@ def secure_upload(file_path, db_name, config, base_dir, log_cb=None, progress_cb
         except ValueError as e:
             log(f"Broker configuration error: {e}", "critical")
             return None
-        if r.status_code == 200:
-            info = r.json()
+        status, data, err = parse_broker_response(r)
+        if not err and status < 400:
+            upload_uri = data.get("upload_url") or data.get("session_uri")
+            if not upload_uri:
+                log("Broker accepted the request but did not return an upload URL.", "error")
+                return None
+            info = data
             break
-        if r.status_code == 409:
-            log(f"Upload slot {seq}/3 for database '{db_name}' is already used today (HTTP 409 Conflict). Trying slot {seq+1}...", "warning")
+        if status in (409, 429):
+            log(
+                f"Upload slot {seq}/3 for database '{db_name}' is already used today "
+                f"(HTTP {status} Conflict). Trying slot {seq + 1}...",
+                "warning",
+            )
+            if status == 429:
+                # Apps Script counts by day, not by seq; further slot retries will also 429.
+                log(
+                    f"SECURITY ALERT: All 3 upload slots for database '{db_name}' are exhausted today. "
+                    "If you did not execute 3 backups today, your token may be compromised or experiencing slot-burning.",
+                    "critical",
+                )
+                return None
             continue
-        log(f"Broker refused the upload (HTTP {r.status_code}: {r.text[:120]}).", "error")
+        log(f"Broker refused the upload (HTTP {status}: {err or r.text[:120]}).", "error")
         return None
     else:
         log(f"SECURITY ALERT: All 3 upload slots for database '{db_name}' are exhausted today. "
@@ -375,7 +464,8 @@ def secure_upload(file_path, db_name, config, base_dir, log_cb=None, progress_cb
 
     if status_cb:
         status_cb(f"Uploading {os.path.basename(file_path)} ...")
-    resp = _put_all(info.get("upload_url", info.get("session_uri")), file_path, total, log, progress_cb, telemetry_cb, cancel_check)
+    upload_uri = info.get("upload_url") or info.get("session_uri")
+    resp = _put_all(upload_uri, file_path, total, log, progress_cb, telemetry_cb, cancel_check)
     if resp is None:
         return None
 
@@ -404,17 +494,12 @@ def report_storage_telemetry(telemetry_broker_url, token, drives, tab_name="Stor
 
     payload = {"action": "report_status", "token": token, "drives": drives, "tab_name": tab_name}
     try:
-        r = requests.post(
-            valid_url,
-            json=payload,
-            allow_redirects=True,
-            timeout=15
-        )
-        if r.status_code == 200:
-            return True, f"Telemetry reported ({r.json().get('drives_logged', len(drives))} drives logged)"
-        elif r.status_code == 429:
+        r = post_broker(valid_url, payload, timeout=15)
+        status, data, err = parse_broker_response(r)
+        if not err and status < 400:
+            return True, f"Telemetry reported ({data.get('drives_logged', len(drives))} drives logged)"
+        if status == 429:
             return False, "Telemetry rate limited (max 1 report per 15 mins)"
-        else:
-            return False, f"Telemetry broker rejected report: HTTP {r.status_code} - {r.text[:100]}"
+        return False, f"Telemetry broker rejected report: HTTP {status} - {err or r.text[:100]}"
     except Exception as e:
         return False, f"Telemetry broker error: {e}"

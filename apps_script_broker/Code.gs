@@ -1,11 +1,8 @@
-// Code.gs
-// Optional: SPREADSHEET_ID. If running inside the container spreadsheet (Extensions > Apps Script),
-// leave empty "" to automatically use the active spreadsheet.
-const SPREADSHEET_ID = "";
+// Master Google Sheet ID: https://docs.google.com/spreadsheets/d/12xEfxLTOw8D4K8Qi_kj0RWPl12hID6x5HZpvU_AsTLE/edit
+const SPREADSHEET_ID = "12xEfxLTOw8D4K8Qi_kj0RWPl12hID6x5HZpvU_AsTLE";
 
-// Optional: ROOT_FOLDER_ID. The Google Drive folder where customer backup folders will be created.
-// Leave empty "" to save directly in your Google Drive root.
-const ROOT_FOLDER_ID = "";
+// Master Google Drive Folder ID: https://drive.google.com/drive/folders/16-ifHQQPv2vZ_eTVZvx8CiGilVy9dQ8r
+const ROOT_FOLDER_ID = "16-ifHQQPv2vZ_eTVZvx8CiGilVy9dQ8r";
 
 function getSpreadsheet() {
   if (SPREADSHEET_ID && SPREADSHEET_ID.trim() !== "") {
@@ -32,10 +29,18 @@ function hashToken(token) {
   return bytes.map(b => (b < 0 ? b + 256 : b).toString(16).padStart(2, '0')).join('');
 }
 
+function doGet(e) {
+  return successResponse({ status: "ok", service: "backup-broker" });
+}
+
 function doPost(e) {
   try {
     const payload = JSON.parse(e.postData.contents);
     const action = payload.action;
+
+    if (action === "health") {
+      return successResponse({ status: "ok", service: "backup-broker" });
+    }
     
     // Enroll doesn't need a pre-existing token, but uses an enrollment code
     if (action === "enroll") {
@@ -68,10 +73,10 @@ function doPost(e) {
 }
 
 function handleEnroll(payload) {
-  const enrollCode = payload.enroll_code;
-  const pcId = payload.pc_id;
-  const customerSlug = payload.customer_slug;
-  const providedToken = payload.token; // Client generates random token and registers it
+  const enrollCode = String(payload.enroll_code || "").trim();
+  const pcId = String(payload.pc_id || "").trim();
+  const customerSlug = String(payload.customer_slug || "").trim();
+  const providedToken = String(payload.token || "").trim();
   
   if (!enrollCode || !pcId || !providedToken || !customerSlug) {
     return errorResponse("Missing fields", 400);
@@ -91,9 +96,12 @@ function handleEnroll(payload) {
     const configData = configSheet.getDataRange().getValues();
     let validCode = false;
     for (let i = 1; i < configData.length; i++) {
-      if (configData[i][0] === "ENROLL_CODE" && secureCompare(String(configData[i][1]), enrollCode)) {
+      const key = String(configData[i][0] || "").trim();
+      const storedCode = String(configData[i][1] || "").trim();
+      if (key === "ENROLL_CODE" && storedCode && secureCompare(storedCode, enrollCode)) {
         const expectedSlug = String(configData[i][2] || "").trim();
-        if (!expectedSlug || secureCompare(expectedSlug, customerSlug)) {
+        // Slug must be present and match strictly (case-insensitive)
+        if (expectedSlug && secureCompare(expectedSlug.toLowerCase(), customerSlug.toLowerCase())) {
           validCode = true;
           break;
         }
@@ -104,11 +112,13 @@ function handleEnroll(payload) {
       return errorResponse("Unauthorized", 401);
     }
     
-    // Check if PC already enrolled
+    // Check if PC already enrolled -> allow re-enrollment if valid ENROLL_CODE was provided
+    let existingRowIndex = -1;
     const tokenData = tokensSheet.getDataRange().getValues();
     for (let i = 1; i < tokenData.length; i++) {
       if (tokenData[i][0] === pcId) {
-        return errorResponse("PC already enrolled", 409);
+        existingRowIndex = i + 1; // 1-indexed sheet row
+        break;
       }
     }
 
@@ -116,10 +126,15 @@ function handleEnroll(payload) {
     const offset = Math.floor(Math.random() * 240); // 0 to 4 hours stagger offset
     const timestamp = new Date().toISOString();
 
-    tokensSheet.appendRow([pcId, customerSlug, tokenHash, offset, timestamp]);
-    logAudit(pcId, "ENROLL_SUCCESS", "PC enrolled successfully");
-    
-    return successResponse({ status: "enrolled", offset_minutes: offset });
+    if (existingRowIndex > 0) {
+      tokensSheet.getRange(existingRowIndex, 1, 1, 5).setValues([[pcId, customerSlug, tokenHash, offset, timestamp]]);
+      logAudit(pcId, "RE_ENROLL_SUCCESS", "PC re-enrolled with updated token");
+      return successResponse({ status: "re-enrolled", offset_minutes: offset });
+    } else {
+      tokensSheet.appendRow([pcId, customerSlug, tokenHash, offset, timestamp]);
+      logAudit(pcId, "ENROLL_SUCCESS", "PC enrolled successfully");
+      return successResponse({ status: "enrolled", offset_minutes: offset });
+    }
 
   } finally {
     lock.releaseLock();
@@ -145,12 +160,13 @@ function verifyToken(token) {
 }
 
 function handleRequestUpload(pcData, payload) {
-  const dbName = payload.db_name;
+  let dbName = String(payload.db_name || "").trim();
   const sizeBytes = payload.size_bytes;
   
-  if (!dbName || !/^[A-Za-z0-9_-]{1,64}$/.test(dbName)) {
+  if (!dbName || !/^[A-Za-z0-9_][A-Za-z0-9_\-\. ]{0,127}$/.test(dbName)) {
     return errorResponse("Invalid database name", 400);
   }
+  dbName = dbName.replace(/\s+/g, "_");
   
   const MAX_BYTES = 100 * 1024 * 1024 * 1024; // 100 GB cap
   if (sizeBytes > MAX_BYTES) {

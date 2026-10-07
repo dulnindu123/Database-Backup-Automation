@@ -139,8 +139,41 @@ def validate_broker_url_security(url: str, allow_insecure: bool = False) -> Pref
     return PreflightCheckResult(name="Broker URL Security", passed=True, message="Valid Apps Script URL", code="OK")
 
 
-def probe_broker_health(url: str, timeout: float = 4.0) -> PreflightCheckResult:
-    return PreflightCheckResult(name="Broker Health (Ping)", passed=True, message="Health checks are implicitly passed for Google Apps Script", code="OK")
+def probe_broker_health(url: str, timeout: float = 8.0) -> PreflightCheckResult:
+    if not requests:
+        return PreflightCheckResult(name="Broker Health (Ping)", passed=False, message="requests library not available", code="ERR_NO_REQUESTS")
+    try:
+        from broker_client import post_broker, parse_broker_response
+        r = post_broker(url, {"action": "health"}, timeout=timeout)
+        status, data, err = parse_broker_response(r)
+        if data.get("status") == "ok" or (status == 401 and "token" in str(data.get("error", "")).lower()):
+            return PreflightCheckResult(
+                name="Broker Health (Ping)",
+                passed=True,
+                message="Apps Script broker responded and is active",
+                code="OK",
+            )
+        if err or status >= 400:
+            return PreflightCheckResult(
+                name="Broker Health (Ping)",
+                passed=False,
+                message=err or f"Broker health failed (HTTP {status})",
+                code=f"HTTP_{status}",
+            )
+        return PreflightCheckResult(
+            name="Broker Health (Ping)",
+            passed=False,
+            message="Unexpected health response from broker",
+            code="ERR_HEALTH_UNEXPECTED",
+        )
+    except Exception as e:
+        return PreflightCheckResult(
+            name="Broker Health (Ping)",
+            passed=False,
+            message=str(e),
+            code="ERR_HEALTH_EXCEPTION",
+            error_detail=str(e),
+        )
 # =============================================================================
 # 2. TOKEN & DPAPI CHECKS (Requirement C: Real error codes)
 # =============================================================================
@@ -207,61 +240,22 @@ def decrypt_token_dpapi(data_dir: Optional[str] = None, target_dir: Optional[str
             code="ERR_TOKEN_ZERO_BYTES"
         )
 
-    # 2. Native Windows CryptUnprotectData Decryption
     try:
-        class DATA_BLOB(ctypes.Structure):
-            _fields_ = [("cbData", ctypes.c_ulong), ("pbData", ctypes.c_void_p)]
-
-        crypt32 = ctypes.windll.crypt32
-        kernel32 = ctypes.windll.kernel32
-        kernel32.LocalFree.argtypes = [ctypes.c_void_p]
-        kernel32.LocalFree.restype = ctypes.c_void_p
-
-        crypt32.CryptUnprotectData.argtypes = [
-            ctypes.POINTER(DATA_BLOB),
-            ctypes.c_void_p,
-            ctypes.c_void_p,
-            ctypes.c_void_p,
-            ctypes.c_void_p,
-            ctypes.c_ulong,
-            ctypes.POINTER(DATA_BLOB)
-        ]
-        crypt32.CryptUnprotectData.restype = ctypes.c_int
-
-        in_blob = DATA_BLOB(len(encrypted_bytes), ctypes.cast(ctypes.create_string_buffer(encrypted_bytes), ctypes.c_void_p))
-        out_blob = DATA_BLOB()
-
-        # Flags: 0x4 = CRYPTPROTECT_LOCAL_MACHINE
-        res = crypt32.CryptUnprotectData(
-            ctypes.byref(in_blob),
-            None,
-            None,
-            None,
-            None,
-            ctypes.c_ulong(0x4),
-            ctypes.byref(out_blob)
-        )
-
-        if not res:
-            err_code = kernel32.GetLastError()
-            err_hex = f"0x{err_code & 0xFFFFFFFF:08X}"
+        from broker_client import _unprotect_dpapi_native
+        token_str = _unprotect_dpapi_native(encrypted_bytes)
+        if not token_str:
             return None, PreflightCheckResult(
                 name="Token Decryption (DPAPI)",
                 passed=False,
-                message=f"CryptUnprotectData failed: Win32 error {err_hex} (Decryption failed or wrong user/machine context)",
-                code=f"ERR_WIN32_{err_hex}",
-                error_detail=f"GetLastError() returned {err_code} ({err_hex})"
+                message="CryptUnprotectData returned empty data (wrong user/machine context)",
+                code="ERR_DPAPI_EMPTY",
             )
 
-        raw_bytes = ctypes.string_at(out_blob.pbData, out_blob.cbData)
-        kernel32.LocalFree(out_blob.pbData)
-        token_str = raw_bytes.decode("utf-8", errors="replace").strip()
-
-        if not token_str or "." not in token_str:
+        if "." not in token_str:
             return None, PreflightCheckResult(
                 name="Token Decryption (DPAPI)",
                 passed=False,
-                message=f"Decrypted token has invalid format. Expected '<pc_id>.<secret>'",
+                message="Decrypted token has invalid format. Expected '<pc_id>.<secret>'",
                 code="ERR_TOKEN_FORMAT_INVALID"
             )
 
@@ -272,7 +266,6 @@ def decrypt_token_dpapi(data_dir: Optional[str] = None, target_dir: Optional[str
             message=f"Successfully decrypted token for PC ID: '{pc_id}' via native DPAPI",
             code="OK"
         )
-
     except Exception as e:
         return None, PreflightCheckResult(
             name="Token Decryption (DPAPI)",
@@ -283,14 +276,13 @@ def decrypt_token_dpapi(data_dir: Optional[str] = None, target_dir: Optional[str
         )
 
 
-def verify_token_with_broker(url: str, token: str, timeout: float = 4.0) -> PreflightCheckResult:
-    if not requests:
-        return PreflightCheckResult(name="Token Broker Verification", passed=False, message="requests library not available", code="ERR_NO_REQUESTS")
+def verify_token_with_broker(url: str, token: str, timeout: float = 8.0) -> PreflightCheckResult:
     try:
-        resp = requests.post(url, json={"action": "verify", "token": token}, allow_redirects=True, timeout=timeout)
-        if resp.status_code == 200:
-            return PreflightCheckResult(name="Token Broker Verification", passed=True, message="Token verified successfully", code="OK")
-        return PreflightCheckResult(name="Token Broker Verification", passed=False, message=f"Broker returned {resp.status_code}", code=f"HTTP_{resp.status_code}")
+        from broker_client import verify_broker_token
+        ok, detail = verify_broker_token(url, token, timeout=timeout)
+        if ok:
+            return PreflightCheckResult(name="Token Broker Verification", passed=True, message=f"Token verified successfully (PC: {detail})", code="OK")
+        return PreflightCheckResult(name="Token Broker Verification", passed=False, message=str(detail), code="ERR_VERIFY")
     except Exception as e:
         return PreflightCheckResult(name="Token Broker Verification", passed=False, message=f"Error: {e}", code="ERR_VERIFY")
 # =============================================================================

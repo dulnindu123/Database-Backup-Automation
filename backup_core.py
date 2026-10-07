@@ -74,7 +74,11 @@ SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets"
 ]
 
-from version import DEFAULT_TASK_NAME
+from version import DEFAULT_TASK_NAME, PROGRAM_DATA_DIR
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = PROGRAM_DATA_DIR
+LOG_FILE = os.path.join(DATA_DIR, "backup_log.txt")
 
 # Standard Windows Task Scheduler & Service entry identifiers (Round 9 Requirement 3: Single Constant)
 TASK_SCHEDULER_NAME = DEFAULT_TASK_NAME
@@ -646,7 +650,7 @@ def test_broker_connection(config, log_cb=None):
         emit_log("Warning: backup_public.pem missing.", "warning", log_cb)
 
     try:
-        from broker_client import load_token
+        from broker_client import load_token, verify_broker_token
         token = load_token(token_path)
         pc_id = token.split(".")[0] if "." in token else "pc-client"
         results["pc_id"] = pc_id
@@ -656,20 +660,14 @@ def test_broker_connection(config, log_cb=None):
         return results
 
     try:
-        r = requests.post(f"{broker_url}/verify",
-                          headers={"Authorization": f"Bearer {token}"},
-                          timeout=10)
-        if r.status_code == 200:
-            data = r.json()
+        ok, detail = verify_broker_token(broker_url, token, timeout=10)
+        if ok:
             results["verified"] = True
-            results["pc_id"] = data.get("pc", pc_id)
+            results["pc_id"] = detail or pc_id
             emit_log(f"Broker connection verified. PC ID: {results['pc_id']}", "info", log_cb)
-        elif r.status_code == 401:
-            results["errors"].append("Broker rejected PC Token (Unauthorized or Token Revoked by Admin).")
-            emit_log("Broker rejected token.", "error", log_cb)
         else:
-            results["errors"].append(f"Broker returned HTTP {r.status_code}: {r.text[:100]}")
-            emit_log(f"Broker error: HTTP {r.status_code}", "error", log_cb)
+            results["errors"].append(f"Broker rejected PC Token: {detail}")
+            emit_log(f"Broker rejected token: {detail}", "error", log_cb)
     except Exception as e:
         results["errors"].append(f"Network error connecting to broker ({broker_url}): {e}")
         emit_log(f"Broker unreachable: {e}", "error", log_cb)
@@ -2530,11 +2528,20 @@ def run_storage_monitor(config=None, log_cb=None, status_cb=None):
         status_cb("Logging storage data to Google Sheet via Telemetry Broker...")
 
     telemetry_broker_url = config.get("TELEMETRY_BROKER_URL", config.get("BROKER_URL", ""))
-    token_filename = config.get("BROKER_TOKEN_FILE", "broker_token.dat")
-    token_path = os.path.join(BASE_DIR, token_filename)
+    token_filename = config.get("BROKER_TOKEN_FILE", "token.dpapi")
+    prog_data = os.environ.get("ALLUSERSPROFILE", r"C:\ProgramData")
+    search_dirs = [DATA_DIR, os.path.join(prog_data, "DatabaseBackupApp"), BASE_DIR]
+    for s_dir in search_dirs:
+        for s_name in [token_filename, "token.dpapi", "broker_token.dat"]:
+            candidate = os.path.join(s_dir, s_name)
+            if os.path.exists(candidate):
+                token_path = candidate
+                break
+        if token_path:
+            break
 
     sheet_logged = False
-    if telemetry_broker_url and os.path.exists(token_path):
+    if telemetry_broker_url and token_path and os.path.exists(token_path):
         try:
             from broker_client import load_token, report_storage_telemetry
             token = load_token(token_path)

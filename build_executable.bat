@@ -2,7 +2,7 @@
 setlocal enabledelayedexpansion
 
 echo ============================================================
-echo   ZERO-TRUST SECURE BUILD ENGINE (v4.0.0)
+echo   ZERO-TRUST SECURE BUILD ENGINE (v4.2.0)
 echo   Enterprise Database Cloud Backup Automation
 echo ============================================================
 echo.

@@ -47,7 +47,7 @@ graph TD
 ### 1. Client-Side Backup Application (`DatabaseBackupApp`)
 Runs on the customer's machine. It performs the following:
 - Compresses the target database directory.
-- Encrypts the archive using ChaCha20-Poly1305 (via `.dbk2` format).
+- Encrypts the archive using AES-256-GCM chunked stream encryption with dual RSA-4096 envelope keys (via `.dbk2` format).
 - Enrolls with the Apps Script Broker using an `enroll_code` to receive a time-staggered upload offset.
 - Requests a resumable upload URI from the Apps Script Broker.
 - Uploads the encrypted archive directly to Google Drive in 8MB chunks using the `Content-Range` header.

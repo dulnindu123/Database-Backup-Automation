@@ -57,36 +57,52 @@ def main():
         print("Fix slug list first. Invalid:", bad, "Duplicates:", sorted(dup)); sys.exit(1)
     print(f"{len(items)} customers to provision.\n")
 
-    while True:
-        url = input("Apps Script Broker URL (https://script.google.com/macros/s/.../exec): ").strip()
-        if URL_RE.match(url):
-            break
-        print("Invalid URL.")
+    import argparse
+    parser = argparse.ArgumentParser(description="Batch Customer Setup")
+    parser.add_argument("--url", help="Apps Script Broker URL")
+    parser.add_argument("--key", help="Admin Ed25519 private key path")
+    parser.add_argument("--passphrase", help="Shared customer recovery keys passphrase (14+ chars)")
+    args, _ = parser.parse_known_args()
 
-    key_path = input("Admin Ed25519 key path [C:\\admin_ed25519.pem]: ").strip() or "C:\\admin_ed25519.pem"
+    url = args.url
+    while not url or not URL_RE.match(url):
+        url = input("Apps Script Broker URL (https://script.google.com/macros/s/.../exec): ").strip()
+        if not URL_RE.match(url):
+            print("Invalid URL.")
+
+    default_key = os.path.join(BASE, "admin", "keys", "admin_ed25519_private.pem")
+    if not os.path.exists(default_key):
+        default_key = "C:\\admin_ed25519.pem"
+    key_path = args.key or default_key
+    if not args.key:
+        key_path = input(f"Admin Ed25519 key path [{default_key}]: ").strip() or default_key
     if not os.path.exists(key_path):
         if input("Not found. Create new admin key? (y/N): ").strip().lower() != "y":
             sys.exit(1)
         init_key(key_path, ask_pw("New Admin key passphrase"))
     while True:
         try:
-            admin_priv = load_private(key_path, getpass.getpass("Admin key passphrase: "))
+            try:
+                admin_priv = load_private(key_path, "")
+            except Exception:
+                admin_priv = load_private(key_path, getpass.getpass("Admin key passphrase: "))
             break
         except Exception as e:
             print("Failed to load:", e)
 
-    shared_pw = None
-    if input("Use ONE shared passphrase for all customers' keys? (y/N): ").strip().lower() == "y":
-        while True:
-            p = getpass.getpass("Shared passphrase: ")
-            if p != getpass.getpass("  Repeat: "):
-                print("  Do not match."); continue
-            if len(p) < 14:
-                print(f"  WARNING: only {len(p)} chars (14+ recommended). One leak exposes ALL customers.")
-                if input("  Use it anyway? (y/N): ").strip().lower() != "y":
-                    continue
-            shared_pw = p
-            break
+    shared_pw = args.passphrase
+    if not shared_pw:
+        if input("Use ONE shared passphrase for all customers' keys? (y/N): ").strip().lower() == "y":
+            while True:
+                p = getpass.getpass("Shared passphrase: ")
+                if p != getpass.getpass("  Repeat: "):
+                    print("  Do not match."); continue
+                if len(p) < 14:
+                    print(f"  WARNING: only {len(p)} chars (14+ recommended). One leak exposes ALL customers.")
+                    if input("  Use it anyway? (y/N): ").strip().lower() != "y":
+                        continue
+                shared_pw = p
+                break
 
     cust_dir = os.path.join(BASE, "customers")
     os.makedirs(cust_dir, exist_ok=True)

@@ -25,7 +25,12 @@ import hashlib
 import tempfile
 import threading
 import subprocess
-import pytest
+
+try:
+    import pytest
+except ImportError:
+    import unittest
+    raise unittest.SkipTest("pytest is not installed")
 
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization

@@ -1,7 +1,8 @@
 # Secure backup: setup and test guide
 
-Architecture: **PC app -> broker (Cloud Run) -> locked GCS bucket.** The PC holds no Google credentials.
-Its two secrets are a broker token (can only *request an upload slot*) and a *public* encryption key (can only *encrypt*).
+> [!NOTE]
+> **Production Architecture (v4.2.0)**: The live production system operates on the **Zero-Billing Google Apps Script Broker** (`apps_script_broker/Code.gs`), Google Drive, and Google Sheets. For active setup instructions, see [`README.md`](README.md), [`USER_GUIDE.md`](USER_GUIDE.md), and [`CODE_REVIEW.md`](CODE_REVIEW.md).
+
 
 ## What changed in your code
 | File | Change |

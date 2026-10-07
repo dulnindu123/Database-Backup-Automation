@@ -471,11 +471,9 @@ class InstallerApp(ctk.CTk):
             return
 
         if token and ':' in token:
-            pc_id, enroll_code = token.split(':', 1)
-            # In Apps Script model, we don't 'verify' an enrollment code without enrolling. 
-            # We'll just validate the format during preflight ping.
+            pc_id, _enroll_code = token.split(':', 1)
             self.lbl_broker_status.configure(
-                text=f"✓ Broker Reachable & Enrollment Code formatted for PC: {pc_id}",
+                text=f"✓ Broker Reachable. Ready to enroll PC: {pc_id}",
                 text_color="#34d399"
             )
         else:
@@ -484,7 +482,29 @@ class InstallerApp(ctk.CTk):
                 text_color="#34d399"
             )
 
+    def _reset_install_buttons(self):
+        self.btn_install.configure(state="normal", text="Install Now")
+        self.btn_cancel.configure(state="normal")
+        self.entry_dir.configure(state="normal")
+
     def _do_install(self):
+        if self.bundle_tampered:
+            messagebox.showerror(
+                "Tampered Package",
+                "This package failed Ed25519 signature verification.\n\n"
+                f"{self.bundle_error}\n\n"
+                "Do not install it. Request a new customer package from your administrator."
+            )
+            return
+        if not self.bundle_verified:
+            messagebox.showerror(
+                "Customer Package Required",
+                "bundle.json is missing or could not be verified.\n\n"
+                "Run Setup_DatabaseBackup.exe from the customer folder your administrator sent "
+                "(the folder that contains bundle.json), not from a generic installer copy."
+            )
+            return
+
         self.btn_install.configure(state="disabled", text="Installing...")
         self.btn_cancel.configure(state="disabled")
         self.entry_dir.configure(state="disabled")
@@ -594,22 +614,49 @@ class InstallerApp(ctk.CTk):
                 except Exception:
                     pass
 
+            enrolled_ok = False
+            kept_existing_token = False
+            existing_token = os.path.join(self.data_dir, "token.dpapi")
+            if not os.path.exists(existing_token):
+                existing_token = os.path.join(self.target_dir, "token.dpapi")
+            if is_upgrade and os.path.exists(os.path.join(temp_safety_dir, "token.dpapi")):
+                existing_token = os.path.join(temp_safety_dir, "token.dpapi")
+
             if tok_input:
                 from broker_client import enroll_pc
                 if ":" in tok_input:
                     self.status_lbl.configure(text="Enrolling PC with broker...")
+                    self.update()
                     pc_id, enroll_code = tok_input.split(":", 1)
                     b_url = self.broker_url_var.get().strip()
                     success, msg = enroll_pc(
-                        b_url, enroll_code, pc_id, self.customer_slug,
+                        b_url, enroll_code.strip(), pc_id.strip(), self.customer_slug,
                         os.path.join(self.target_dir, "token.dpapi"),
                         os.path.join(self.target_dir, "offset.json")
                     )
                     if success:
+                        enrolled_ok = True
                         shutil.copy2(os.path.join(self.target_dir, "token.dpapi"), os.path.join(self.data_dir, "token.dpapi"))
                         shutil.copy2(os.path.join(self.target_dir, "offset.json"), os.path.join(self.data_dir, "offset.json"))
                     else:
-                        messagebox.showerror("Enrollment Failed", f"Failed to enroll PC:\\n{msg}")
+                        already = "already enrolled" in str(msg).lower()
+                        if already and os.path.exists(existing_token):
+                            kept_existing_token = True
+                            shutil.copy2(existing_token, os.path.join(self.target_dir, "token.dpapi"))
+                            shutil.copy2(existing_token, os.path.join(self.data_dir, "token.dpapi"))
+                        else:
+                            messagebox.showerror(
+                                "Enrollment Failed",
+                                f"Failed to enroll this PC with the backup broker.\n\n{msg}\n\n"
+                                "If this PC was enrolled before, ask your administrator to remove "
+                                "its row from the Tokens sheet and retry.\n"
+                                "Confirm ENROLL_CODE in the Config tab is:\n"
+                                "  Column A = ENROLL_CODE\n"
+                                "  Column B = the secret code\n"
+                                "  Column C = the customer slug"
+                            )
+                            self._reset_install_buttons()
+                            return
                 elif "." in tok_input:
                     self.status_lbl.configure(text="Sealing machine token via native Windows DPAPI (Machine Scope 0x4)...")
                     try:
@@ -619,32 +666,30 @@ class InstallerApp(ctk.CTk):
                                 f.write(prot_bytes)
                             with open(os.path.join(self.data_dir, "token.dpapi"), "wb") as f:
                                 f.write(prot_bytes)
+                            enrolled_ok = True
                         if raw_token_found and os.path.exists(raw_token_found):
                             flen = os.path.getsize(raw_token_found)
                             with open(raw_token_found, "wb") as wf:
                                 wf.write(os.urandom(max(flen, 64)))
                             os.remove(raw_token_found)
                     except Exception as ex:
-                        print(f"Token DPAPI sealing failed: {ex}")
+                        messagebox.showerror("Token Seal Failed", str(ex))
+                        self._reset_install_buttons()
+                        return
 
-            # Check for existing token.dpapi in bundle
-            for s_base in [self.bundle_dir, self.source_app_dir]:
-                dp_src = os.path.join(s_base, "token.dpapi")
-                if os.path.exists(dp_src):
-                    shutil.copy2(dp_src, os.path.join(self.target_dir, "token.dpapi"))
-                    shutil.copy2(dp_src, os.path.join(self.data_dir, "token.dpapi"))
-                    break
-
-            # Restore existing config/tokens if upgrade
+            # Restore previous config/logs on upgrade. Keep a newly enrolled token.
             if is_upgrade and os.path.exists(temp_safety_dir):
-                for save_file in ["config.json", "token.dpapi", "backup_public.pem", "escrow_public.pem", "backup_log.txt"]:
+                restore_files = ["config.json", "backup_log.txt"]
+                if not enrolled_ok:
+                    restore_files.append("token.dpapi")
+                for save_file in restore_files:
                     backed_f = os.path.join(temp_safety_dir, save_file)
                     if os.path.exists(backed_f):
                         shutil.copy2(backed_f, os.path.join(self.target_dir, save_file))
                         shutil.copy2(backed_f, os.path.join(self.data_dir, save_file))
                 shutil.rmtree(temp_safety_dir, ignore_errors=True)
 
-            # 2. Update config.json with verified Broker URL (Requirement A & G: PERF_QUERY removed)
+            # 2. Update config.json with verified Broker URL and customer slug
             self.status_lbl.configure(text="Configuring settings and module tabs...")
             b_url = self.broker_url_var.get().strip()
             cfg_paths = [os.path.join(self.target_dir, "config.json"), os.path.join(self.data_dir, "config.json")]
@@ -659,6 +704,10 @@ class InstallerApp(ctk.CTk):
                         cfg = {}
                 if b_url:
                     cfg["BROKER_URL"] = b_url
+                    cfg["TELEMETRY_BROKER_URL"] = b_url
+                if self.customer_slug:
+                    cfg["CUSTOMER_SLUG"] = self.customer_slug
+                cfg["BROKER_TOKEN_FILE"] = "token.dpapi"
                 cfg["SHEET_TABS"] = {
                     "BACKUP": "Backup Automation",
                     "CLEANUP": "Server Cleanup"
@@ -693,9 +742,15 @@ class InstallerApp(ctk.CTk):
                 )
                 subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd2], capture_output=True)
 
-            # 4. Register Task Scheduler with real target exe path (Round 9 Requirement 3: Single Constant)
+            # 4. Register Task Scheduler (list argv: do not wrap extra quotes around /tr)
             if self.cb_schedule.get():
-                sched_args = ["schtasks.exe", "/create", "/tn", DEFAULT_TASK_NAME, "/tr", f'"{target_exe}" --auto', "/sc", "weekly", "/d", "MON", "/st", "02:00", "/f"]
+                sched_args = [
+                    "schtasks.exe", "/create",
+                    "/tn", DEFAULT_TASK_NAME,
+                    "/tr", f'"{target_exe}" --auto',
+                    "/sc", "weekly", "/d", "MON", "/st", "02:00",
+                    "/rl", "HIGHEST", "/f",
+                ]
                 subprocess.run(sched_args, capture_output=True)
 
             # 5. Register in Windows Registry

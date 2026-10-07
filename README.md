@@ -12,9 +12,11 @@
     <img src="https://img.shields.io/badge/Platform-Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white">
   </p>
   <h3>Autonomous, Zero-Knowledge Cloud Disaster Recovery for SQL Server, MySQL & PostgreSQL</h3>
+  <p><b>👉 For Reviewers:</b> Please refer to the <a href="CODE_REVIEW.md"><b>Senior Engineer Code Review Guide</b></a> for detailed architectural invariants, threat models, and verification steps.</p>
 </div>
 
 ---
+
 
 ## 📌 What Is This?
 
@@ -116,6 +118,8 @@ The `.dbk2` binary archive structure:
 ```
 BackupAutomation/
 │
+├── CODE_REVIEW.md                ← Senior Engineer Review Guide (Architecture & Invariants)
+│
 ├── apps_script_broker/
 │   ├── Code.gs                   ← Serverless broker (paste into Apps Script)
 │   ├── appsscript.json           ← OAuth scopes manifest
@@ -131,6 +135,16 @@ BackupAutomation/
 ├── admin/
 │   └── sign_bundle.py            ← Ed25519 bundle signer (admin workstation only)
 │
+├── tests/                        ← 73 automated unit & integration tests
+│   ├── test_full_e2e_flow.py     ← Full lifecycle E2E test with local mock broker
+│   ├── test_failure_matrix.py    ← Negative test matrix & error code contracts
+│   ├── test_customer_onboarding.py ← Bundle signing & customer package tests
+│   ├── test_broker_client.py     ← Broker protocol & 302 redirect verification
+│   ├── test_crypto.py            ← AES-256-GCM + dual RSA-4096 streaming tests
+│   ├── test_dpapi_interop.py     ← Windows DPAPI cryptoprotect vault tests
+│   ├── test_log_scan.py          ← Token redaction & log secret scanner
+│   └── test_stray_files_and_allowlist.py ← Package file allowlist & config tests
+│
 ├── app_gui.py                    ← Desktop GUI (Tkinter, dark theme)
 ├── auto_backup.py                ← CLI entrypoint & scheduled task router
 ├── backup_core.py                ← Backup orchestrator, storage monitor, pre-flight checks
@@ -138,14 +152,15 @@ BackupAutomation/
 ├── crypto_stream.py              ← AES-256-GCM + RSA-4096 dual-envelope encryption engine
 ├── installer_gui.py              ← Zero-typing setup wizard (PyInstaller compiled)
 ├── preflight.py                  ← System pre-flight health check module
+├── dev_broker.py                 ← Zero-dependency mock broker for unit testing
 ├── version.py                    ← Version constants
 │
 ├── build_executable.bat          ← Full production build script (PyInstaller + audit)
 ├── audit_build.py                ← Zero-trust secret scanner run before every build
-├── release.py                    ← Full release pipeline (compile, package, push)
+├── release.py                    ← Full release pipeline (compile, package, push, SHA-256)
 │
 ├── requirements.txt              ← Python dependencies
-├── README.md                     ← This file
+├── README.md                     ← Main project documentation
 ├── USER_GUIDE.md                 ← Operational runbook for daily use & disaster recovery
 └── READ_ME_FIRST.txt             ← Quick-start card for customers
 ```
@@ -238,16 +253,40 @@ The tool authenticates the GCM tag, decrypts the archive, and writes the restore
 
 ---
 
+## 🧪 Automated Test Suite & Verification
+
+The repository contains an enterprise test suite (73 automated unit & integration tests) validating cryptographic operations, network protocol compliance, Windows DPAPI interop, error code contracts, and build-time secret scanning.
+
+### Running All Tests:
+```powershell
+python -m unittest discover tests
+```
+*Expected output:*
+```text
+Ran 73 tests in ~14s — OK (0 failures, 0 errors)
+```
+
+### Key Test Coverage:
+- **Zero-Trust Cryptography (`test_crypto.py`)**: Validates AES-256-GCM chunked streaming, dual RSA-4096 envelope wrapping, and tamper detection via 128-bit MAC tags.
+- **End-to-End Simulation (`test_full_e2e_flow.py`)**: Runs complete lifecycle against local `dev_broker.py` (enrollment, token verification, upload, and decryption).
+- **Negative Testing & Error Codes (`test_failure_matrix.py`)**: Enforces deterministic preflight failure codes (`ERR_NOT_APPS_SCRIPT`, `ERR_HEALTH_EXCEPTION`, `ERR_TOKEN_FILE_ABSENT`, `ERR_DPAPI_EMPTY`, `ERR_PRIMARY_KEY_TOO_SHORT`, `ERR_KEYS_NOT_DISTINCT`, `ERR_SQL_CONN_FAILED`, `ERR_CLOUD_SYNC_DETECTED`, `ERR_ACL_DENIED`).
+- **Windows DPAPI Vault (`test_dpapi_interop.py`)**: Verifies hardware-bound token protection with `CRYPTPROTECT_UI_FORBIDDEN`.
+- **Log Secret Redaction (`test_log_scan.py`)**: Scans all logs and streams to guarantee zero bearer tokens or secrets leak into output.
+- **Zero Stray Configs (`test_stray_files_and_allowlist.py`)**: Validates that master templates are strictly unpopulated and only allowlisted files exist in distribution packages.
+
+---
+
 ## 🔧 Build From Source
 
-Requirements: Python 3.10+, PyInstaller, `cryptography`, `requests`, `psutil`
+Requirements: Python 3.10+, PyInstaller 6.0+, `cryptography`, `requests`, `customtkinter`, `pillow`, `pywin32`
 
 ```bash
 pip install -r requirements.txt
 
-# Full production build (compiles EXE + audits for secrets)
-build_executable.bat
+# Full production build (compiles EXE + audits for secrets + syncs package)
+python release.py
 ```
+
 
 Output: `dist/Setup_DatabaseBackup.exe` and `dist/DatabaseBackupApp/`
 

@@ -56,9 +56,11 @@ def init_key(path, passphrase):
     return pub.decode()
 
 
-def load_private(path, passphrase):
+def load_private(path, passphrase=""):
     with open(path, "rb") as f:
-        return serialization.load_pem_private_key(f.read(), password=passphrase.encode())
+        data = f.read()
+    pwd = passphrase.encode() if passphrase else None
+    return serialization.load_pem_private_key(data, password=pwd)
 
 
 def spki_fingerprint(pem):
