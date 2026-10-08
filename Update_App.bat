@@ -1,22 +1,31 @@
 @echo off
 setlocal enabledelayedexpansion
 
-title Enterprise Database Cloud Backup - Zero-Trust In-Place Updater v4.1.0
+:: Check for Administrator privileges; auto-elevate if needed
+net session >nul 2>&1
+if %errorLevel% neq 0 (
+    echo [ELEVATION] Requesting Administrator Privileges...
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+    exit /b
+)
+
+title Enterprise Database Cloud Backup - Zero-Trust In-Place Updater v4.2.0
 color 0b
 
 echo ============================================================
 echo   ENTERPRISE DATABASE CLOUD BACKUP
-echo   Zero-Trust In-Place Application Updater — v4.1.0
+echo   Zero-Trust In-Place Application Updater — v4.2.0
 echo ============================================================
 echo.
 echo This tool safely updates Database Cloud Backup on client
 echo servers and workstations to the Zero-Trust Architecture.
 echo.
-echo ARCHITECTURE CHANGES IN v4.1.0:
+echo ARCHITECTURE ENHANCEMENTS IN v4.2.0:
+echo   - Performance Query & Re-Indexing Maintenance module (Tab 6).
 echo   - Zero Google Credentials: All client Google keys removed.
 echo   - Hybrid DBK2 Encryption: AES-256-GCM + RSA-4096 dual key wrap (64 KiB chunks).
-echo   - Upload Broker: Presigned resumable upload sessions to retention-locked bucket.
-echo   - Telemetry Broker: Storage health reports logged via isolated microservice.
+echo   - Upload Broker: Resumable upload sessions to retention-locked bucket.
+echo   - Telemetry Broker: Multi-module monitoring logged via broker.
 echo   - ACL Hardening: Application folder locked to Admin Write / User Read.
 echo   - Standard Token: Machine-scoped DPAPI token stored as token.dpapi.
 echo.
@@ -115,6 +124,10 @@ if exist "!TARGET_DIR!\escrow_public.pem" (
     copy /y "!TARGET_DIR!\escrow_public.pem" "%TEMP_BACKUP%\escrow_public.pem" >nul 2>&1
     echo       - Saved escrow_public.pem
 )
+if exist "!TARGET_DIR!\bundle.json" (
+    copy /y "!TARGET_DIR!\bundle.json" "%TEMP_BACKUP%\bundle.json" >nul 2>&1
+    echo       - Saved bundle.json
+)
 if exist "!TARGET_DIR!\backup_log.txt" (
     copy /y "!TARGET_DIR!\backup_log.txt" "%TEMP_BACKUP%\backup_log.txt" >nul 2>&1
     echo       - Saved backup_log.txt
@@ -154,6 +167,7 @@ if exist "%TEMP_BACKUP%\config.json" copy /y "%TEMP_BACKUP%\config.json" "!TARGE
 if exist "%TEMP_BACKUP%\token.dpapi" copy /y "%TEMP_BACKUP%\token.dpapi" "!TARGET_DIR!\token.dpapi" >nul 2>&1
 if exist "%TEMP_BACKUP%\backup_public.pem" copy /y "%TEMP_BACKUP%\backup_public.pem" "!TARGET_DIR!\backup_public.pem" >nul 2>&1
 if exist "%TEMP_BACKUP%\escrow_public.pem" copy /y "%TEMP_BACKUP%\escrow_public.pem" "!TARGET_DIR!\escrow_public.pem" >nul 2>&1
+if exist "%TEMP_BACKUP%\bundle.json" copy /y "%TEMP_BACKUP%\bundle.json" "!TARGET_DIR!\bundle.json" >nul 2>&1
 if exist "%TEMP_BACKUP%\backup_log.txt" copy /y "%TEMP_BACKUP%\backup_log.txt" "!TARGET_DIR!\backup_log.txt" >nul 2>&1
 rmdir /s /q "%TEMP_BACKUP%" >nul 2>&1
 echo       Customer settings and tokens restored.
@@ -173,26 +187,23 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
     "  Write-Host '       config.json sanitized successfully.' " ^
     "}"
 
-:: Check for signed manifest.json to update broker endpoints if provided
-set "MANIFEST_FILE=%~dp0manifest.json"
-if exist "!MANIFEST_FILE!" (
+:: Check for signed bundle.json to update broker endpoints if provided
+set "BUNDLE_FILE=%~dp0bundle.json"
+if not exist "!BUNDLE_FILE!" set "BUNDLE_FILE=%SOURCE_DIR%\bundle.json"
+if exist "!BUNDLE_FILE!" (
+    copy /y "!BUNDLE_FILE!" "!TARGET_DIR!\bundle.json" >nul 2>&1
     powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
+        "$bPath = '!BUNDLE_FILE!'; $cfgPath = '!TARGET_DIR!\config.json'; " ^
         "try { " ^
-        "  $m = Get-Content -Raw -Path '!MANIFEST_FILE!' -Encoding UTF8 | ConvertFrom-Json; " ^
-        "  $cfgPath = '!TARGET_DIR!\config.json'; " ^
-        "  if (Test-Path $cfgPath) { " ^
-        "    $cfg = Get-Content -Raw -Path $cfgPath -Encoding UTF8 | ConvertFrom-Json; " ^
-        "    if ($m.broker_url -and -not $cfg.BROKER_URL) { $cfg | Add-Member -NotePropertyName 'BROKER_URL' -NotePropertyValue $m.broker_url -Force; } " ^
-        "    if ($m.customer_slug -and -not $cfg.CUSTOMER_SLUG) { $cfg | Add-Member -NotePropertyName 'CUSTOMER_SLUG' -NotePropertyValue $m.customer_slug -Force; } " ^
-        "    if ($m.telemetry_url -and -not $cfg.TELEMETRY_BROKER_URL) { $cfg | Add-Member -NotePropertyName 'TELEMETRY_BROKER_URL' -NotePropertyValue $m.telemetry_url -Force; } " ^
+        "  if (Test-Path $bPath -and Test-Path $cfgPath) { " ^
+        "    $raw = Get-Content $bPath -Raw -Encoding UTF8 | ConvertFrom-Json; " ^
+        "    $jsonStr = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($raw.BUNDLE_B64)); " ^
+        "    $bData = $jsonStr | ConvertFrom-Json; " ^
+        "    $cfg = Get-Content $cfgPath -Raw -Encoding UTF8 | ConvertFrom-Json; " ^
+        "    if ($bData.broker_url -and (-not $cfg.BROKER_URL)) { $cfg | Add-Member -NotePropertyName 'BROKER_URL' -NotePropertyValue $bData.broker_url -Force; } " ^
+        "    if ($bData.customer -and (-not $cfg.CUSTOMER_SLUG)) { $cfg | Add-Member -NotePropertyName 'CUSTOMER_SLUG' -NotePropertyValue $bData.customer -Force; } " ^
         "    $cfg | ConvertTo-Json -Depth 10 | Set-Content -Path $cfgPath -Encoding UTF8; " ^
-        "  } " ^
-        "  if ($m.initial_token -and -not (Test-Path '!TARGET_DIR!\token.dpapi')) { " ^
-        "    Add-Type -AssemblyName System.Security; " ^
-        "    $bytes = [System.Text.Encoding]::UTF8.GetBytes($m.initial_token.Trim()); " ^
-        "    $protected = [System.Security.Cryptography.ProtectedData]::Protect($bytes, $null, [System.Security.Cryptography.DataProtectionScope]::LocalMachine); " ^
-        "    [System.IO.File]::WriteAllBytes('!TARGET_DIR!\token.dpapi', $protected); " ^
-        "    Write-Host '       [OK] Configured token from signed manifest into DPAPI.' -ForegroundColor Green; " ^
+        "    Write-Host '       [OK] Configured broker endpoints from signed bundle.json' -ForegroundColor Green; " ^
         "  } " ^
         "} catch {}"
 )
@@ -204,13 +215,13 @@ icacls.exe "!TARGET_DIR!" /grant:r Administrators:(OI)(CI)F /grant:r Users:(OI)(
 if exist "!TARGET_DIR!\token.dpapi" (
     icacls.exe "!TARGET_DIR!\token.dpapi" /inheritance:r /grant:r Administrators:F SYSTEM:F Users:R >nul 2>&1
 )
-reg.exe add "HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\DatabaseBackupApp" /v "DisplayVersion" /d "4.1.0" /t REG_SZ /f >nul 2>&1
+reg.exe add "HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\DatabaseBackupApp" /v "DisplayVersion" /d "4.2.0" /t REG_SZ /f >nul 2>&1
 
 echo.
 echo ============================================================
 echo   ZERO-TRUST APPLICATION UPDATE COMPLETED SUCCESSFULLY!
 echo ============================================================
-echo Database Cloud Backup upgraded to Version 4.1.0.
+echo Database Cloud Backup upgraded to Version 4.2.0.
 echo All operations configured for Zero-Trust architecture.
 echo.
 
