@@ -190,7 +190,7 @@ def sync_to_client_package(build_info: dict):
 
     # 5. Sync batch scripts, docs, and shell_client (NO ADMIN TOOLS IN CLIENT PACKAGE)
     print("[SYNC] Copying root scripts and documentation...")
-    for file in ['Update_App.bat', 'Uninstall.bat', 'READ_ME_FIRST.txt', 'README.md', 'CLIENT_INSTALLATION_GUIDE.md']:
+    for file in ['Update_App.bat', 'Uninstall.bat', 'READ_ME_FIRST.txt', 'README.md', 'CLIENT_INSTALLATION_GUIDE.md', 'CLIENT_INSTALLATION_AND_OPERATIONS_GUIDE.docx']:
         if os.path.exists(file):
             shutil.copy2(file, os.path.join(PKG_DIR, file))
 

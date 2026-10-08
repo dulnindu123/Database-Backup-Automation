@@ -3,6 +3,8 @@
 
 This guide is designed for **customer system administrators, IT support technicians, and server engineers** deploying the **Enterprise Database Cloud Backup & Maintenance Suite** on a customer Windows Server or SQL host.
 
+> **Official Word Document Format**: A formatted, corporate-styled Microsoft Word edition of this manual is included in this package as [`CLIENT_INSTALLATION_AND_OPERATIONS_GUIDE.docx`](file:///c:/Users/dulni/OneDrive/Documents/Desktop/idea/Client_Installation_Package/CLIENT_INSTALLATION_AND_OPERATIONS_GUIDE.docx).
+
 ---
 
 ## 🎯 Overview & Security Highlights

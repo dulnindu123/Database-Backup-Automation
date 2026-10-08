@@ -20,6 +20,7 @@ ALLOWED_PACKAGE_ROOT_FILES = {
     "READ_ME_FIRST.txt",
     "README.md",
     "CLIENT_INSTALLATION_GUIDE.md",
+    "CLIENT_INSTALLATION_AND_OPERATIONS_GUIDE.docx",
     "app_icon.ico",
     "app_icon.png",
     "sha256_manifest.json",
