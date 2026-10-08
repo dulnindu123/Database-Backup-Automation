@@ -197,6 +197,11 @@ def sync_to_client_package(build_info: dict):
     if os.path.exists('Uninstall.bat'):
         shutil.copy2('Uninstall.bat', os.path.join(app_files_dir, 'Uninstall.bat'))
         print("[SYNC] Synchronized Uninstall.bat into AppFiles.")
+
+    for f in ['config.json', 'backup_public.pem', 'escrow_public.pem']:
+        if os.path.exists(f):
+            shutil.copy2(f, os.path.join(app_files_dir, f))
+            print(f"[SYNC] Synchronized {f} into AppFiles.")
     
     # Strictly remove Tools folder from Client Package if present
     dst_tools = os.path.join(PKG_DIR, 'Tools')
