@@ -25,6 +25,9 @@ ALLOWED_PACKAGE_ROOT_FILES = {
     "app_icon.png",
     "sha256_manifest.json",
     "build_info.json",
+    "bundle.json",
+    "backup_public.pem",
+    "escrow_public.pem",
 }
 
 ALLOWED_PACKAGE_ROOT_DIRS = {
@@ -40,6 +43,7 @@ ALLOWED_APPFILES_FILES = {
     "config.json",
     "build_info.json",
     "sha256_manifest.json",
+    "bundle.json",
 }
 
 ALLOWED_APPFILES_DIRS = {
