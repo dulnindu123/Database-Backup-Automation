@@ -42,7 +42,15 @@ param(
 Add-Type -AssemblyName System.Security
 
 $configFile = Join-Path $ConfigDir "config.json"
+if (-not (Test-Path $configFile)) {
+    $fallbackCfg = Join-Path $PSScriptRoot "config.json"
+    if (Test-Path $fallbackCfg) { $configFile = $fallbackCfg }
+}
 $tokenFile  = Join-Path $ConfigDir "token.dpapi"
+if (-not (Test-Path $tokenFile)) {
+    $fallbackToken = Join-Path $PSScriptRoot "token.dpapi"
+    if (Test-Path $fallbackToken) { $tokenFile = $fallbackToken }
+}
 $logFile    = Join-Path $ConfigDir "backup_log.txt"
 
 # ------------------------------------------------------------------------------

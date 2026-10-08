@@ -117,6 +117,25 @@ if (Test-Path $BundlePath) {
     } catch {
         Write-Warning "[-] Could not parse bundle.json: $_"
     }
+} else {
+    $localCfgPath = Join-Path $PSScriptRoot "config.json"
+    if (Test-Path $localCfgPath) {
+        try {
+            $localCfg = Get-Content $localCfgPath -Raw | ConvertFrom-Json
+            if ($localCfg.BROKER_URL) { $brokerUrl = $localCfg.BROKER_URL.Trim() }
+            if ($localCfg.CUSTOMER_SLUG) { $customerSlug = $localCfg.CUSTOMER_SLUG.Trim().ToLower() }
+            if ($localCfg.ENROLL_CODE) { $enrollCode = $localCfg.ENROLL_CODE.Trim() }
+            if ($localCfg.DATABASE_NAME -and -not $DatabaseName) { $DatabaseName = $localCfg.DATABASE_NAME }
+            if ($localCfg.DATABASE_ENGINE -and ($DatabaseEngine -eq "MSSQL")) { $DatabaseEngine = $localCfg.DATABASE_ENGINE }
+            if ($localCfg.SQL_SERVER_INSTANCE -and ($ServerInstance -eq "localhost")) { $ServerInstance = $localCfg.SQL_SERVER_INSTANCE }
+            if ($localCfg.BACKUP_FOLDER -and ($BackupFolder -eq "C:\Backups\Staging")) { $BackupFolder = $localCfg.BACKUP_FOLDER }
+            if ($localCfg.PERFORMANCE_SCHEDULE_DAY -and ($PerformanceScheduleDay -eq "Sunday")) { $PerformanceScheduleDay = $localCfg.PERFORMANCE_SCHEDULE_DAY }
+            if ($localCfg.PERFORMANCE_SCHEDULE_TIME -and ($PerformanceScheduleTime -eq "03:30")) { $PerformanceScheduleTime = $localCfg.PERFORMANCE_SCHEDULE_TIME }
+            Write-Host "[+] Loaded initial parameters from local config.json" -ForegroundColor Green
+        } catch {
+            Write-Warning "[-] Could not parse local config.json: $_"
+        }
+    }
 }
 
 if (-not $brokerUrl) {
