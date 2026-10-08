@@ -35,8 +35,14 @@ function Write-Log {
     try { Add-Content -Path $logFile -Value $logLine -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
 }
 
-if (-not (Test-Path $configFile) -or -not (Test-Path $tokenFile)) {
-    exit 0
+if (-not (Test-Path $configFile)) {
+    Write-Host "[-] Configuration file missing: $configFile" -ForegroundColor Red
+    exit 1
+}
+if (-not (Test-Path $tokenFile)) {
+    Write-Host "[-] DPAPI Machine Token missing: $tokenFile" -ForegroundColor Yellow
+    Write-Host "[-] You must run 'powershell.exe -ExecutionPolicy Bypass -File .\install_agent.ps1' first to enroll this computer with Google Sheets!" -ForegroundColor Cyan
+    exit 1
 }
 
 $config = Get-Content $configFile -Raw | ConvertFrom-Json
