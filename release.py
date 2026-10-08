@@ -198,10 +198,13 @@ def sync_to_client_package(build_info: dict):
         shutil.copy2('Uninstall.bat', os.path.join(app_files_dir, 'Uninstall.bat'))
         print("[SYNC] Synchronized Uninstall.bat into AppFiles.")
 
-    for f in ['config.json', 'backup_public.pem', 'escrow_public.pem']:
+    for f in ['config.json', 'backup_public.pem', 'escrow_public.pem', 'bundle.json']:
         if os.path.exists(f):
             shutil.copy2(f, os.path.join(app_files_dir, f))
             print(f"[SYNC] Synchronized {f} into AppFiles.")
+    if os.path.exists('bundle.json'):
+        shutil.copy2('bundle.json', os.path.join(PKG_DIR, 'bundle.json'))
+        print("[SYNC] Synchronized bundle.json into package root.")
     
     # Strictly remove Tools folder from Client Package if present
     dst_tools = os.path.join(PKG_DIR, 'Tools')

@@ -72,7 +72,9 @@ from backup_core import (
     run_full_backup,
     emit_log,
     # Section 9: Server Clean Up
-    run_storage_monitor
+    run_storage_monitor,
+    # Module 3: Performance Query & Maintenance
+    run_performance_query
 )
 
 
@@ -243,6 +245,43 @@ def run_storage_scan_mode():
     sys.exit(0 if success else 1)
 
 
+def run_performance_mode():
+    """
+    Standalone headless database performance maintenance & re-indexing mode.
+    Can be invoked by Windows Task Scheduler (e.g. weekly maintenance) or CLI.
+    Runs index fragmentation analysis, safety backup, DBCC CHECKDB, DBCC DBREINDEX, sp_updatestats,
+    and telemetry reporting to Google Sheets.
+    """
+    emit_log("=" * 60)
+    emit_log("DATABASE PERFORMANCE MAINTENANCE: --performance / --reindex flag detected")
+    emit_log("=" * 60)
+
+    config = load_config()
+    target_dbs = config.get("TARGET_DATABASES", [])
+    if not target_dbs and config.get("DATABASE_NAME"):
+        target_dbs = [config.get("DATABASE_NAME")]
+    if not target_dbs:
+        target_dbs = ["TheDatabase"]
+
+    overall_success = True
+    for db in target_dbs:
+        emit_log(f"Starting performance maintenance suite for [{db}]...")
+        res = run_performance_query(
+            config=config,
+            target_db=db,
+            mode="Scheduled",
+            skip_backup=False,
+            fill_factor=80
+        )
+        if not res.get("success", False):
+            overall_success = False
+            emit_log(f"Performance maintenance finished with warnings/errors for [{db}]: {res.get('summary')}", "warning")
+        else:
+            emit_log(f"Performance maintenance succeeded for [{db}]: {res.get('summary')}", "info")
+
+    sys.exit(0 if overall_success else 1)
+
+
 def main():
     """
     Primary application entrypoint.
@@ -260,7 +299,11 @@ def main():
     elif "--storage-scan" in sys.argv:
         run_storage_scan_mode()
 
-    # Route 4: Command-line terminal execution
+    # Route 4: Standalone performance query & re-indexing maintenance
+    elif "--performance" in sys.argv or "--reindex" in sys.argv:
+        run_performance_mode()
+
+    # Route 5: Command-line terminal execution
     elif "--manual-cli" in sys.argv or "--cli" in sys.argv:
         run_manual_cli()
 

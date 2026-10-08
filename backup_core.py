@@ -2589,3 +2589,321 @@ def run_storage_monitor(config=None, log_cb=None, status_cb=None):
 
     return (len(critical) == 0), summary, drives, critical
 
+
+# =============================================================================
+# MODULE 3: DATABASE PERFORMANCE QUERY & RE-INDEXING MAINTENANCE
+# =============================================================================
+
+def find_sqlcmd():
+    """Locates sqlcmd executable across PATH and standard SQL Server paths."""
+    import shutil
+    p = shutil.which("sqlcmd.exe") or shutil.which("sqlcmd")
+    if p:
+        return p
+    candidates = [
+        r"C:\Program Files\Microsoft SQL Server\Client SDK\ODBC\180\Tools\Binn\SQLCMD.EXE",
+        r"C:\Program Files\Microsoft SQL Server\Client SDK\ODBC\170\Tools\Binn\SQLCMD.EXE",
+        r"C:\Program Files\Microsoft SQL Server\Client SDK\ODBC\130\Tools\Binn\SQLCMD.EXE",
+        r"C:\Program Files\Microsoft SQL Server\160\Tools\Binn\SQLCMD.EXE",
+        r"C:\Program Files\Microsoft SQL Server\150\Tools\Binn\SQLCMD.EXE",
+        r"C:\Program Files\Microsoft SQL Server\140\Tools\Binn\SQLCMD.EXE",
+        r"C:\Program Files\Microsoft SQL Server\130\Tools\Binn\SQLCMD.EXE",
+        r"C:\Program Files (x86)\Microsoft SQL Server\Client SDK\ODBC\170\Tools\Binn\SQLCMD.EXE",
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return None
+
+
+def execute_sql_query(sql_query, instance="localhost", timeout=600):
+    """Executes a T-SQL query via sqlcmd.exe and returns (exit_code, output_text)."""
+    sqlcmd = find_sqlcmd()
+    if not sqlcmd:
+        return 1, "sqlcmd.exe not found on system PATH or SQL installation directories."
+    cmd = [sqlcmd, "-S", instance, "-E", "-Q", sql_query, "-h", "-1", "-W", "-C"]
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        out = (res.stdout or res.stderr or "").strip()
+        return res.returncode, out
+    except subprocess.TimeoutExpired:
+        return 1, f"SQL Query timed out after {timeout} seconds."
+    except Exception as e:
+        return 1, f"Failed to execute SQL query: {e}"
+
+
+def inspect_index_fragmentation(target_db, instance="localhost", log_cb=None):
+    """
+    Query 1: Inspects index fragmentation across tables using sys.dm_db_index_physical_stats.
+    Returns: (list_of_dict, max_fragmentation_percent)
+    """
+    query = f"""
+SET NOCOUNT ON;
+USE [{target_db}];
+SELECT 
+    TableName = object_name(dm.object_id),
+    IndexName = i.name,
+    IndexType = dm.index_type_desc,
+    [%Fragmented] = CAST(avg_fragmentation_in_percent AS DECIMAL(5,2))
+FROM sys.dm_db_index_physical_stats(db_id(), null, null, null, 'sampled') dm
+JOIN sys.indexes i ON dm.object_id = dm.object_id AND dm.index_id = i.index_id
+WHERE avg_fragmentation_in_percent > 10.0
+ORDER BY avg_fragmentation_in_percent DESC;
+"""
+    code, out = execute_sql_query(query, instance=instance, timeout=300)
+    tables = []
+    max_frag = 0.0
+
+    if code == 0 and out:
+        lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
+        for ln in lines:
+            parts = re.split(r'\s{2,}|\t+', ln)
+            if len(parts) >= 4:
+                try:
+                    frag_val = float(parts[3])
+                except Exception:
+                    frag_val = 0.0
+                if frag_val > max_frag:
+                    max_frag = frag_val
+                tables.append({
+                    "table": parts[0],
+                    "index": parts[1],
+                    "type": parts[2],
+                    "fragmentation": frag_val
+                })
+            else:
+                tokens = ln.split()
+                if len(tokens) >= 2:
+                    try:
+                        frag_val = float(tokens[-1])
+                        if frag_val > max_frag:
+                            max_frag = frag_val
+                        tables.append({
+                            "table": tokens[0],
+                            "index": tokens[1] if len(tokens) > 2 else "IDX",
+                            "type": "INDEX",
+                            "fragmentation": frag_val
+                        })
+                    except Exception:
+                        pass
+    return tables, max_frag
+
+
+def run_performance_query(
+    config=None,
+    target_db=None,
+    instance=None,
+    mode="Manual",
+    skip_backup=False,
+    fill_factor=80,
+    inspect_only=False,
+    log_cb=None,
+    status_cb=None,
+    progress_cb=None
+):
+    """
+    Module 3: Database Performance, Integrity & Re-indexing Suite.
+    Executes:
+    1. SQL Server Version & Database Size measurement
+    2. Query 1: Index Fragmentation analysis
+    3. Pre-maintenance safety backup
+    4. Query 2: DBCC CHECKDB, DBCC DBREINDEX (FillFactor 80), sp_updatestats
+    5. Post-maintenance verification
+    6. Streams telemetry to Upload Broker -> Customer Sheet [Performance Query] tab
+    """
+    import time
+    from datetime import datetime as dt
+
+    if not config:
+        config = load_config()
+
+    target_db = target_db or config.get("DATABASE_NAME") or "master"
+    instance = instance or config.get("SQL_SERVER_INSTANCE") or config.get("SQL_SERVER_NAME") or "localhost"
+
+    start_time = dt.now()
+    now_str = start_time.strftime("%Y-%m-%d %H:%M:%S")
+
+    emit_log("=" * 60, "info", log_cb)
+    emit_log("STARTING DATABASE PERFORMANCE & RE-INDEXING SUITE", "info", log_cb)
+    emit_log(f"Target Database: {target_db} | Instance: {instance} | Mode: {mode}", "info", log_cb)
+    emit_log(f"Task Start Time: {now_str}", "info", log_cb)
+    emit_log("=" * 60, "info", log_cb)
+
+    if progress_cb: progress_cb(0.1)
+    if status_cb: status_cb("Probing SQL Server metadata and size...")
+
+    # Step 1: Probe Version & Size
+    meta_sql = f"""
+SET NOCOUNT ON;
+SELECT 
+    CAST(SERVERPROPERTY('ProductVersion') AS VARCHAR(30)) + ' (' + CAST(SERVERPROPERTY('Edition') AS VARCHAR(40)) + ')' AS Version,
+    ISNULL((SELECT SUM(size)*8/1024 FROM sys.master_files WHERE database_id = DB_ID('{target_db}')), 0) AS SizeMB;
+"""
+    code, meta_out = execute_sql_query(meta_sql, instance=instance)
+    sql_version = "Microsoft SQL Server"
+    db_size_mb = 0
+    if code == 0 and meta_out:
+        lines = [ln.strip() for ln in meta_out.splitlines() if ln.strip()]
+        if lines:
+            parts = re.split(r'\s{2,}|\t+', lines[0])
+            if len(parts) >= 1: sql_version = parts[0]
+            if len(parts) >= 2:
+                try: db_size_mb = int(parts[1])
+                except Exception: pass
+    emit_log(f"SQL Server Version: {sql_version} | DB Size: {db_size_mb} MB", "info", log_cb)
+
+    if progress_cb: progress_cb(0.25)
+    if status_cb: status_cb("Executing Query 1: Index Fragmentation Analysis...")
+
+    # Step 2: Query 1 (Index Fragmentation)
+    tables_before, frag_before_max = inspect_index_fragmentation(target_db, instance=instance, log_cb=log_cb)
+    frag_before_count = len(tables_before)
+    emit_log(f"Query 1: {frag_before_count} indexes fragmented (>10%). Max: {frag_before_max}%", "info", log_cb)
+
+    if inspect_only:
+        if progress_cb: progress_cb(1.0)
+        if status_cb: status_cb("Fragmentation analysis complete")
+        return {
+            "success": True,
+            "target_db": target_db,
+            "instance": instance,
+            "sql_version": sql_version,
+            "db_size_mb": db_size_mb,
+            "frag_before_max": frag_before_max,
+            "frag_before_count": frag_before_count,
+            "tables_before": tables_before,
+            "inspect_only": True,
+            "summary": f"Inspected {frag_before_count} fragmented indexes. Max: {frag_before_max}%"
+        }
+
+    # Step 3: Safety Pre-Maintenance Backup
+    pre_backup_status = "Skipped"
+    if not skip_backup:
+        if progress_cb: progress_cb(0.4)
+        if status_cb: status_cb("Executing Pre-Maintenance Safety Backup...")
+        emit_log("Running pre-maintenance safety backup...", "info", log_cb)
+        try:
+            bk_success, bk_summary = run_full_backup(config=config, log_cb=log_cb)
+            if bk_success:
+                pre_backup_status = "Completed & Uploaded to Drive"
+                emit_log("Pre-Maintenance Safety Backup succeeded!", "info", log_cb)
+            else:
+                pre_backup_status = f"Warning: {bk_summary}"
+                emit_log(f"Pre-backup warning: {bk_summary}", "warning", log_cb)
+        except Exception as bk_err:
+            pre_backup_status = f"Failed: {bk_err}"
+            emit_log(f"Pre-backup error: {bk_err}", "warning", log_cb)
+    else:
+        emit_log("Safety backup skipped by switch.", "warning", log_cb)
+        pre_backup_status = "Skipped by Flag"
+
+    # Step 4: DBCC CHECKDB
+    if progress_cb: progress_cb(0.6)
+    if status_cb: status_cb("Running DBCC CHECKDB integrity validation...")
+    emit_log(f"Running DBCC CHECKDB(N'{target_db}') WITH NO_INFOMSGS...", "info", log_cb)
+    checkdb_sql = f"USE [{target_db}]; DBCC CHECKDB(N'{target_db}') WITH NO_INFOMSGS;"
+    c_code, c_out = execute_sql_query(checkdb_sql, instance=instance, timeout=600)
+    checkdb_status = "Clean (0 consistency errors)" if c_code == 0 else f"Errors: {c_out}"
+    emit_log(f"CHECKDB Result: {checkdb_status}", "info" if c_code == 0 else "warning", log_cb)
+
+    # Step 5: DBCC DBREINDEX with FillFactor
+    if progress_cb: progress_cb(0.75)
+    if status_cb: status_cb(f"Rebuilding table indexes (FillFactor {fill_factor})...")
+    emit_log(f"Running EXEC sp_MSforeachtable DBCC DBREINDEX ('?', ' ', {fill_factor})...", "info", log_cb)
+    reindex_sql = f"USE [{target_db}]; EXEC sp_MSforeachtable @command1=\"print '?' DBCC DBREINDEX ('?', ' ', {fill_factor})\";"
+    r_code, r_out = execute_sql_query(reindex_sql, instance=instance, timeout=1200)
+    reindex_status = f"Reindexed (FillFactor {fill_factor})" if r_code == 0 else f"Reindex Error: {r_out}"
+    emit_log(f"DBREINDEX Result: {reindex_status}", "info" if r_code == 0 else "warning", log_cb)
+
+    # Step 6: EXEC sp_updatestats
+    if progress_cb: progress_cb(0.85)
+    if status_cb: status_cb("Refreshing database statistics (sp_updatestats)...")
+    emit_log("Running EXEC sp_updatestats...", "info", log_cb)
+    stats_sql = f"USE [{target_db}]; EXEC sp_updatestats;"
+    s_code, s_out = execute_sql_query(stats_sql, instance=instance, timeout=300)
+    updatestats_status = "Statistics Updated" if s_code == 0 else f"Stats Warning: {s_out}"
+    emit_log(f"sp_updatestats Result: {updatestats_status}", "info" if s_code == 0 else "warning", log_cb)
+
+    # Step 7: Post-Maintenance Verification
+    if progress_cb: progress_cb(0.9)
+    if status_cb: status_cb("Verifying post-maintenance index fragmentation...")
+    tables_after, frag_after_max = inspect_index_fragmentation(target_db, instance=instance, log_cb=log_cb)
+    frag_after_count = len(tables_after)
+    emit_log(f"Post-Verification: Max Fragmentation reduced: {frag_before_max}% -> {frag_after_max}%", "info", log_cb)
+
+    duration = round((dt.now() - start_time).total_seconds(), 1)
+    query_exec_time = dt.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Step 8: Stream metrics to Google Apps Script Broker
+    if progress_cb: progress_cb(0.95)
+    if status_cb: status_cb("Streaming performance metrics to Google Sheet...")
+    sheet_logged = False
+    broker_url = config.get("BROKER_URL") or config.get("TELEMETRY_BROKER_URL", "")
+    token_path = None
+    prog_data = os.environ.get("ALLUSERSPROFILE", r"C:\ProgramData")
+    for s_dir in [DATA_DIR, os.path.join(prog_data, "DatabaseBackupApp"), BASE_DIR]:
+        for s_name in ["token.dpapi", "broker_token.dat"]:
+            cand = os.path.join(s_dir, s_name)
+            if os.path.exists(cand):
+                token_path = cand
+                break
+        if token_path: break
+
+    if broker_url and token_path:
+        try:
+            from broker_client import load_token, report_performance_telemetry
+            token = load_token(token_path)
+            sheet_logged, tel_msg = report_performance_telemetry(
+                broker_url=broker_url,
+                token=token,
+                db_name=target_db,
+                sql_version=sql_version,
+                db_size_mb=db_size_mb,
+                pre_backup_status=pre_backup_status,
+                frag_before_max=frag_before_max,
+                frag_after_max=frag_after_max,
+                checkdb_status=checkdb_status,
+                reindex_status=reindex_status,
+                duration_secs=duration,
+                run_mode=mode,
+                task_start_time=now_str,
+                query_exec_time=query_exec_time,
+                status="SUCCESS" if r_code == 0 else "WARNING"
+            )
+            emit_log(f"Google Sheet Telemetry: {tel_msg}", "info" if sheet_logged else "warning", log_cb)
+        except Exception as tel_err:
+            emit_log(f"Telemetry warning: {tel_err}", "warning", log_cb)
+
+    if progress_cb: progress_cb(1.0)
+    if status_cb: status_cb("Performance & Maintenance suite complete!")
+
+    summary = (
+        f"Maintenance Completed in {duration}s | Frag: {frag_before_max}% -> {frag_after_max}% | "
+        f"{checkdb_status} | {reindex_status}"
+    )
+    emit_log("=" * 60, "info", log_cb)
+    emit_log(f"MAINTENANCE SUITE COMPLETED: {summary}", "info", log_cb)
+    emit_log("=" * 60, "info", log_cb)
+
+    return {
+        "success": (r_code == 0),
+        "target_db": target_db,
+        "instance": instance,
+        "sql_version": sql_version,
+        "db_size_mb": db_size_mb,
+        "pre_backup_status": pre_backup_status,
+        "frag_before_max": frag_before_max,
+        "frag_before_count": frag_before_count,
+        "frag_after_max": frag_after_max,
+        "frag_after_count": frag_after_count,
+        "checkdb_status": checkdb_status,
+        "reindex_status": reindex_status,
+        "updatestats_status": updatestats_status,
+        "duration_secs": duration,
+        "sheet_logged": sheet_logged,
+        "summary": summary,
+        "tables_before": tables_before,
+        "tables_after": tables_after
+    }
+
+

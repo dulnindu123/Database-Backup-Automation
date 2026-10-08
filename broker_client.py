@@ -503,3 +503,65 @@ def report_storage_telemetry(telemetry_broker_url, token, drives, tab_name="Stor
         return False, f"Telemetry broker rejected report: HTTP {status} - {err or r.text[:100]}"
     except Exception as e:
         return False, f"Telemetry broker error: {e}"
+
+
+def report_performance_telemetry(
+    broker_url,
+    token,
+    db_name,
+    sql_version="Microsoft SQL Server",
+    db_size_mb=0,
+    pre_backup_status="Completed",
+    frag_before_max=0.0,
+    frag_after_max=0.0,
+    checkdb_status="Clean (0 consistency errors)",
+    reindex_status="Reindexed (FillFactor 80)",
+    duration_secs=0.0,
+    run_mode="Manual",
+    task_start_time=None,
+    query_exec_time=None,
+    status="SUCCESS"
+):
+    """
+    Sends database performance and re-indexing telemetry to the Upload Broker.
+    Routes to the Customer Sheet [Performance Query] tab and Master Application Report.
+    Returns (success_boolean, message)
+    """
+    if not broker_url or not token:
+        return False, "Broker URL or token missing"
+
+    try:
+        valid_url = validate_broker_url(broker_url)
+    except ValueError as e:
+        return False, f"Broker URL rejected: {e}"
+
+    from datetime import datetime as dt
+    now_str = dt.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    payload = {
+        "action": "report_status",
+        "token": token,
+        "module": "PERFORMANCE_QUERY",
+        "run_mode": run_mode,
+        "task_start_time": task_start_time or now_str,
+        "query_exec_time": query_exec_time or now_str,
+        "db_name": db_name,
+        "sql_version": sql_version,
+        "db_size_mb": db_size_mb,
+        "pre_backup_status": pre_backup_status,
+        "frag_before_max": frag_before_max,
+        "frag_after_max": frag_after_max,
+        "checkdb_status": checkdb_status,
+        "reindex_status": reindex_status,
+        "duration_secs": duration_secs,
+        "status": status
+    }
+    try:
+        r = post_broker(valid_url, payload, timeout=20)
+        status_code, data, err = parse_broker_response(r)
+        if not err and status_code < 400:
+            return True, "Performance telemetry recorded successfully in Google Sheet"
+        return False, f"Broker rejected report: HTTP {status_code} - {err or r.text[:100]}"
+    except Exception as e:
+        return False, f"Performance telemetry error: {e}"
+

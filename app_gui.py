@@ -186,6 +186,7 @@ class BackupAutomationApp(ctk.CTk):
         self.tab_settings = self.tabview.add("  Settings  ")
         self.tab_diagnostics = self.tabview.add("  Live Logs  ")
         self.tab_server_health = self.tabview.add("  Server Health  ")
+        self.tab_performance = self.tabview.add("  Performance Query  ")
 
         # Initialize individual tabs
         self._build_dashboard_tab()
@@ -193,6 +194,7 @@ class BackupAutomationApp(ctk.CTk):
         self._build_settings_tab()
         self._build_diagnostics_tab()
         self._build_server_health_tab()
+        self._build_performance_tab()
 
         # ── Bottom Footer Bar (Version Number Display) ────────────────
         self.footer_frame = ctk.CTkFrame(self, fg_color="transparent", height=24)
@@ -364,6 +366,22 @@ class BackupAutomationApp(ctk.CTk):
             width=135,
             command=self._cleanup_storage
         ).pack(side="left", padx=5)
+
+        # Button 4: Performance Maintenance Module
+        ctk.CTkButton(
+            links_frame,
+            text="⚡ DB Maintenance",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#1e3a8a",
+            hover_color="#1d4ed8",
+            width=140,
+            command=self._open_performance_tab
+        ).pack(side="left", padx=5)
+
+    def _open_performance_tab(self):
+        """Switches directly to the Performance Query module tab."""
+        self.tabview.set("  Performance Query  ")
+
 
     # =========================================================================
     # TAB 2: SCHEDULE & WINDOWS SERVICE AUTOMATION
@@ -2369,6 +2387,308 @@ class BackupAutomationApp(ctk.CTk):
             messagebox.showinfo("Test Email", msg)
         else:
             messagebox.showerror("Test Email Failed", msg)
+
+    # =========================================================================
+    # TAB 6: PERFORMANCE QUERY & DATABASE RE-INDEXING MAINTENANCE
+    # =========================================================================
+    def _build_performance_tab(self):
+        """Builds the Performance Query & Re-Indexing tab with diagnostics and controls."""
+        tab = self.tab_performance
+
+        scroll = ctk.CTkScrollableFrame(tab, corner_radius=10, fg_color=("#374151", "#1f2937"))
+        scroll.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # ── Section Header ─────────────────────────────────────────────
+        ctk.CTkLabel(
+            scroll,
+            text="Database Performance & Re-Indexing Maintenance",
+            font=ctk.CTkFont(size=18, weight="bold")
+        ).pack(anchor="w", padx=20, pady=(15, 5))
+
+        ctk.CTkLabel(
+            scroll,
+            text="Module 3: Analyzes index fragmentation, performs pre-maintenance safety backup, runs DBCC CHECKDB integrity validation, rebuilds indexes (FillFactor 80), and logs telemetry to Google Sheets.",
+            font=ctk.CTkFont(size=12),
+            text_color="#9ca3af"
+        ).pack(anchor="w", padx=20, pady=(0, 15))
+
+        # ── Target Database & Configuration Card ───────────────────────
+        perf_cfg_card = ctk.CTkFrame(scroll, corner_radius=8, fg_color=("#1e293b", "#111827"), border_width=1, border_color="#374151")
+        perf_cfg_card.pack(fill="x", padx=20, pady=(0, 15))
+
+        ctk.CTkLabel(
+            perf_cfg_card,
+            text="TARGET DATABASE & MAINTENANCE PARAMETERS",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#38bdf8"
+        ).pack(anchor="w", padx=15, pady=(12, 10))
+
+        # Row 1: Target Database & SQL Instance
+        row1 = ctk.CTkFrame(perf_cfg_card, fg_color="transparent")
+        row1.pack(fill="x", padx=15, pady=(0, 10))
+
+        ctk.CTkLabel(row1, text="Target Database:", font=ctk.CTkFont(size=12, weight="bold")).pack(side="left", padx=(0, 8))
+        dbs_list = self.config_data.get("TARGET_DATABASES", [])
+        if not dbs_list and self.config_data.get("DATABASE_NAME"):
+            dbs_list = [self.config_data.get("DATABASE_NAME")]
+        if not dbs_list:
+            dbs_list = ["BARTONGLASS_TEST_NEW", "TuffCoGlass", "WAGlassKote", "TheDatabase"]
+
+        self.perf_db_var = tk.StringVar(value=dbs_list[0] if dbs_list else "TheDatabase")
+        self.perf_db_entry = ctk.CTkComboBox(row1, values=dbs_list, variable=self.perf_db_var, width=220)
+        self.perf_db_entry.pack(side="left", padx=(0, 20))
+
+        ctk.CTkLabel(row1, text="SQL Instance:", font=ctk.CTkFont(size=12, weight="bold")).pack(side="left", padx=(0, 8))
+        inst_default = self.config_data.get("SQL_SERVER_INSTANCE") or self.config_data.get("SQL_SERVER_NAME") or "localhost\\SQLDULLA"
+        self.perf_inst_var = tk.StringVar(value=inst_default)
+        self.perf_inst_entry = ctk.CTkEntry(row1, textvariable=self.perf_inst_var, width=180)
+        self.perf_inst_entry.pack(side="left", padx=(0, 10))
+
+        # Row 2: FillFactor and Safety Backup Toggle
+        row2 = ctk.CTkFrame(perf_cfg_card, fg_color="transparent")
+        row2.pack(fill="x", padx=15, pady=(0, 12))
+
+        self.perf_backup_chk = ctk.CTkCheckBox(
+            row2,
+            text="Execute Pre-Maintenance Safety Backup before re-indexing (Recommended)",
+            font=ctk.CTkFont(size=12)
+        )
+        self.perf_backup_chk.pack(side="left", padx=(0, 25))
+        self.perf_backup_chk.select()
+
+        ctk.CTkLabel(row2, text="FillFactor:", font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 6))
+        self.perf_ff_entry = ctk.CTkEntry(row2, width=60, justify="center")
+        self.perf_ff_entry.insert(0, "80")
+        self.perf_ff_entry.pack(side="left", padx=(0, 15))
+
+        # ── Action Buttons Row ─────────────────────────────────────────
+        btn_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=20, pady=(0, 15))
+
+        self.btn_run_perf_maint = ctk.CTkButton(
+            btn_frame,
+            text="⚡  Run Full Maintenance Now",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color="#059669",
+            hover_color="#047857",
+            height=42,
+            width=230,
+            corner_radius=21,
+            command=self._start_performance_maint_thread
+        )
+        self.btn_run_perf_maint.pack(side="left", padx=(0, 10))
+
+        self.btn_inspect_frag = ctk.CTkButton(
+            btn_frame,
+            text="🔍  Inspect Fragmentation Only",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color="#2563eb",
+            hover_color="#1d4ed8",
+            height=42,
+            width=230,
+            corner_radius=21,
+            command=self._start_inspect_frag_thread
+        )
+        self.btn_inspect_frag.pack(side="left", padx=(0, 10))
+
+        ctk.CTkButton(
+            btn_frame,
+            text="📊  Open Performance Sheet",
+            font=ctk.CTkFont(size=12),
+            fg_color="#374151",
+            hover_color="#4b5563",
+            height=40,
+            width=200,
+            corner_radius=20,
+            command=self._open_performance_sheet
+        ).pack(side="left")
+
+        # ── Status and Progress Bar ────────────────────────────────────
+        self.perf_status_card = ctk.CTkFrame(scroll, fg_color=("#1e293b", "#0f172a"), corner_radius=8)
+        self.perf_status_card.pack(fill="x", padx=20, pady=(0, 10))
+
+        self.perf_status_lbl = ctk.CTkLabel(
+            self.perf_status_card,
+            text="Status: Ready to execute performance query suite.",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#9ca3af"
+        )
+        self.perf_status_lbl.pack(side="left", padx=15, pady=10)
+
+        self.perf_progress = ctk.CTkProgressBar(scroll, width=600, height=8, corner_radius=4)
+        self.perf_progress.pack(fill="x", padx=20, pady=(0, 15))
+        self.perf_progress.set(0)
+
+        # ── Results & Telemetry Metric Cards Grid ──────────────────────
+        self.perf_metrics_frame = ctk.CTkFrame(scroll, corner_radius=8, fg_color=("#1e293b", "#111827"), border_width=1, border_color="#374151")
+        self.perf_metrics_frame.pack(fill="x", padx=20, pady=(0, 15))
+
+        ctk.CTkLabel(
+            self.perf_metrics_frame,
+            text="LATEST MAINTENANCE DIAGNOSTICS & TELEMETRY",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#10b981"
+        ).pack(anchor="w", padx=15, pady=(12, 10))
+
+        grid = ctk.CTkFrame(self.perf_metrics_frame, fg_color="transparent")
+        grid.pack(fill="x", padx=15, pady=(0, 15))
+        grid.grid_columnconfigure((0, 1, 2, 3), weight=1)
+
+        # 8 Metric Cards:
+        self.tile_sql_ver = self._create_metric_tile(grid, 0, 0, "SQL VERSION", "Not Probed")
+        self.tile_db_size = self._create_metric_tile(grid, 0, 1, "DATABASE SIZE", "-- MB")
+        self.tile_checkdb = self._create_metric_tile(grid, 0, 2, "CHECKDB STATUS", "Pending")
+        self.tile_prebackup = self._create_metric_tile(grid, 0, 3, "SAFETY BACKUP", "Pending")
+
+        self.tile_frag_before = self._create_metric_tile(grid, 1, 0, "MAX FRAG (BEFORE)", "-- %")
+        self.tile_frag_after = self._create_metric_tile(grid, 1, 1, "MAX FRAG (AFTER)", "-- %")
+        self.tile_duration = self._create_metric_tile(grid, 1, 2, "RUN DURATION", "-- s")
+        self.tile_sheet_status = self._create_metric_tile(grid, 1, 3, "CLOUD SHEET", "Awaiting Run")
+
+        # ── Real-Time Console / Output Log Box ─────────────────────────
+        ctk.CTkLabel(
+            scroll,
+            text="MAINTENANCE EXECUTION LOG & INDEX FRAGMENTATION REPORT",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#9ca3af"
+        ).pack(anchor="w", padx=20, pady=(5, 5))
+
+        self.perf_console = ctk.CTkTextbox(
+            scroll,
+            height=200,
+            font=ctk.CTkFont(family="Consolas", size=11),
+            fg_color="#0f172a",
+            text_color="#e2e8f0"
+        )
+        self.perf_console.pack(fill="both", expand=True, padx=20, pady=(0, 15))
+        self.perf_console.insert("1.0", "Module 3 Performance Query Engine ready.\nClick 'Inspect Fragmentation Only' to preview index health, or 'Run Full Maintenance Now' to execute safety backup, CHECKDB, DBREINDEX, and cloud sync.\n")
+
+    def _create_metric_tile(self, parent, row, col, title, initial_value):
+        frame = ctk.CTkFrame(parent, corner_radius=6, fg_color=("#334155", "#0f172a"), border_width=1, border_color="#1e293b")
+        frame.grid(row=row, column=col, padx=5, pady=5, sticky="nsew")
+        ctk.CTkLabel(frame, text=title, font=ctk.CTkFont(size=10, weight="bold"), text_color="#94a3b8").pack(anchor="w", padx=10, pady=(8, 2))
+        lbl = ctk.CTkLabel(frame, text=initial_value, font=ctk.CTkFont(size=13, weight="bold"), text_color="#ffffff")
+        lbl.pack(anchor="w", padx=10, pady=(0, 8))
+        return lbl
+
+    def _start_performance_maint_thread(self):
+        """Starts full maintenance in background thread."""
+        self.btn_run_perf_maint.configure(state="disabled", text="Running Maintenance...")
+        self.btn_inspect_frag.configure(state="disabled")
+        self.perf_status_lbl.configure(text="Status: Executing maintenance pipeline...", text_color="#fbbf24")
+        self.perf_progress.set(0.1)
+        threading.Thread(target=self._execute_performance_maint, daemon=True).start()
+
+    def _execute_performance_maint(self):
+        from backup_core import run_performance_query
+        target_db = self.perf_db_var.get().strip()
+        instance = self.perf_inst_var.get().strip()
+        skip_backup = not bool(self.perf_backup_chk.get())
+        try:
+            ff = int(self.perf_ff_entry.get().strip())
+        except Exception:
+            ff = 80
+
+        def log_cb(msg, level="info"):
+            self.append_log(msg, level)
+            def _append():
+                self.perf_console.insert("end", f"{msg}\n")
+                self.perf_console.see("end")
+            self.after(0, _append)
+
+        def status_cb(text):
+            self.after(0, lambda: self.perf_status_lbl.configure(text=f"Status: {text}", text_color="#38bdf8"))
+
+        def progress_cb(val):
+            self.after(0, lambda: self.perf_progress.set(val))
+
+        try:
+            res = run_performance_query(
+                config=self.config_data,
+                target_db=target_db,
+                instance=instance,
+                mode="Manual",
+                skip_backup=skip_backup,
+                fill_factor=ff,
+                inspect_only=False,
+                log_cb=log_cb,
+                status_cb=status_cb,
+                progress_cb=progress_cb
+            )
+
+            def _update_ui():
+                self.tile_sql_ver.configure(text=res.get("sql_version", "MSSQL")[:24])
+                self.tile_db_size.configure(text=f"{res.get('db_size_mb', 0):,} MB")
+                self.tile_checkdb.configure(text=res.get("checkdb_status", "Clean")[:22], text_color="#10b981" if "clean" in res.get("checkdb_status", "").lower() else "#ef4444")
+                self.tile_prebackup.configure(text=res.get("pre_backup_status", "N/A")[:22])
+                self.tile_frag_before.configure(text=f"{res.get('frag_before_max', 0):.1f}%", text_color="#f59e0b")
+                self.tile_frag_after.configure(text=f"{res.get('frag_after_max', 0):.1f}%", text_color="#10b981")
+                self.tile_duration.configure(text=f"{res.get('duration_secs', 0):.1f}s")
+                self.tile_sheet_status.configure(text="✓ Logged to Sheet" if res.get("sheet_logged") else "Local Log Only", text_color="#10b981" if res.get("sheet_logged") else "#94a3b8")
+
+                self.btn_run_perf_maint.configure(state="normal", text="⚡  Run Full Maintenance Now")
+                self.btn_inspect_frag.configure(state="normal")
+                self.perf_status_lbl.configure(text="Status: ✅ Maintenance completed successfully!", text_color="#10b981")
+                messagebox.showinfo("Maintenance Complete", f"Database Maintenance Succeeded!\n\nDatabase: {target_db}\nCHECKDB: {res.get('checkdb_status')}\nFragmentation: {res.get('frag_before_max', 0):.1f}% -> {res.get('frag_after_max', 0):.1f}%\nDuration: {res.get('duration_secs')}s\nGoogle Sheet: {'Recorded' if res.get('sheet_logged') else 'Not Logged'}")
+
+            self.after(0, _update_ui)
+        except Exception as e:
+            def _err(e=e):
+                self.btn_run_perf_maint.configure(state="normal", text="⚡  Run Full Maintenance Now")
+                self.btn_inspect_frag.configure(state="normal")
+                self.perf_status_lbl.configure(text=f"Status: Error — {e}", text_color="#ef4444")
+                messagebox.showerror("Maintenance Failed", f"Performance maintenance encountered an error:\n\n{e}")
+            self.after(0, _err)
+
+    def _start_inspect_frag_thread(self):
+        """Starts fragmentation inspection in background thread."""
+        self.btn_inspect_frag.configure(state="disabled", text="Inspecting...")
+        self.btn_run_perf_maint.configure(state="disabled")
+        self.perf_status_lbl.configure(text="Status: Sampling index fragmentation...", text_color="#38bdf8")
+        self.perf_progress.set(0.2)
+        threading.Thread(target=self._execute_inspect_frag, daemon=True).start()
+
+    def _execute_inspect_frag(self):
+        from backup_core import inspect_index_fragmentation
+        target_db = self.perf_db_var.get().strip()
+        instance = self.perf_inst_var.get().strip()
+
+        try:
+            self.after(0, lambda: self.perf_progress.set(0.5))
+            tables, max_frag = inspect_index_fragmentation(target_db, instance=instance)
+            self.after(0, lambda: self.perf_progress.set(1.0))
+
+            def _update():
+                self.tile_frag_before.configure(text=f"{max_frag:.1f}%", text_color="#f59e0b")
+                self.perf_console.insert("end", f"\n--- Fragmentation Analysis for [{target_db}] ---\n")
+                self.perf_console.insert("end", f"Found {len(tables)} fragmented indexes (>10%). Max: {max_frag:.2f}%\n")
+                for t in tables[:30]:
+                    self.perf_console.insert("end", f"  • {t.get('table')}.{t.get('index')} ({t.get('type')}): {t.get('fragmentation')}%\n")
+                if len(tables) > 30:
+                    self.perf_console.insert("end", f"  ... and {len(tables) - 30} more indexes.\n")
+                self.perf_console.see("end")
+
+                self.btn_inspect_frag.configure(state="normal", text="🔍  Inspect Fragmentation Only")
+                self.btn_run_perf_maint.configure(state="normal")
+                self.perf_status_lbl.configure(text=f"Status: Found {len(tables)} fragmented indexes (Max {max_frag:.1f}%)", text_color="#38bdf8")
+
+            self.after(0, _update)
+        except Exception as e:
+            def _err(e=e):
+                self.btn_inspect_frag.configure(state="normal", text="🔍  Inspect Fragmentation Only")
+                self.btn_run_perf_maint.configure(state="normal")
+                self.perf_status_lbl.configure(text=f"Status: Inspection Error — {e}", text_color="#ef4444")
+            self.after(0, _err)
+
+    def _open_performance_sheet(self):
+        """Opens the Google Sheet in the browser."""
+        sheet_id = self.config_data.get("GOOGLE_SHEET_ID", "")
+        if sheet_id:
+            import webbrowser
+            webbrowser.open(f"https://docs.google.com/spreadsheets/d/{sheet_id}")
+        else:
+            messagebox.showwarning("No Sheet ID", "Google Sheet ID is not configured in Settings.")
+
 
 
 def main():
