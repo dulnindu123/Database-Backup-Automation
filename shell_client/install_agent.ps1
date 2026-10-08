@@ -47,10 +47,12 @@ Write-Host "  Zero-Trust Architecture - 100% Native Windows Shell Agent (No Pyth
 Write-Host "================================================================================" -ForegroundColor Cyan
 
 # ------------------------------------------------------------------------------
-# 2. LOAD ASSEMBLIES
+# 2. LOAD ASSEMBLIES & SECURITY PROTOCOLS
 # ------------------------------------------------------------------------------
 Add-Type -AssemblyName System.Security
 Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls11 -bor [System.Net.SecurityProtocolType]::Tls
 
 # ------------------------------------------------------------------------------
 # 3. HELPER: APPS SCRIPT HTTP CLIENT (Handles 302 Redirect to Echo Service)
@@ -61,6 +63,8 @@ function Invoke-AppsScriptBroker {
         [hashtable]$Payload,
         [int]$TimeoutSec = 30
     )
+    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls11 -bor [System.Net.SecurityProtocolType]::Tls
+
     $json = $Payload | ConvertTo-Json -Compress
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
 
@@ -75,13 +79,27 @@ function Invoke-AppsScriptBroker {
     $stream.Write($bytes, 0, $bytes.Length)
     $stream.Close()
 
+    $resp = $null
     try {
         $resp = $req.GetResponse()
     } catch [System.Net.WebException] {
         $resp = $_.Exception.Response
+        if (-not $resp) {
+            throw "Connection failed to broker endpoint ($Url): $($_.Exception.Message)"
+        }
+    } catch {
+        throw "Unexpected network error ($Url): $_"
     }
 
-    $location = $resp.Headers["Location"]
+    if (-not $resp) {
+        throw "No response received from Upload Broker ($Url)."
+    }
+
+    $location = $null
+    if ($resp.Headers -and $resp.Headers["Location"]) {
+        $location = $resp.Headers["Location"]
+    }
+
     if ($location) {
         # Follow 302 redirect via GET to download ContentService JSON output
         $getReq = [System.Net.HttpWebRequest]::Create($location)
@@ -97,6 +115,9 @@ function Invoke-AppsScriptBroker {
     $sr = New-Object System.IO.StreamReader($resp.GetResponseStream())
     $content = $sr.ReadToEnd()
     $sr.Close()
+    if (-not $content) {
+        throw "Broker returned empty response ($Url)"
+    }
     return ($content | ConvertFrom-Json)
 }
 

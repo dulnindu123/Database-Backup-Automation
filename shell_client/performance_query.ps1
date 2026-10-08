@@ -381,6 +381,8 @@ $perfPayload = @{
 $json = $perfPayload | ConvertTo-Json -Depth 4 -Compress
 $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
 
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls11 -bor [System.Net.SecurityProtocolType]::Tls
+
 $req = [System.Net.HttpWebRequest]::Create($brokerUrl)
 $req.Method = "POST"
 $req.ContentType = "application/json; charset=utf-8"
