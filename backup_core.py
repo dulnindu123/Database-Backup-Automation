@@ -772,12 +772,28 @@ def grant_sql_folder_permissions(folder_path):
         if "\\program files" in low:
             return True  # SQL's default backup dir already has correct ACLs
         try:
-            sql_server = load_config().get("SQL_SERVER_NAME", "")
+            cfg = load_config()
+            sql_server = cfg.get("SQL_SERVER_INSTANCE") or cfg.get("SQL_SERVER_NAME", "")
         except Exception:
             sql_server = ""
         me = f"{os.environ.get('USERDOMAIN', '')}\\{os.environ.get('USERNAME', '')}".strip("\\")
-        grants = ["*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F",
-                  f"{_sql_service_account(sql_server)}:(OI)(CI)M"]
+        grants = ["*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F"]
+        accts = set()
+        if sql_server:
+            accts.add(_sql_service_account(sql_server))
+        try:
+            for inst in detect_sql_server_instances():
+                clean_inst = inst.split("\\", 1)[1] if "\\" in inst else inst
+                if clean_inst.upper() == "MSSQLSERVER":
+                    accts.add("NT SERVICE\\MSSQLSERVER")
+                else:
+                    accts.add(f"NT SERVICE\\MSSQL${clean_inst}")
+        except Exception:
+            pass
+        if not accts:
+            accts.add("NT SERVICE\\MSSQLSERVER")
+        for a in accts:
+            grants.append(f"{a}:(OI)(CI)M")
         if me and "\\" in me:
             grants.append(f"{me}:(OI)(CI)M")
         # Grant FIRST, then remove inheritance, so we can never lock ourselves out.
@@ -786,7 +802,9 @@ def grant_sql_folder_permissions(folder_path):
                                shell=False, capture_output=True, text=True, timeout=15,
                                creationflags=_CREATE_NO_WINDOW)
             if r.returncode != 0:
-                emit_log(f"ACL grant failed for '{g}': {(r.stderr or r.stdout).strip()[:200]}", "warning")
+                err = (r.stderr or r.stdout).strip()
+                if "no mapping between account names and security ids" not in err.lower():
+                    emit_log(f"ACL grant failed for '{g}': {err[:200]}", "warning")
         subprocess.run(["icacls", norm_path, "/inheritance:r", "/C", "/Q"],
                        shell=False, capture_output=True, text=True, timeout=15,
                        creationflags=_CREATE_NO_WINDOW)
@@ -1838,6 +1856,13 @@ def enable_scheduler(executable_path=None, days="MON", time_str="02:00", as_syst
             return True, f"Scheduled successfully: {friendly_schedule}."
         else:
             err = res.stderr or res.stdout
+            if not is_admin() and ("access is denied" in (err or "").lower() or "denied" in (err or "").lower()):
+                emit_log(f"User task creation denied. Requesting elevated administrator registration...")
+                elev_sched = " ".join(user_cmd_args[6:])
+                cmd_str = f'schtasks /create /tn "{target_task}" /tr "{cmd_run}" {elev_sched} /f'
+                if run_command_elevated(cmd_str):
+                    emit_log(f"Task '{target_task}' registered via elevated UAC prompt ({friendly_schedule}).")
+                    return True, f"Scheduled successfully (Elevated): {friendly_schedule}."
             emit_log(f"Failed to create scheduled task: {err}", "error")
             return False, f"Scheduler error: {err}"
 

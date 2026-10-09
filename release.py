@@ -87,10 +87,14 @@ def generate_build_metadata() -> dict:
     return build_info
 
 
+LOCAL_TEMP_WORK = os.path.normpath(r"C:\temp\pyi_work")
+LOCAL_TEMP_DIST = os.path.normpath(r"C:\temp\pyi_dist")
+
+
 def pre_clean_build():
     """Safely cleans build and dist folders with retry to avoid Windows file locks."""
     import time
-    for target in [os.path.join(DIST_DIR, "DatabaseBackupApp"), os.path.join(BUILD_DIR, "DatabaseBackupApp")]:
+    for target in [LOCAL_TEMP_WORK, LOCAL_TEMP_DIST, os.path.join(DIST_DIR, "DatabaseBackupApp"), os.path.join(BUILD_DIR, "DatabaseBackupApp")]:
         if os.path.exists(target):
             for _ in range(5):
                 try:
@@ -100,22 +104,34 @@ def pre_clean_build():
                     time.sleep(1)
             if os.path.exists(target):
                 shutil.rmtree(target, ignore_errors=True)
+    os.makedirs(LOCAL_TEMP_WORK, exist_ok=True)
+    os.makedirs(LOCAL_TEMP_DIST, exist_ok=True)
+    os.makedirs(DIST_DIR, exist_ok=True)
 
 
 def compile_binaries():
     """Runs PyInstaller on both spec files."""
     print("\n" + "=" * 70)
-    print("  STEP 1: COMPILING EXECUTABLES VIA PYINSTALLER")
+    print("  STEP 1: COMPILING EXECUTABLES VIA PYINSTALLER (Isolated from OneDrive)")
     print("=" * 70)
 
     pre_clean_build()
 
     # 1. Main App
-    print("[BUILD] Compiling DatabaseBackupApp.spec...")
-    cmd_app = [sys.executable, "-m", "PyInstaller", "--noconfirm", "DatabaseBackupApp.spec"]
+    print("[BUILD] Compiling DatabaseBackupApp.spec to local temp...")
+    cmd_app = [
+        sys.executable, "-m", "PyInstaller", "--noconfirm",
+        "--distpath", LOCAL_TEMP_DIST,
+        "--workpath", LOCAL_TEMP_WORK,
+        "DatabaseBackupApp.spec"
+    ]
     res = subprocess.run(cmd_app, cwd=BASE_DIR)
     if res.returncode != 0:
         raise RuntimeError(f"DatabaseBackupApp compilation failed with exit code {res.returncode}")
+
+    temp_app_dir = os.path.join(LOCAL_TEMP_DIST, "DatabaseBackupApp")
+    target_app_dir = os.path.join(DIST_DIR, "DatabaseBackupApp")
+    shutil.copytree(temp_app_dir, target_app_dir, dirs_exist_ok=True)
 
     app_exe = os.path.join(DIST_DIR, "DatabaseBackupApp", "DatabaseBackupApp.exe")
     if not os.path.exists(app_exe):
@@ -123,16 +139,24 @@ def compile_binaries():
     print(f"[OK] DatabaseBackupApp compiled successfully ({os.path.getsize(app_exe):,} bytes)")
 
     # 2. Installer
-    print("[BUILD] Compiling Setup_DatabaseBackup.spec...")
-    cmd_inst = [sys.executable, "-m", "PyInstaller", "--noconfirm", "Setup_DatabaseBackup.spec"]
+    print("[BUILD] Compiling Setup_DatabaseBackup.spec to local temp...")
+    cmd_inst = [
+        sys.executable, "-m", "PyInstaller", "--noconfirm",
+        "--distpath", LOCAL_TEMP_DIST,
+        "--workpath", LOCAL_TEMP_WORK,
+        "Setup_DatabaseBackup.spec"
+    ]
     res2 = subprocess.run(cmd_inst, cwd=BASE_DIR)
     if res2.returncode != 0:
         raise RuntimeError(f"Setup_DatabaseBackup compilation failed with exit code {res2.returncode}")
 
-    inst_exe = os.path.join(DIST_DIR, "Setup_DatabaseBackup.exe")
-    if not os.path.exists(inst_exe):
-        raise FileNotFoundError(f"Expected compiled installer not found at: {inst_exe}")
-    print(f"[OK] Setup_DatabaseBackup compiled successfully ({os.path.getsize(inst_exe):,} bytes)")
+    temp_inst_exe = os.path.join(LOCAL_TEMP_DIST, "Setup_DatabaseBackup.exe")
+    target_inst_exe = os.path.join(DIST_DIR, "Setup_DatabaseBackup.exe")
+    shutil.copy2(temp_inst_exe, target_inst_exe)
+
+    if not os.path.exists(target_inst_exe):
+        raise FileNotFoundError(f"Expected compiled installer not found at: {target_inst_exe}")
+    print(f"[OK] Setup_DatabaseBackup compiled successfully ({os.path.getsize(target_inst_exe):,} bytes)")
 
 
 def run_security_audit():
