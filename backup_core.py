@@ -1878,6 +1878,153 @@ def disable_scheduler():
 
 
 # =============================================================================
+# 7B. PERFORMANCE MAINTENANCE TASK SCHEDULER
+# =============================================================================
+
+PERF_TASK_NAME = "Database Cloud Backup - Performance Maintenance"
+PERF_BOOT_TASK_NAME = "Database Cloud Backup - Performance Boot Recovery"
+
+
+def get_performance_scheduler_status():
+    """
+    Queries Windows Task Scheduler for the performance maintenance task status.
+    Returns (active: bool, status_desc: str, next_run: str).
+    """
+    if platform.system().lower() != "windows":
+        return False, "Not Scheduled", ""
+    try:
+        res = subprocess.run(
+            ["schtasks", "/query", "/tn", PERF_TASK_NAME, "/fo", "LIST", "/v"],
+            capture_output=True, text=True, timeout=8
+        )
+        if res.returncode == 0:
+            status = "Ready"
+            next_run = ""
+            for line in res.stdout.splitlines():
+                if line.strip().startswith("Status:"):
+                    status = line.split(":", 1)[1].strip()
+                elif line.strip().startswith("Next Run Time:"):
+                    next_run = line.split(":", 1)[1].strip()
+            return True, f"Active ({status})", next_run
+    except Exception:
+        pass
+    return False, "Not Scheduled", ""
+
+
+def enable_performance_scheduler(executable_path=None, freq="Weekly", day="SUN", time_str="03:00", day_of_month=1, on_boot=False):
+    """
+    Registers the Performance Query & Re-Indexing Maintenance automated task in Windows Task Scheduler.
+    Runs 'DatabaseBackupApp.exe --performance' (or 'python auto_backup.py --performance').
+    Supports:
+      - Daily:   /sc daily /st HH:mm
+      - Weekly:  /sc weekly /d {day} /st HH:mm (e.g. SUN, MON)
+      - Monthly: /sc monthly /d {day_of_month} /st HH:mm (e.g. 1 - 31)
+    """
+    if platform.system().lower() != "windows":
+        return False, "Windows required for Task Scheduler."
+
+    if not executable_path:
+        if getattr(sys, 'frozen', False):
+            executable_path = sys.executable
+        else:
+            executable_path = f'python "{os.path.join(BASE_DIR, "auto_backup.py")}"'
+
+    if executable_path.startswith("python "):
+        cmd_run = f'{executable_path} --performance'
+    else:
+        cmd_run = f'\\"{executable_path}\\" --performance'
+
+    freq_norm = str(freq).strip().capitalize()
+    time_val = str(time_str).strip()
+    if not re.match(r"^([01]?[0-9]|2[0-3]):[0-5][0-9]$", time_val):
+        time_val = "03:00"
+
+    day_map = {
+        "MON": "Monday", "TUE": "Tuesday", "WED": "Wednesday",
+        "THU": "Thursday", "FRI": "Friday", "SAT": "Saturday", "SUN": "Sunday"
+    }
+
+    if freq_norm == "Daily":
+        schedule_args = ["/sc", "daily", "/st", time_val]
+        friendly_plan = f"Every Day at {time_val}"
+    elif freq_norm == "Monthly":
+        try:
+            dom = max(1, min(int(day_of_month), 31))
+        except Exception:
+            dom = 1
+        schedule_args = ["/sc", "monthly", "/d", str(dom), "/st", time_val]
+        friendly_plan = f"Day {dom} of every month at {time_val}"
+    else:  # Weekly
+        day_code = str(day).strip().upper()[:3]
+        if day_code not in day_map:
+            day_code = "SUN"
+        schedule_args = ["/sc", "weekly", "/d", day_code, "/st", time_val]
+        friendly_plan = f"Every {day_map.get(day_code, day_code)} at {time_val}"
+
+    # Remove existing tasks to ensure clean replacement
+    subprocess.run(["schtasks", "/delete", "/tn", PERF_TASK_NAME, "/f"], capture_output=True)
+    subprocess.run(["schtasks", "/delete", "/tn", PERF_BOOT_TASK_NAME, "/f"], capture_output=True)
+
+    if is_admin():
+        cmd_args = ["schtasks", "/create", "/tn", PERF_TASK_NAME, "/tr", cmd_run, "/ru", "NT AUTHORITY\\SYSTEM", "/rl", "HIGHEST", "/f"] + schedule_args
+        res = subprocess.run(cmd_args, capture_output=True, text=True)
+        if res.returncode == 0:
+            emit_log(f"Performance maintenance task '{PERF_TASK_NAME}' registered (SYSTEM): {friendly_plan}")
+            if on_boot:
+                boot_args = ["schtasks", "/create", "/tn", PERF_BOOT_TASK_NAME, "/tr", cmd_run, "/sc", "ONSTART", "/ru", "NT AUTHORITY\\SYSTEM", "/rl", "HIGHEST", "/f"]
+                subprocess.run(boot_args, capture_output=True)
+            return True, f"Automation Active: {friendly_plan} (System Service)"
+        else:
+            err = res.stderr or res.stdout
+            return False, f"Scheduler error: {err}"
+    else:
+        # Try elevated creation
+        elev_str = f'schtasks /create /tn "{PERF_TASK_NAME}" /tr "{cmd_run}" {" ".join(schedule_args)} /ru "NT AUTHORITY\\SYSTEM" /rl HIGHEST /f'
+        ok = run_command_elevated(elev_str)
+        if ok:
+            emit_log(f"Performance maintenance task '{PERF_TASK_NAME}' registered via elevated UAC: {friendly_plan}")
+            if on_boot:
+                elev_boot = f'schtasks /create /tn "{PERF_BOOT_TASK_NAME}" /tr "{cmd_run}" /sc ONSTART /ru "NT AUTHORITY\\SYSTEM" /rl HIGHEST /f'
+                run_command_elevated(elev_boot)
+            return True, f"Automation Active: {friendly_plan} (System Service)"
+        else:
+            # Fallback to current user task
+            user_args = ["schtasks", "/create", "/tn", PERF_TASK_NAME, "/tr", cmd_run, "/f"] + schedule_args
+            res = subprocess.run(user_args, capture_output=True, text=True)
+            if res.returncode == 0:
+                emit_log(f"Performance maintenance task '{PERF_TASK_NAME}' registered (User account): {friendly_plan}")
+                if on_boot:
+                    user_boot = ["schtasks", "/create", "/tn", PERF_BOOT_TASK_NAME, "/tr", cmd_run, "/sc", "ONLOGON", "/f"]
+                    subprocess.run(user_boot, capture_output=True)
+                return True, f"Automation Active: {friendly_plan} (User Task)"
+            err = res.stderr or res.stdout
+            return False, f"Scheduler error: {err}"
+
+
+def disable_performance_scheduler():
+    """
+    Unregisters the performance maintenance scheduled task and boot recovery task.
+    """
+    if platform.system().lower() != "windows":
+        return True, "Disabled"
+    res1 = subprocess.run(["schtasks", "/delete", "/tn", PERF_TASK_NAME, "/f"], capture_output=True, text=True)
+    subprocess.run(["schtasks", "/delete", "/tn", PERF_BOOT_TASK_NAME, "/f"], capture_output=True)
+    if res1.returncode == 0:
+        emit_log(f"Performance maintenance task '{PERF_TASK_NAME}' removed.")
+        return True, "Maintenance automation disabled."
+    else:
+        if "cannot find" in (res1.stderr or "").lower() or "not found" in (res1.stderr or "").lower():
+            return True, "Maintenance automation is not active."
+        elif not is_admin():
+            cmd_str = f'schtasks /delete /tn "{PERF_TASK_NAME}" /f'
+            if run_command_elevated(cmd_str):
+                run_command_elevated(f'schtasks /delete /tn "{PERF_BOOT_TASK_NAME}" /f')
+                emit_log(f"Performance maintenance task '{PERF_TASK_NAME}' removed via elevation.")
+                return True, "Maintenance automation disabled."
+        return False, f"Could not disable task: {res1.stderr or res1.stdout}"
+
+
+# =============================================================================
 # 8. WINDOWS SQL SERVER DISCOVERY
 # =============================================================================
 

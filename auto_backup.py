@@ -266,12 +266,14 @@ def run_performance_mode():
     overall_success = True
     for db in target_dbs:
         emit_log(f"Starting performance maintenance suite for [{db}]...")
+        fill_factor = int(config.get("PERF_FILL_FACTOR", 80))
+        skip_safety_backup = not config.get("PERF_EXECUTE_SAFETY_BACKUP", True)
         res = run_performance_query(
             config=config,
             target_db=db,
             mode="Scheduled",
-            skip_backup=False,
-            fill_factor=80
+            skip_backup=skip_safety_backup,
+            fill_factor=fill_factor
         )
         if not res.get("success", False):
             overall_success = False

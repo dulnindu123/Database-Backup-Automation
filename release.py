@@ -87,15 +87,32 @@ def generate_build_metadata() -> dict:
     return build_info
 
 
+def pre_clean_build():
+    """Safely cleans build and dist folders with retry to avoid Windows file locks."""
+    import time
+    for target in [os.path.join(DIST_DIR, "DatabaseBackupApp"), os.path.join(BUILD_DIR, "DatabaseBackupApp")]:
+        if os.path.exists(target):
+            for _ in range(5):
+                try:
+                    shutil.rmtree(target, ignore_errors=False)
+                    break
+                except Exception:
+                    time.sleep(1)
+            if os.path.exists(target):
+                shutil.rmtree(target, ignore_errors=True)
+
+
 def compile_binaries():
     """Runs PyInstaller on both spec files."""
     print("\n" + "=" * 70)
     print("  STEP 1: COMPILING EXECUTABLES VIA PYINSTALLER")
     print("=" * 70)
 
+    pre_clean_build()
+
     # 1. Main App
     print("[BUILD] Compiling DatabaseBackupApp.spec...")
-    cmd_app = [sys.executable, "-m", "PyInstaller", "--clean", "--noconfirm", "DatabaseBackupApp.spec"]
+    cmd_app = [sys.executable, "-m", "PyInstaller", "--noconfirm", "DatabaseBackupApp.spec"]
     res = subprocess.run(cmd_app, cwd=BASE_DIR)
     if res.returncode != 0:
         raise RuntimeError(f"DatabaseBackupApp compilation failed with exit code {res.returncode}")
@@ -107,7 +124,7 @@ def compile_binaries():
 
     # 2. Installer
     print("[BUILD] Compiling Setup_DatabaseBackup.spec...")
-    cmd_inst = [sys.executable, "-m", "PyInstaller", "--clean", "--noconfirm", "Setup_DatabaseBackup.spec"]
+    cmd_inst = [sys.executable, "-m", "PyInstaller", "--noconfirm", "Setup_DatabaseBackup.spec"]
     res2 = subprocess.run(cmd_inst, cwd=BASE_DIR)
     if res2.returncode != 0:
         raise RuntimeError(f"Setup_DatabaseBackup compilation failed with exit code {res2.returncode}")

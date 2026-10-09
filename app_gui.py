@@ -72,7 +72,11 @@ from backup_core import (
     # Section 9: Server Clean Up — Storage Monitor
     scan_storage_drives,
     run_storage_monitor,
-    send_test_storage_email
+    send_test_storage_email,
+    # Module 3: Performance Maintenance Scheduler
+    get_performance_scheduler_status,
+    enable_performance_scheduler,
+    disable_performance_scheduler
 )
 
 # -----------------------------------------------------------------------------
@@ -2454,12 +2458,170 @@ class BackupAutomationApp(ctk.CTk):
             font=ctk.CTkFont(size=12)
         )
         self.perf_backup_chk.pack(side="left", padx=(0, 25))
-        self.perf_backup_chk.select()
+        if self.config_data.get("PERF_EXECUTE_SAFETY_BACKUP", True):
+            self.perf_backup_chk.select()
+        else:
+            self.perf_backup_chk.deselect()
 
         ctk.CTkLabel(row2, text="FillFactor:", font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 6))
         self.perf_ff_entry = ctk.CTkEntry(row2, width=60, justify="center")
-        self.perf_ff_entry.insert(0, "80")
+        self.perf_ff_entry.insert(0, str(self.config_data.get("PERF_FILL_FACTOR", 80)))
         self.perf_ff_entry.pack(side="left", padx=(0, 15))
+
+        # ── Maintenance Schedule Card (Daily, Weekly, Monthly ONLY) ───────
+        perf_sched_card = ctk.CTkFrame(scroll, corner_radius=8, fg_color=("#1e293b", "#111827"), border_width=1, border_color="#374151")
+        perf_sched_card.pack(fill="x", padx=20, pady=(0, 15))
+
+        ctk.CTkLabel(
+            perf_sched_card,
+            text="SCHEDULE PARAMETERS & RECOVERY TRIGGERS",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#34d399"
+        ).pack(anchor="w", padx=15, pady=(12, 4))
+
+        # 1. Frequency Segmented Button (Daily, Weekly, Monthly ONLY)
+        p_freq_row = ctk.CTkFrame(perf_sched_card, fg_color="transparent")
+        p_freq_row.pack(fill="x", padx=15, pady=(4, 8))
+
+        ctk.CTkLabel(p_freq_row, text="Frequency:", font=ctk.CTkFont(size=12, weight="bold"), text_color="#cbd5e1").pack(side="left", padx=(0, 15))
+
+        self.perf_sched_freq_seg = ctk.CTkSegmentedButton(
+            p_freq_row,
+            values=["Daily", "Weekly", "Monthly"],
+            command=self._on_perf_freq_changed,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            height=32
+        )
+        self.perf_sched_freq_seg.pack(side="left", fill="x", expand=True)
+
+        # 2. Dynamic Recurrence Detail Container
+        self.perf_detail_frame = ctk.CTkFrame(perf_sched_card, fg_color="#0f172a", corner_radius=6, border_width=1, border_color="#334155")
+        self.perf_detail_frame.pack(fill="x", padx=15, pady=(0, 10))
+
+        # 2A: Weekly Sub-Frame
+        self.perf_weekly_frame = ctk.CTkFrame(self.perf_detail_frame, fg_color="transparent")
+        ctk.CTkLabel(self.perf_weekly_frame, text="Active Day:", font=ctk.CTkFont(size=12, weight="bold"), text_color="#94a3b8").pack(side="left", padx=(12, 10), pady=8)
+        self.perf_day_var = tk.StringVar(value=self.config_data.get("PERF_SCHEDULE_DAY", "Sun"))
+        self.perf_day_seg = ctk.CTkSegmentedButton(
+            self.perf_weekly_frame,
+            values=["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+            variable=self.perf_day_var,
+            command=lambda v: self._update_perf_schedule_summary(),
+            font=ctk.CTkFont(size=11, weight="bold"),
+            height=28
+        )
+        self.perf_day_seg.pack(side="left", padx=(0, 12), pady=8)
+
+        # 2B: Monthly Sub-Frame
+        self.perf_monthly_frame = ctk.CTkFrame(self.perf_detail_frame, fg_color="transparent")
+        ctk.CTkLabel(self.perf_monthly_frame, text="Day of Month:", font=ctk.CTkFont(size=12, weight="bold"), text_color="#94a3b8").pack(side="left", padx=(12, 10), pady=8)
+        self.perf_dom_var = tk.StringVar(value=str(self.config_data.get("PERF_SCHEDULE_DOM", "1")))
+        self.perf_dom_entry = ctk.CTkEntry(self.perf_monthly_frame, textvariable=self.perf_dom_var, width=50, justify="center", font=ctk.CTkFont(size=12, weight="bold"))
+        self.perf_dom_entry.pack(side="left", padx=(0, 10), pady=8)
+        self.perf_dom_entry.bind("<KeyRelease>", lambda e: self._update_perf_schedule_summary())
+        for dom_lbl, dom_v in [("1st of Month", "1"), ("15th of Month", "15"), ("Last Day (28th)", "28")]:
+            ctk.CTkButton(
+                self.perf_monthly_frame, text=dom_lbl, width=105, height=26, font=ctk.CTkFont(size=10, weight="bold"),
+                fg_color="#334155", hover_color="#475569",
+                command=lambda v=dom_v: (self.perf_dom_var.set(v), self._update_perf_schedule_summary())
+            ).pack(side="left", padx=3)
+
+        # 2C: Daily Sub-Frame
+        self.perf_daily_frame = ctk.CTkFrame(self.perf_detail_frame, fg_color="transparent")
+        ctk.CTkLabel(self.perf_daily_frame, text="📅 Runs maintenance automatically every single day (7 days a week)", font=ctk.CTkFont(size=12, weight="bold"), text_color="#38bdf8").pack(anchor="w", padx=15, pady=8)
+
+        # 3. Execution Time Row (24h format only!)
+        p_time_row = ctk.CTkFrame(perf_sched_card, fg_color="transparent")
+        p_time_row.pack(fill="x", padx=15, pady=(0, 8))
+
+        ctk.CTkLabel(p_time_row, text="Execution Time (24h format):", font=ctk.CTkFont(size=13, weight="bold")).pack(side="left", padx=(0, 12))
+
+        self.perf_sched_time_entry = ctk.CTkEntry(p_time_row, width=80, font=ctk.CTkFont(family="Consolas", size=13, weight="bold"), justify="center")
+        self.perf_sched_time_entry.insert(0, self.config_data.get("PERF_SCHEDULE_TIME", "02:00"))
+        self.perf_sched_time_entry.pack(side="left")
+        self.perf_sched_time_entry.bind("<KeyRelease>", lambda e: self._update_perf_schedule_summary())
+
+        self.perf_time_12h_lbl = ctk.CTkLabel(p_time_row, text="(2:00 AM)", font=ctk.CTkFont(size=12, weight="bold"), text_color="#38bdf8")
+        self.perf_time_12h_lbl.pack(side="left", padx=(10, 15))
+
+        # Quick 24h Presets
+        ctk.CTkLabel(p_time_row, text="Quick Presets:", font=ctk.CTkFont(size=11), text_color="#94a3b8").pack(side="left", padx=(5, 6))
+        for q_val in ["01:00", "02:00", "03:00", "06:00", "12:00", "18:00", "22:00", "23:00"]:
+            ctk.CTkButton(
+                p_time_row,
+                text=q_val,
+                width=55,
+                height=24,
+                font=ctk.CTkFont(size=10, weight="bold"),
+                fg_color="#334155",
+                hover_color="#475569",
+                command=lambda v=q_val: self._set_perf_quick_time(v)
+            ).pack(side="left", padx=2)
+
+        # 4. Schedule Live Plan Banner (Green rounded card)
+        self.perf_plan_banner = ctk.CTkLabel(
+            perf_sched_card,
+            text="📅 Plan: Every Sunday at 02:00 (24h: 02:00)",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#a7f3d0",
+            fg_color="#064e3b",
+            corner_radius=6,
+            height=30
+        )
+        self.perf_plan_banner.pack(fill="x", padx=15, pady=(0, 10))
+
+        # 5. Startup Recovery Trigger Checkbox
+        self.perf_boot_chk = ctk.CTkCheckBox(
+            perf_sched_card,
+            text="Register Startup Recovery Trigger (Automatically execute at system boot if missed)",
+            font=ctk.CTkFont(size=12),
+            text_color="#d1d5db"
+        )
+        self.perf_boot_chk.pack(anchor="w", padx=15, pady=(0, 12))
+        if self.config_data.get("PERF_SCHEDULE_BOOT", True):
+            self.perf_boot_chk.select()
+
+        # 6. Action buttons and live status badge
+        sched_btn_row = ctk.CTkFrame(perf_sched_card, fg_color="transparent")
+        sched_btn_row.pack(fill="x", padx=15, pady=(0, 15))
+
+        self.btn_enable_perf_sched = ctk.CTkButton(
+            sched_btn_row,
+            text="✔ Apply Maintenance Schedule",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color="#10b981",
+            hover_color="#059669",
+            height=38,
+            width=230,
+            command=self._enable_perf_schedule
+        )
+        self.btn_enable_perf_sched.pack(side="left", padx=(0, 10))
+
+        self.btn_disable_perf_sched = ctk.CTkButton(
+            sched_btn_row,
+            text="✖ Disable Schedule",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color="#ef4444",
+            hover_color="#dc2626",
+            height=38,
+            width=160,
+            command=self._disable_perf_schedule
+        )
+        self.btn_disable_perf_sched.pack(side="left", padx=(0, 15))
+
+        self.perf_sched_status_badge = ctk.CTkLabel(
+            sched_btn_row,
+            text="○ Checking status...",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#9ca3af"
+        )
+        self.perf_sched_status_badge.pack(side="left", padx=5)
+
+        # Initialize schedule view & status
+        init_freq = self.config_data.get("PERF_SCHEDULE_FREQ", "Weekly")
+        self.perf_sched_freq_seg.set(init_freq)
+        self._on_perf_freq_changed(init_freq)
+        self._refresh_perf_schedule_status()
 
         # ── Action Buttons Row ─────────────────────────────────────────
         btn_frame = ctk.CTkFrame(scroll, fg_color="transparent")
@@ -2689,6 +2851,138 @@ class BackupAutomationApp(ctk.CTk):
         else:
             messagebox.showwarning("No Sheet ID", "Google Sheet ID is not configured in Settings.")
 
+    def _on_perf_freq_changed(self, value):
+        """Switches sub-frames when performance maintenance frequency changes."""
+        if hasattr(self, "perf_weekly_frame"):
+            self.perf_weekly_frame.pack_forget()
+        if hasattr(self, "perf_monthly_frame"):
+            self.perf_monthly_frame.pack_forget()
+        if hasattr(self, "perf_daily_frame"):
+            self.perf_daily_frame.pack_forget()
+
+        if value == "Weekly" and hasattr(self, "perf_weekly_frame"):
+            self.perf_weekly_frame.pack(fill="x")
+        elif value == "Monthly" and hasattr(self, "perf_monthly_frame"):
+            self.perf_monthly_frame.pack(fill="x")
+        elif hasattr(self, "perf_daily_frame"):
+            self.perf_daily_frame.pack(fill="x")
+
+        self._update_perf_schedule_summary()
+
+    def _set_perf_quick_time(self, val):
+        """Sets the performance maintenance schedule time entry from a quick preset button."""
+        if hasattr(self, "perf_sched_time_entry"):
+            self.perf_sched_time_entry.delete(0, "end")
+            self.perf_sched_time_entry.insert(0, val)
+        self._update_perf_schedule_summary()
+
+    def _update_perf_schedule_summary(self):
+        """Updates 12h label and dynamic plan banner for performance maintenance."""
+        if not hasattr(self, "perf_sched_time_entry") or not hasattr(self, "perf_plan_banner"):
+            return
+
+        time_str = self.perf_sched_time_entry.get().strip() or "02:00"
+        m = re.match(r"^([01]?[0-9]|2[0-3]):([0-5][0-9])$", time_str)
+        if m:
+            hh = int(m.group(1))
+            mm = m.group(2)
+            suffix = "AM" if hh < 12 else "PM"
+            hh12 = hh if (1 <= hh <= 12) else (hh - 12 if hh > 12 else 12)
+            time_12h = f"{hh12}:{mm} {suffix}"
+            if hasattr(self, "perf_time_12h_lbl"):
+                self.perf_time_12h_lbl.configure(text=f"({time_12h})", text_color="#38bdf8")
+        else:
+            if hasattr(self, "perf_time_12h_lbl"):
+                self.perf_time_12h_lbl.configure(text="(Invalid 24h Time)", text_color="#ef4444")
+            time_12h = time_str
+
+        freq = self.perf_sched_freq_seg.get() if hasattr(self, "perf_sched_freq_seg") else "Weekly"
+        day_map = {
+            "Mon": "Monday", "Tue": "Tuesday", "Wed": "Wednesday",
+            "Thu": "Thursday", "Fri": "Friday", "Sat": "Saturday", "Sun": "Sunday"
+        }
+        if freq == "Daily":
+            desc = f"📅 Plan: Every Day at {time_12h} (24h: {time_str})"
+        elif freq == "Monthly":
+            dom = self.perf_dom_var.get().strip() if hasattr(self, "perf_dom_var") else "1"
+            dom = dom or "1"
+            desc = f"📅 Plan: Day {dom} of every month at {time_12h} (24h: {time_str})"
+        else:  # Weekly
+            d = self.perf_day_var.get() if hasattr(self, "perf_day_var") else "Sun"
+            d_name = day_map.get(d, d)
+            desc = f"📅 Plan: Every {d_name} at {time_12h} (24h: {time_str})"
+
+        self.perf_plan_banner.configure(text=desc)
+
+    def _refresh_perf_schedule_status(self):
+        """Queries Windows Task Scheduler for the performance maintenance task status."""
+        if not hasattr(self, "perf_sched_status_badge"):
+            return
+        from backup_core import get_performance_scheduler_status
+        active, status_desc, next_run = get_performance_scheduler_status()
+        if active:
+            txt = f"● {status_desc}"
+            if next_run:
+                txt += f" | Next: {next_run}"
+            self.perf_sched_status_badge.configure(text=txt, text_color="#10b981")
+        else:
+            self.perf_sched_status_badge.configure(text="○ Inactive / Not Scheduled", text_color="#9ca3af")
+
+    def _enable_perf_schedule(self):
+        """Saves and enables automated performance maintenance in Windows Task Scheduler."""
+        time_str = self.perf_sched_time_entry.get().strip() or "02:00"
+        if not re.match(r"^([01]?[0-9]|2[0-3]):[0-5][0-9]$", time_str):
+            messagebox.showwarning("Invalid Time Format", "Please enter a valid 24-hour time format (e.g. 02:00, 14:30, 23:00).")
+            return
+
+        freq = self.perf_sched_freq_seg.get()
+        day_val = self.perf_day_var.get()
+        dom_val = self.perf_dom_var.get().strip() or "1"
+        on_boot = bool(self.perf_boot_chk.get())
+
+        self.config_data["PERF_SCHEDULE_ENABLED"] = True
+        self.config_data["PERF_SCHEDULE_FREQ"] = freq
+        self.config_data["PERF_SCHEDULE_DAY"] = day_val
+        self.config_data["PERF_SCHEDULE_DOM"] = dom_val
+        self.config_data["PERF_SCHEDULE_TIME"] = time_str
+        self.config_data["PERF_SCHEDULE_BOOT"] = on_boot
+        self.config_data["PERF_EXECUTE_SAFETY_BACKUP"] = bool(self.perf_backup_chk.get())
+        try:
+            self.config_data["PERF_FILL_FACTOR"] = int(self.perf_ff_entry.get().strip())
+        except Exception:
+            self.config_data["PERF_FILL_FACTOR"] = 80
+        save_config(self.config_data)
+
+        from backup_core import enable_performance_scheduler
+        ok, msg = enable_performance_scheduler(
+            freq=freq,
+            day=day_val.upper()[:3],
+            time_str=time_str,
+            day_of_month=dom_val,
+            on_boot=on_boot
+        )
+        if ok:
+            self.append_log(f"[PERFORMANCE] Automation configured: {msg}", "info")
+            messagebox.showinfo("Automation Configured", f"{msg}\n\nTask: Database Cloud Backup - Performance Maintenance\nSaved to config.json.")
+        else:
+            self.append_log(f"[PERFORMANCE] Automation error: {msg}", "error")
+            messagebox.showerror("Configuration Error", f"Failed to configure performance maintenance automation:\n{msg}")
+
+        self._refresh_perf_schedule_status()
+
+    def _disable_perf_schedule(self):
+        """Unregisters the automated performance maintenance task from Windows."""
+        if messagebox.askyesno("Confirm", "Are you sure you want to disable automatic database performance maintenance?"):
+            from backup_core import disable_performance_scheduler
+            ok, msg = disable_performance_scheduler()
+            self.config_data["PERF_SCHEDULE_ENABLED"] = False
+            save_config(self.config_data)
+            if ok:
+                self.append_log(f"[PERFORMANCE] Automation disabled: {msg}", "info")
+                messagebox.showinfo("Automation Disabled", "Performance maintenance automation schedule was removed.")
+            else:
+                messagebox.showerror("Error", f"Failed to disable automation:\n{msg}")
+            self._refresh_perf_schedule_status()
 
 
 def main():
