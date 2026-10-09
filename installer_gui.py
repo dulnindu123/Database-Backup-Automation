@@ -823,7 +823,20 @@ class InstallerApp(ctk.CTk):
             messagebox.showinfo("Success", msg)
 
             if self.cb_launch.get() and os.path.exists(target_exe):
-                os.startfile(target_exe)
+                try:
+                    os.startfile(target_exe)
+                except Exception as launch_err:
+                    err_str = str(launch_err)
+                    if "4551" in err_str or "application control" in err_str.lower():
+                        messagebox.showwarning(
+                            "Windows Smart App Control Notice",
+                            f"Database Cloud Backup setup completed successfully!\n\n"
+                            f"Windows Smart App Control / Application Control policy prevented automatic startup of the newly compiled executable:\n"
+                            f"{target_exe}\n\n"
+                            f"To run the app, add an exclusion in Windows Security or turn Smart App Control to Evaluation/Off."
+                        )
+                    else:
+                        messagebox.showwarning("Notice", f"Installation completed, but could not auto-launch application:\n{launch_err}")
 
             self.destroy()
 

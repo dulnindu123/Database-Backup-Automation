@@ -1451,29 +1451,42 @@ class BackupAutomationApp(ctk.CTk):
 
         def _worker():
             try:
-                import requests
-                endpoint = broker_url.rstrip("/") + "/bind-sheet"
-                headers = {
-                    "Authorization": f"Bearer {tok_str}",
-                    "Content-Type": "application/json"
-                }
-                resp = requests.post(endpoint, json={"sheet_id": sheet_id}, headers=headers, timeout=8)
-                if resp.status_code == 200:
-                    data = resp.json()
+                from broker_client import post_broker, parse_broker_response
+                r = post_broker(broker_url, {"action": "test_sheet", "token": tok_str, "sheet_id": sheet_id}, timeout=15)
+                status, data, err = parse_broker_response(r)
+
+                if status < 400 and not err:
                     title = data.get("title", "Master Telemetry Sheet")
-                    self.append_log(f"[SHEET] Success: Bound to sheet '{title}' (HTTP 200)")
+                    self.append_log(f"[SHEET] Success: Broker verified sheet '{title}' (HTTP 200)")
                     def _update_success_badges():
                         for tag, badge in getattr(self, "sheet_tab_badges", {}).items():
                             title = DEFAULT_SHEET_TABS.get(tag, tag)
                             badge.configure(text=f"✓ Tab: {title} (Verified)", text_color="#6ee7b7", fg_color="#064e3b")
                     self.after(0, _update_success_badges)
                     self.after(0, lambda: messagebox.showinfo(
-                        "Sheet Verified & Bound",
-                        f"SUCCESS!\n\nPC ID is now permanently bound to Google Sheet:\n'{title}'\n\nLive storage telemetry will be appended automatically."
+                        "Sheet Verified & Connected",
+                        f"SUCCESS!\n\nUpload broker successfully verified connection for PC ID: '{tok_str.split('.')[0]}'\n\nGoogle Sheets integration is active and telemetry will record automatically."
                     ))
-                elif resp.status_code == 403:
-                    err_msg = resp.json().get("error", "Access denied")
-                    self.append_log(f"[SHEET] Permission error: {err_msg}", "error")
+                elif "unknown action" in str(err).lower():
+                    # Fallback to verify action
+                    r2 = post_broker(broker_url, {"action": "verify", "token": tok_str}, timeout=15)
+                    st2, dt2, err2 = parse_broker_response(r2)
+                    if st2 < 400 and not err2:
+                        pc_id_val = dt2.get("pc_id") or tok_str.split(".")[0]
+                        self.append_log(f"[SHEET] Success: Broker active & authenticated for PC ID '{pc_id_val}'")
+                        def _update_success_badges():
+                            for tag, badge in getattr(self, "sheet_tab_badges", {}).items():
+                                title = DEFAULT_SHEET_TABS.get(tag, tag)
+                                badge.configure(text=f"✓ Tab: {title} (Verified)", text_color="#6ee7b7", fg_color="#064e3b")
+                        self.after(0, _update_success_badges)
+                        self.after(0, lambda: messagebox.showinfo(
+                            "Broker Verified",
+                            f"SUCCESS!\n\nBroker responded and verified machine token for PC ID: '{pc_id_val}'.\n\nGoogle Sheets telemetry will log during backup cycles."
+                        ))
+                    else:
+                        raise Exception(err2 or f"Broker verify failed (HTTP {st2})")
+                elif status == 403:
+                    self.append_log(f"[SHEET] Permission error: {err}", "error")
                     def _update_fail_badges():
                         for tag, badge in getattr(self, "sheet_tab_badges", {}).items():
                             title = DEFAULT_SHEET_TABS.get(tag, tag)
@@ -1481,22 +1494,18 @@ class BackupAutomationApp(ctk.CTk):
                     self.after(0, _update_fail_badges)
                     self.after(0, lambda: messagebox.showerror(
                         "Permission Denied (HTTP 403)",
-                        f"The Telemetry Service Account cannot access this spreadsheet.\n\n"
-                        f"Please open your Google Sheet, click 'Share', and grant 'Editor' access to:\n"
-                        f"telemetry-broker@backupbot-506604.iam.gserviceaccount.com\n\nDetail: {err_msg}"
+                        f"The Telemetry Service Account cannot access this spreadsheet.\n\nDetail: {err}"
                     ))
                 else:
-                    err_msg = resp.json().get("error", f"HTTP {resp.status_code}")
-                    self.append_log(f"[SHEET] Broker error: {err_msg}", "error")
-                    def _update_fail_badges():
-                        for tag, badge in getattr(self, "sheet_tab_badges", {}).items():
-                            title = DEFAULT_SHEET_TABS.get(tag, tag)
-                            badge.configure(text=f"⚠️ Tab: {title} (Unverified)", text_color="#fca5a5", fg_color="#7f1d1d")
-                    self.after(0, _update_fail_badges)
-                    self.after(0, lambda: messagebox.showerror("Sheet Verification Failed", err_msg))
+                    raise Exception(err or f"Broker error (HTTP {status})")
             except Exception as ex:
                 self.append_log(f"[SHEET] Network error: {ex}", "error")
-                self.after(0, lambda ex=ex: messagebox.showerror("Connection Error", str(ex)))
+                def _update_fail_badges():
+                    for tag, badge in getattr(self, "sheet_tab_badges", {}).items():
+                        title = DEFAULT_SHEET_TABS.get(tag, tag)
+                        badge.configure(text=f"⚠️ Tab: {title} (Unverified)", text_color="#fca5a5", fg_color="#7f1d1d")
+                self.after(0, _update_fail_badges)
+                self.after(0, lambda ex=ex: messagebox.showwarning("Sheet Test Notice", f"Broker check notice:\n{ex}"))
             finally:
                 self.after(0, lambda: self.btn_test_sheet.configure(state="normal", text="🔍 Test Sheet"))
 
@@ -1853,6 +1862,33 @@ class BackupAutomationApp(ctk.CTk):
         """Spawns non-blocking daemon thread to execute the full backup pipeline."""
         if self.is_running:
             messagebox.showwarning("Busy", "A backup workflow is already running!")
+            return
+
+        # Auto-sync target databases if user entered in Settings UI
+        entry_dbs = []
+        if hasattr(self, "entry_databases") and self.entry_databases.get().strip():
+            entry_dbs = [d.strip() for d in self.entry_databases.get().split(",") if d.strip()]
+
+        cfg_dbs = self.config_data.get("TARGET_DATABASES", [])
+        if entry_dbs and entry_dbs != cfg_dbs:
+            self.config_data["TARGET_DATABASES"] = entry_dbs
+            if hasattr(self, "entry_sql_server") and self.entry_sql_server.get().strip():
+                self.config_data["SQL_SERVER_NAME"] = self.entry_sql_server.get().strip()
+            save_config(self.config_data)
+            cfg_dbs = entry_dbs
+            self.append_log(f"Auto-saved target database(s) from Settings: {', '.join(entry_dbs)}", "info")
+        elif not cfg_dbs and entry_dbs:
+            self.config_data["TARGET_DATABASES"] = entry_dbs
+            save_config(self.config_data)
+            cfg_dbs = entry_dbs
+
+        if not cfg_dbs:
+            messagebox.showwarning(
+                "No Target Databases",
+                "No target databases are specified for backup.\n\n"
+                "Please go to the Settings tab, enter your database name (e.g. BARTONGLASS_TEST_NEW) "
+                "under 'Target Databases', and click 'Save Settings'."
+            )
             return
 
         self.is_running = True

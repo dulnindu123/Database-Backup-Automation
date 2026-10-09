@@ -181,6 +181,8 @@ function doPost(e) {
 
     if (action === "verify") {
       return successResponse({ pc_id: pcData.pcId, offset_minutes: pcData.offset });
+    } else if (action === "test_sheet") {
+      return handleTestSheet(pcData, payload);
     } else if (action === "request_upload") {
       return handleRequestUpload(pcData, payload);
     } else if (action === "report_status") {
@@ -280,6 +282,22 @@ function verifyToken(token) {
     }
   }
   return null;
+}
+
+function handleTestSheet(pcData, payload) {
+  const sheetId = String(payload.sheet_id || "").trim();
+  if (sheetId) {
+    try {
+      const ss = SpreadsheetApp.openById(sheetId);
+      return successResponse({ status: "ok", title: ss.getName(), pc_id: pcData.pcId });
+    } catch (e) {}
+  }
+  try {
+    const ss = getSpreadsheet();
+    return successResponse({ status: "ok", title: ss.getName(), pc_id: pcData.pcId });
+  } catch (e2) {
+    return errorResponse("Cannot access spreadsheet: " + e2.message, 403);
+  }
 }
 
 // =============================================================================

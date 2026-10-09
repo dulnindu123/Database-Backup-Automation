@@ -1795,9 +1795,11 @@ def enable_scheduler(executable_path=None, days="MON", time_str="02:00", as_syst
 
     # Windows Task Scheduler Implementation
     if executable_path.startswith("python "):
-        cmd_run = f'{executable_path} --auto'
+        cmd_run_subp = f'{executable_path} --auto'
+        cmd_run_elev = f'{executable_path} --auto'
     else:
-        cmd_run = f'\\"{executable_path}\\" --auto'
+        cmd_run_subp = f'"{executable_path}" --auto'
+        cmd_run_elev = f'\\"{executable_path}\\" --auto'
 
     if is_daily:
         schedule_args = f'/sc daily /st {time_str}'
@@ -1810,19 +1812,19 @@ def enable_scheduler(executable_path=None, days="MON", time_str="02:00", as_syst
         subprocess.run(["schtasks", "/delete", "/tn", TASK_SCHEDULER_NAME, "/f"], capture_output=True)
         
         target_task = SYSTEM_SERVICE_TASK_NAME
-        cmd_args = ["schtasks", "/create", "/tn", target_task, "/tr", cmd_run, "/ru", "NT AUTHORITY\\SYSTEM", "/rl", "HIGHEST", "/f"]
+        cmd_args = ["schtasks", "/create", "/tn", target_task, "/tr", cmd_run_subp, "/ru", "NT AUTHORITY\\SYSTEM", "/rl", "HIGHEST", "/f"]
         if days == "EVERYDAY":
             cmd_args.extend(["/sc", "daily", "/st", time_str])
         else:
             cmd_args.extend(["/sc", "weekly", "/d", ",".join(ordered_days), "/st", time_str])
         
         if not is_admin():
-            cmd_str = f'schtasks /create /tn "{target_task}" /tr "{cmd_run}" {schedule_args} /ru "NT AUTHORITY\\SYSTEM" /rl HIGHEST /f'
+            cmd_str = f'schtasks /create /tn "{target_task}" /tr "{cmd_run_elev}" {schedule_args} /ru "NT AUTHORITY\\SYSTEM" /rl HIGHEST /f'
             ok = run_command_elevated(cmd_str)
             if ok:
                 emit_log(f"Unattended System Service '{target_task}' configured via elevated prompt.")
                 if on_boot:
-                    boot_cmd = f'schtasks /create /tn "{DAEMON_SERVICE_TASK_NAME}" /tr "{cmd_run}" /sc ONSTART /ru "NT AUTHORITY\\SYSTEM" /rl HIGHEST /f'
+                    boot_cmd = f'schtasks /create /tn "{DAEMON_SERVICE_TASK_NAME}" /tr "{cmd_run_elev}" /sc ONSTART /ru "NT AUTHORITY\\SYSTEM" /rl HIGHEST /f'
                     run_command_elevated(boot_cmd)
                 return True, f"Windows System Service Active: {friendly_schedule} (Unattended Session 0)."
             else:
@@ -1832,7 +1834,7 @@ def enable_scheduler(executable_path=None, days="MON", time_str="02:00", as_syst
             if res.returncode == 0:
                 emit_log(f"Unattended System Service '{target_task}' created successfully.")
                 if on_boot:
-                    boot_args = ["schtasks", "/create", "/tn", DAEMON_SERVICE_TASK_NAME, "/tr", cmd_run, "/sc", "ONSTART", "/ru", "NT AUTHORITY\\SYSTEM", "/rl", "HIGHEST", "/f"]
+                    boot_args = ["schtasks", "/create", "/tn", DAEMON_SERVICE_TASK_NAME, "/tr", cmd_run_subp, "/sc", "ONSTART", "/ru", "NT AUTHORITY\\SYSTEM", "/rl", "HIGHEST", "/f"]
                     subprocess.run(boot_args, capture_output=True)
                 return True, f"Windows System Service Active: {friendly_schedule} (Unattended Session 0)."
             else:
@@ -1844,7 +1846,7 @@ def enable_scheduler(executable_path=None, days="MON", time_str="02:00", as_syst
         subprocess.run(["schtasks", "/delete", "/tn", DAEMON_SERVICE_TASK_NAME, "/f"], capture_output=True)
         
         target_task = TASK_SCHEDULER_NAME
-        user_cmd_args = ["schtasks", "/create", "/tn", target_task, "/tr", cmd_run, "/f"]
+        user_cmd_args = ["schtasks", "/create", "/tn", target_task, "/tr", cmd_run_subp, "/f"]
         if days == "EVERYDAY":
             user_cmd_args.extend(["/sc", "daily", "/st", time_str])
         else:
@@ -1859,7 +1861,7 @@ def enable_scheduler(executable_path=None, days="MON", time_str="02:00", as_syst
             if not is_admin() and ("access is denied" in (err or "").lower() or "denied" in (err or "").lower()):
                 emit_log(f"User task creation denied. Requesting elevated administrator registration...")
                 elev_sched = " ".join(user_cmd_args[6:])
-                cmd_str = f'schtasks /create /tn "{target_task}" /tr "{cmd_run}" {elev_sched} /f'
+                cmd_str = f'schtasks /create /tn "{target_task}" /tr "{cmd_run_elev}" {elev_sched} /f'
                 if run_command_elevated(cmd_str):
                     emit_log(f"Task '{target_task}' registered via elevated UAC prompt ({friendly_schedule}).")
                     return True, f"Scheduled successfully (Elevated): {friendly_schedule}."
@@ -1955,9 +1957,11 @@ def enable_performance_scheduler(executable_path=None, freq="Weekly", day="SUN",
             executable_path = f'python "{os.path.join(BASE_DIR, "auto_backup.py")}"'
 
     if executable_path.startswith("python "):
-        cmd_run = f'{executable_path} --performance'
+        cmd_run_subp = f'{executable_path} --performance'
+        cmd_run_elev = f'{executable_path} --performance'
     else:
-        cmd_run = f'\\"{executable_path}\\" --performance'
+        cmd_run_subp = f'"{executable_path}" --performance'
+        cmd_run_elev = f'\\"{executable_path}\\" --performance'
 
     freq_norm = str(freq).strip().capitalize()
     time_val = str(time_str).strip()
@@ -1991,12 +1995,12 @@ def enable_performance_scheduler(executable_path=None, freq="Weekly", day="SUN",
     subprocess.run(["schtasks", "/delete", "/tn", PERF_BOOT_TASK_NAME, "/f"], capture_output=True)
 
     if is_admin():
-        cmd_args = ["schtasks", "/create", "/tn", PERF_TASK_NAME, "/tr", cmd_run, "/ru", "NT AUTHORITY\\SYSTEM", "/rl", "HIGHEST", "/f"] + schedule_args
+        cmd_args = ["schtasks", "/create", "/tn", PERF_TASK_NAME, "/tr", cmd_run_subp, "/ru", "NT AUTHORITY\\SYSTEM", "/rl", "HIGHEST", "/f"] + schedule_args
         res = subprocess.run(cmd_args, capture_output=True, text=True)
         if res.returncode == 0:
             emit_log(f"Performance maintenance task '{PERF_TASK_NAME}' registered (SYSTEM): {friendly_plan}")
             if on_boot:
-                boot_args = ["schtasks", "/create", "/tn", PERF_BOOT_TASK_NAME, "/tr", cmd_run, "/sc", "ONSTART", "/ru", "NT AUTHORITY\\SYSTEM", "/rl", "HIGHEST", "/f"]
+                boot_args = ["schtasks", "/create", "/tn", PERF_BOOT_TASK_NAME, "/tr", cmd_run_subp, "/sc", "ONSTART", "/ru", "NT AUTHORITY\\SYSTEM", "/rl", "HIGHEST", "/f"]
                 subprocess.run(boot_args, capture_output=True)
             return True, f"Automation Active: {friendly_plan} (System Service)"
         else:
@@ -2004,22 +2008,22 @@ def enable_performance_scheduler(executable_path=None, freq="Weekly", day="SUN",
             return False, f"Scheduler error: {err}"
     else:
         # Try elevated creation
-        elev_str = f'schtasks /create /tn "{PERF_TASK_NAME}" /tr "{cmd_run}" {" ".join(schedule_args)} /ru "NT AUTHORITY\\SYSTEM" /rl HIGHEST /f'
+        elev_str = f'schtasks /create /tn "{PERF_TASK_NAME}" /tr "{cmd_run_elev}" {" ".join(schedule_args)} /ru "NT AUTHORITY\\SYSTEM" /rl HIGHEST /f'
         ok = run_command_elevated(elev_str)
         if ok:
             emit_log(f"Performance maintenance task '{PERF_TASK_NAME}' registered via elevated UAC: {friendly_plan}")
             if on_boot:
-                elev_boot = f'schtasks /create /tn "{PERF_BOOT_TASK_NAME}" /tr "{cmd_run}" /sc ONSTART /ru "NT AUTHORITY\\SYSTEM" /rl HIGHEST /f'
+                elev_boot = f'schtasks /create /tn "{PERF_BOOT_TASK_NAME}" /tr "{cmd_run_elev}" /sc ONSTART /ru "NT AUTHORITY\\SYSTEM" /rl HIGHEST /f'
                 run_command_elevated(elev_boot)
             return True, f"Automation Active: {friendly_plan} (System Service)"
         else:
             # Fallback to current user task
-            user_args = ["schtasks", "/create", "/tn", PERF_TASK_NAME, "/tr", cmd_run, "/f"] + schedule_args
+            user_args = ["schtasks", "/create", "/tn", PERF_TASK_NAME, "/tr", cmd_run_subp, "/f"] + schedule_args
             res = subprocess.run(user_args, capture_output=True, text=True)
             if res.returncode == 0:
                 emit_log(f"Performance maintenance task '{PERF_TASK_NAME}' registered (User account): {friendly_plan}")
                 if on_boot:
-                    user_boot = ["schtasks", "/create", "/tn", PERF_BOOT_TASK_NAME, "/tr", cmd_run, "/sc", "ONLOGON", "/f"]
+                    user_boot = ["schtasks", "/create", "/tn", PERF_BOOT_TASK_NAME, "/tr", cmd_run_subp, "/sc", "ONLOGON", "/f"]
                     subprocess.run(user_boot, capture_output=True)
                 return True, f"Automation Active: {friendly_plan} (User Task)"
             err = res.stderr or res.stdout
