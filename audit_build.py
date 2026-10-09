@@ -21,6 +21,7 @@ ALLOWED_PACKAGE_ROOT_FILES = {
     "README.md",
     "CLIENT_INSTALLATION_GUIDE.md",
     "CLIENT_INSTALLATION_AND_OPERATIONS_GUIDE.docx",
+    "Google_Sheets_Architecture_and_Structure_Guide.docx",
     "app_icon.ico",
     "app_icon.png",
     "sha256_manifest.json",

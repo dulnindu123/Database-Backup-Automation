@@ -2765,7 +2765,7 @@ class BackupAutomationApp(ctk.CTk):
         frame = ctk.CTkFrame(parent, corner_radius=6, fg_color=("#334155", "#0f172a"), border_width=1, border_color="#1e293b")
         frame.grid(row=row, column=col, padx=5, pady=5, sticky="nsew")
         ctk.CTkLabel(frame, text=title, font=ctk.CTkFont(size=10, weight="bold"), text_color="#94a3b8").pack(anchor="w", padx=10, pady=(8, 2))
-        lbl = ctk.CTkLabel(frame, text=initial_value, font=ctk.CTkFont(size=13, weight="bold"), text_color="#ffffff")
+        lbl = ctk.CTkLabel(frame, text=initial_value, font=ctk.CTkFont(size=12, weight="bold"), text_color="#ffffff", wraplength=170)
         lbl.pack(anchor="w", padx=10, pady=(0, 8))
         return lbl
 
@@ -2814,20 +2814,56 @@ class BackupAutomationApp(ctk.CTk):
                 progress_cb=progress_cb
             )
 
+            def _clean_sql_ver(ver_str):
+                if not ver_str or ver_str == "Microsoft SQL Server":
+                    return "MSSQL"
+                short = re.sub(r' Edition.*', '', ver_str)
+                short = short.replace("Standard Developer", "Developer")
+                short = re.sub(r'\(.*?(Developer|Express|Enterprise|Standard).*?\)', r'(\1)', short)
+                return short.strip()
+
+            def _clean_checkdb(status):
+                if "clean" in status.lower() or "0 consistency errors" in status.lower():
+                    return "Clean (0 Errors)"
+                return status[:22]
+
+            def _clean_prebackup(status):
+                if "uploaded" in status.lower():
+                    return "Completed & Synced"
+                if "skipped" in status.lower():
+                    return "Skipped by Switch"
+                return status[:22]
+
             def _update_ui():
-                self.tile_sql_ver.configure(text=res.get("sql_version", "MSSQL")[:24])
+                self.tile_sql_ver.configure(text=_clean_sql_ver(res.get("sql_version", "MSSQL")))
                 self.tile_db_size.configure(text=f"{res.get('db_size_mb', 0):,} MB")
-                self.tile_checkdb.configure(text=res.get("checkdb_status", "Clean")[:22], text_color="#10b981" if "clean" in res.get("checkdb_status", "").lower() else "#ef4444")
-                self.tile_prebackup.configure(text=res.get("pre_backup_status", "N/A")[:22])
+                chk_text = _clean_checkdb(res.get("checkdb_status", "Clean"))
+                self.tile_checkdb.configure(
+                    text=chk_text,
+                    text_color="#10b981" if "clean" in chk_text.lower() else "#ef4444"
+                )
+                self.tile_prebackup.configure(text=_clean_prebackup(res.get("pre_backup_status", "N/A")))
                 self.tile_frag_before.configure(text=f"{res.get('frag_before_max', 0):.1f}%", text_color="#f59e0b")
                 self.tile_frag_after.configure(text=f"{res.get('frag_after_max', 0):.1f}%", text_color="#10b981")
                 self.tile_duration.configure(text=f"{res.get('duration_secs', 0):.1f}s")
-                self.tile_sheet_status.configure(text="✓ Logged to Sheet" if res.get("sheet_logged") else "Local Log Only", text_color="#10b981" if res.get("sheet_logged") else "#94a3b8")
+                self.tile_sheet_status.configure(
+                    text="✓ Logged to Sheet" if res.get("sheet_logged") else "Local Log Only",
+                    text_color="#10b981" if res.get("sheet_logged") else "#94a3b8"
+                )
 
                 self.btn_run_perf_maint.configure(state="normal", text="⚡  Run Full Maintenance Now")
                 self.btn_inspect_frag.configure(state="normal")
                 self.perf_status_lbl.configure(text="Status: ✅ Maintenance completed successfully!", text_color="#10b981")
-                messagebox.showinfo("Maintenance Complete", f"Database Maintenance Succeeded!\n\nDatabase: {target_db}\nCHECKDB: {res.get('checkdb_status')}\nFragmentation: {res.get('frag_before_max', 0):.1f}% -> {res.get('frag_after_max', 0):.1f}%\nDuration: {res.get('duration_secs')}s\nGoogle Sheet: {'Recorded' if res.get('sheet_logged') else 'Not Logged'}")
+                messagebox.showinfo(
+                    "Maintenance Complete",
+                    f"Database Maintenance Succeeded!\n\n"
+                    f"Database: {target_db}\n"
+                    f"DB Size: {res.get('db_size_mb', 0):,} MB\n"
+                    f"CHECKDB: {res.get('checkdb_status')}\n"
+                    f"Fragmentation: {res.get('frag_before_max', 0):.1f}% -> {res.get('frag_after_max', 0):.1f}%\n"
+                    f"Duration: {res.get('duration_secs')}s\n"
+                    f"Google Sheet: {'Recorded' if res.get('sheet_logged') else 'Not Logged'}"
+                )
 
             self.after(0, _update_ui)
         except Exception as e:
@@ -2850,25 +2886,33 @@ class BackupAutomationApp(ctk.CTk):
         from backup_core import inspect_index_fragmentation
         target_db = self.perf_db_var.get().strip()
         instance = self.perf_inst_var.get().strip()
+        sql_user = self.config_data.get("SQL_USERNAME", "")
+        sql_password = self.config_data.get("SQL_PASSWORD", "")
 
         try:
             self.after(0, lambda: self.perf_progress.set(0.5))
-            tables, max_frag = inspect_index_fragmentation(target_db, instance=instance)
+            tables, max_frag = inspect_index_fragmentation(
+                target_db, instance=instance, sql_user=sql_user, sql_password=sql_password
+            )
             self.after(0, lambda: self.perf_progress.set(1.0))
 
             def _update():
                 self.tile_frag_before.configure(text=f"{max_frag:.1f}%", text_color="#f59e0b")
                 self.perf_console.insert("end", f"\n--- Fragmentation Analysis for [{target_db}] ---\n")
-                self.perf_console.insert("end", f"Found {len(tables)} fragmented indexes (>10%). Max: {max_frag:.2f}%\n")
-                for t in tables[:30]:
-                    self.perf_console.insert("end", f"  • {t.get('table')}.{t.get('index')} ({t.get('type')}): {t.get('fragmentation')}%\n")
-                if len(tables) > 30:
-                    self.perf_console.insert("end", f"  ... and {len(tables) - 30} more indexes.\n")
+                if tables:
+                    self.perf_console.insert("end", f"Found {len(tables)} fragmented user indexes (>10%, >8 pages). Max: {max_frag:.2f}%\n")
+                    for t in tables[:30]:
+                        self.perf_console.insert("end", f"  • {t.get('table')}.{t.get('index')} ({t.get('type')}, {t.get('page_count', 0)} pages): {t.get('fragmentation')}%\n")
+                    if len(tables) > 30:
+                        self.perf_console.insert("end", f"  ... and {len(tables) - 30} more indexes.\n")
+                else:
+                    self.perf_console.insert("end", f"All user indexes (>8 pages) are healthy (<10% fragmented). No heavy fragmentation detected.\n")
                 self.perf_console.see("end")
 
                 self.btn_inspect_frag.configure(state="normal", text="🔍  Inspect Fragmentation Only")
                 self.btn_run_perf_maint.configure(state="normal")
-                self.perf_status_lbl.configure(text=f"Status: Found {len(tables)} fragmented indexes (Max {max_frag:.1f}%)", text_color="#38bdf8")
+                status_txt = f"Status: Found {len(tables)} fragmented indexes (Max {max_frag:.1f}%)" if tables else "Status: All indexes healthy (<10% frag)"
+                self.perf_status_lbl.configure(text=status_txt, text_color="#38bdf8")
 
             self.after(0, _update)
         except Exception as e:

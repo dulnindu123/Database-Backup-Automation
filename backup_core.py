@@ -2792,76 +2792,68 @@ def find_sqlcmd():
     return None
 
 
-def execute_sql_query(sql_query, instance="localhost", timeout=600):
-    """Executes a T-SQL query via sqlcmd.exe and returns (exit_code, output_text)."""
-    sqlcmd = find_sqlcmd()
-    if not sqlcmd:
-        return 1, "sqlcmd.exe not found on system PATH or SQL installation directories."
-    cmd = [sqlcmd, "-S", instance, "-E", "-Q", sql_query, "-h", "-1", "-W", "-C"]
-    try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        out = (res.stdout or res.stderr or "").strip()
-        return res.returncode, out
-    except subprocess.TimeoutExpired:
-        return 1, f"SQL Query timed out after {timeout} seconds."
-    except Exception as e:
-        return 1, f"Failed to execute SQL query: {e}"
+def execute_sql_query(sql_query, instance="localhost", sql_user="", sql_password="", timeout=600):
+    """Executes a T-SQL query via adaptive SQL CLI (sqlcmd/osql) and returns (exit_code, output_text)."""
+    code, stdout, stderr = execute_sql_query_adaptive(
+        sql_server=instance,
+        query=sql_query,
+        sql_user=sql_user,
+        sql_password=sql_password,
+        timeout=timeout
+    )
+    out = (stdout or stderr or "").strip()
+    return (0 if code == 0 else (code or 1)), out
 
 
-def inspect_index_fragmentation(target_db, instance="localhost", log_cb=None):
+def inspect_index_fragmentation(target_db, instance="localhost", sql_user="", sql_password="", log_cb=None):
     """
     Query 1: Inspects index fragmentation across tables using sys.dm_db_index_physical_stats.
+    Filters out trivial indexes (<=8 pages / single extent) which cannot physically be defragmented below 50%.
+    Correctly matches table object_id with index object_id (fixing accidental Cartesian product).
+    Uses COLLATE DATABASE_DEFAULT to prevent collation conflicts on custom collation databases.
     Returns: (list_of_dict, max_fragmentation_percent)
     """
     query = f"""
 SET NOCOUNT ON;
 USE [{target_db}];
-SELECT 
-    TableName = object_name(dm.object_id),
-    IndexName = i.name,
-    IndexType = dm.index_type_desc,
-    [%Fragmented] = CAST(avg_fragmentation_in_percent AS DECIMAL(5,2))
+SELECT 'FRAG_ROW:' + CAST(object_name(dm.object_id) AS VARCHAR(128)) + ':::' + 
+       CAST(i.name COLLATE DATABASE_DEFAULT AS VARCHAR(128)) + ':::' + 
+       CAST(dm.index_type_desc COLLATE DATABASE_DEFAULT AS VARCHAR(60)) + ':::' + 
+       CAST(CAST(dm.avg_fragmentation_in_percent AS DECIMAL(5,2)) AS VARCHAR(20)) + ':::' + 
+       CAST(dm.page_count AS VARCHAR(20))
 FROM sys.dm_db_index_physical_stats(db_id(), null, null, null, 'sampled') dm
-JOIN sys.indexes i ON dm.object_id = dm.object_id AND dm.index_id = i.index_id
-WHERE avg_fragmentation_in_percent > 10.0
-ORDER BY avg_fragmentation_in_percent DESC;
+JOIN sys.indexes i ON dm.object_id = i.object_id AND dm.index_id = i.index_id
+WHERE dm.avg_fragmentation_in_percent > 10.0
+  AND dm.page_count > 8
+  AND i.name IS NOT NULL
+  AND dm.index_id > 0
+ORDER BY dm.avg_fragmentation_in_percent DESC;
 """
-    code, out = execute_sql_query(query, instance=instance, timeout=300)
+    code, out = execute_sql_query(query, instance=instance, sql_user=sql_user, sql_password=sql_password, timeout=300)
     tables = []
     max_frag = 0.0
 
     if code == 0 and out:
         lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
         for ln in lines:
-            parts = re.split(r'\s{2,}|\t+', ln)
-            if len(parts) >= 4:
-                try:
-                    frag_val = float(parts[3])
-                except Exception:
-                    frag_val = 0.0
-                if frag_val > max_frag:
-                    max_frag = frag_val
-                tables.append({
-                    "table": parts[0],
-                    "index": parts[1],
-                    "type": parts[2],
-                    "fragmentation": frag_val
-                })
-            else:
-                tokens = ln.split()
-                if len(tokens) >= 2:
+            if "FRAG_ROW:" in ln:
+                payload = ln.split("FRAG_ROW:", 1)[1]
+                cols = payload.split(":::")
+                if len(cols) >= 4:
                     try:
-                        frag_val = float(tokens[-1])
-                        if frag_val > max_frag:
-                            max_frag = frag_val
-                        tables.append({
-                            "table": tokens[0],
-                            "index": tokens[1] if len(tokens) > 2 else "IDX",
-                            "type": "INDEX",
-                            "fragmentation": frag_val
-                        })
+                        frag_val = float(cols[3].strip())
                     except Exception:
-                        pass
+                        frag_val = 0.0
+                    page_cnt = int(cols[4].strip()) if len(cols) >= 5 and cols[4].strip().isdigit() else 0
+                    if frag_val > max_frag:
+                        max_frag = frag_val
+                    tables.append({
+                        "table": cols[0].strip(),
+                        "index": cols[1].strip(),
+                        "type": cols[2].strip(),
+                        "fragmentation": frag_val,
+                        "page_count": page_cnt
+                    })
     return tables, max_frag
 
 
@@ -2895,6 +2887,8 @@ def run_performance_query(
 
     target_db = target_db or config.get("DATABASE_NAME") or "master"
     instance = instance or config.get("SQL_SERVER_INSTANCE") or config.get("SQL_SERVER_NAME") or "localhost"
+    sql_user = config.get("SQL_USERNAME", "")
+    sql_password = config.get("SQL_PASSWORD", "")
 
     start_time = dt.now()
     now_str = start_time.strftime("%Y-%m-%d %H:%M:%S")
@@ -2911,30 +2905,36 @@ def run_performance_query(
     # Step 1: Probe Version & Size
     meta_sql = f"""
 SET NOCOUNT ON;
-SELECT 
-    CAST(SERVERPROPERTY('ProductVersion') AS VARCHAR(30)) + ' (' + CAST(SERVERPROPERTY('Edition') AS VARCHAR(40)) + ')' AS Version,
-    ISNULL((SELECT SUM(size)*8/1024 FROM sys.master_files WHERE database_id = DB_ID('{target_db}')), 0) AS SizeMB;
+SELECT 'VER_VAL:' + CAST(SERVERPROPERTY('ProductVersion') AS VARCHAR(30)) + ' (' + CAST(SERVERPROPERTY('Edition') AS VARCHAR(40)) + ')';
+SELECT 'SIZE_VAL:' + CAST(ISNULL((SELECT SUM(CAST(size AS BIGINT))*8/1024 FROM sys.master_files WHERE database_id = DB_ID('{target_db}')), 0) AS VARCHAR(30));
 """
-    code, meta_out = execute_sql_query(meta_sql, instance=instance)
+    code, meta_out = execute_sql_query(meta_sql, instance=instance, sql_user=sql_user, sql_password=sql_password)
     sql_version = "Microsoft SQL Server"
     db_size_mb = 0
     if code == 0 and meta_out:
-        lines = [ln.strip() for ln in meta_out.splitlines() if ln.strip()]
-        if lines:
-            parts = re.split(r'\s{2,}|\t+', lines[0])
-            if len(parts) >= 1: sql_version = parts[0]
-            if len(parts) >= 2:
-                try: db_size_mb = int(parts[1])
-                except Exception: pass
-    emit_log(f"SQL Server Version: {sql_version} | DB Size: {db_size_mb} MB", "info", log_cb)
+        for ln in meta_out.splitlines():
+            ln = ln.strip()
+            if ln.startswith("VER_VAL:"):
+                sql_version = ln.split("VER_VAL:", 1)[1].strip()
+            elif ln.startswith("SIZE_VAL:"):
+                try:
+                    db_size_mb = int(re.sub(r'[^\d]', '', ln.split("SIZE_VAL:", 1)[1]))
+                except Exception:
+                    pass
+    emit_log(f"SQL Server Version: {sql_version} | DB Size: {db_size_mb:,} MB", "info", log_cb)
 
     if progress_cb: progress_cb(0.25)
     if status_cb: status_cb("Executing Query 1: Index Fragmentation Analysis...")
 
     # Step 2: Query 1 (Index Fragmentation)
-    tables_before, frag_before_max = inspect_index_fragmentation(target_db, instance=instance, log_cb=log_cb)
+    tables_before, frag_before_max = inspect_index_fragmentation(
+        target_db, instance=instance, sql_user=sql_user, sql_password=sql_password, log_cb=log_cb
+    )
     frag_before_count = len(tables_before)
-    emit_log(f"Query 1: {frag_before_count} indexes fragmented (>10%). Max: {frag_before_max}%", "info", log_cb)
+    if frag_before_count > 0:
+        emit_log(f"Query 1: {frag_before_count} indexes fragmented (>10%, >8 pages). Max: {frag_before_max:.1f}%", "info", log_cb)
+    else:
+        emit_log(f"Query 1: All user indexes (>8 pages) healthy (<10% fragmented). Max: {frag_before_max:.1f}%", "info", log_cb)
 
     if inspect_only:
         if progress_cb: progress_cb(1.0)
@@ -2949,7 +2949,7 @@ SELECT
             "frag_before_count": frag_before_count,
             "tables_before": tables_before,
             "inspect_only": True,
-            "summary": f"Inspected {frag_before_count} fragmented indexes. Max: {frag_before_max}%"
+            "summary": f"Inspected {frag_before_count} fragmented indexes. Max: {frag_before_max:.1f}%"
         }
 
     # Step 3: Safety Pre-Maintenance Backup
@@ -2978,16 +2978,16 @@ SELECT
     if status_cb: status_cb("Running DBCC CHECKDB integrity validation...")
     emit_log(f"Running DBCC CHECKDB(N'{target_db}') WITH NO_INFOMSGS...", "info", log_cb)
     checkdb_sql = f"USE [{target_db}]; DBCC CHECKDB(N'{target_db}') WITH NO_INFOMSGS;"
-    c_code, c_out = execute_sql_query(checkdb_sql, instance=instance, timeout=600)
+    c_code, c_out = execute_sql_query(checkdb_sql, instance=instance, sql_user=sql_user, sql_password=sql_password, timeout=600)
     checkdb_status = "Clean (0 consistency errors)" if c_code == 0 else f"Errors: {c_out}"
     emit_log(f"CHECKDB Result: {checkdb_status}", "info" if c_code == 0 else "warning", log_cb)
 
     # Step 5: DBCC DBREINDEX with FillFactor
     if progress_cb: progress_cb(0.75)
     if status_cb: status_cb(f"Rebuilding table indexes (FillFactor {fill_factor})...")
-    emit_log(f"Running EXEC sp_MSforeachtable DBCC DBREINDEX ('?', ' ', {fill_factor})...", "info", log_cb)
-    reindex_sql = f"USE [{target_db}]; EXEC sp_MSforeachtable @command1=\"print '?' DBCC DBREINDEX ('?', ' ', {fill_factor})\";"
-    r_code, r_out = execute_sql_query(reindex_sql, instance=instance, timeout=1200)
+    emit_log(f"Running index rebuild across user tables (FillFactor {fill_factor})...", "info", log_cb)
+    reindex_sql = f"USE [{target_db}]; EXEC sp_MSforeachtable @command1='print ''?'' DBCC DBREINDEX (''?'', '' '', {fill_factor})';"
+    r_code, r_out = execute_sql_query(reindex_sql, instance=instance, sql_user=sql_user, sql_password=sql_password, timeout=1200)
     reindex_status = f"Reindexed (FillFactor {fill_factor})" if r_code == 0 else f"Reindex Error: {r_out}"
     emit_log(f"DBREINDEX Result: {reindex_status}", "info" if r_code == 0 else "warning", log_cb)
 
@@ -2996,16 +2996,18 @@ SELECT
     if status_cb: status_cb("Refreshing database statistics (sp_updatestats)...")
     emit_log("Running EXEC sp_updatestats...", "info", log_cb)
     stats_sql = f"USE [{target_db}]; EXEC sp_updatestats;"
-    s_code, s_out = execute_sql_query(stats_sql, instance=instance, timeout=300)
+    s_code, s_out = execute_sql_query(stats_sql, instance=instance, sql_user=sql_user, sql_password=sql_password, timeout=300)
     updatestats_status = "Statistics Updated" if s_code == 0 else f"Stats Warning: {s_out}"
     emit_log(f"sp_updatestats Result: {updatestats_status}", "info" if s_code == 0 else "warning", log_cb)
 
     # Step 7: Post-Maintenance Verification
     if progress_cb: progress_cb(0.9)
     if status_cb: status_cb("Verifying post-maintenance index fragmentation...")
-    tables_after, frag_after_max = inspect_index_fragmentation(target_db, instance=instance, log_cb=log_cb)
+    tables_after, frag_after_max = inspect_index_fragmentation(
+        target_db, instance=instance, sql_user=sql_user, sql_password=sql_password, log_cb=log_cb
+    )
     frag_after_count = len(tables_after)
-    emit_log(f"Post-Verification: Max Fragmentation reduced: {frag_before_max}% -> {frag_after_max}%", "info", log_cb)
+    emit_log(f"Post-Verification: Max Fragmentation: {frag_before_max:.1f}% -> {frag_after_max:.1f}% ({frag_before_count} -> {frag_after_count} fragmented indexes)", "info", log_cb)
 
     duration = round((dt.now() - start_time).total_seconds(), 1)
     query_exec_time = dt.now().strftime("%Y-%m-%d %H:%M:%S")

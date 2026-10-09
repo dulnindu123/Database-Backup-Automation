@@ -187,7 +187,14 @@ if (-not $sqlcmdExe) {
 function Invoke-SqlStatement {
     param([string]$Sql, [int]$TimeoutSec = 300)
     $tempOut = Join-Path $env:TEMP ("sql_out_" + [System.Guid]::NewGuid().ToString() + ".txt")
-    $argsList = "-S `"$sqlInst`" -E -Q `"$Sql`" -h -1 -W"
+    
+    $authArgs = if ($config.SQL_USERNAME) {
+        $env:SQLCMDPASSWORD = $config.SQL_PASSWORD
+        "-U `"$($config.SQL_USERNAME)`""
+    } else {
+        "-E"
+    }
+    $argsList = "-S `"$sqlInst`" $authArgs -Q `"$Sql`" -h -1 -W -C"
     
     $proc = Start-Process -FilePath $sqlcmdExe -ArgumentList $argsList -Wait -NoNewWindow -PassThru `
         -RedirectStandardOutput $tempOut -ErrorAction SilentlyContinue
@@ -206,9 +213,8 @@ function Invoke-SqlStatement {
 Write-Log "Probing SQL Server metadata and database storage capacity..." "INFO"
 $metaSql = @"
 SET NOCOUNT ON;
-SELECT 
-    CAST(SERVERPROPERTY('ProductVersion') AS VARCHAR(30)) + ' (' + CAST(SERVERPROPERTY('Edition') AS VARCHAR(40)) + ')' AS Version,
-    ISNULL((SELECT SUM(size)*8/1024 FROM sys.master_files WHERE database_id = DB_ID('$targetDb')), 0) AS SizeMB;
+SELECT 'VER_VAL:' + CAST(SERVERPROPERTY('ProductVersion') AS VARCHAR(30)) + ' (' + CAST(SERVERPROPERTY('Edition') AS VARCHAR(40)) + ')';
+SELECT 'SIZE_VAL:' + CAST(ISNULL((SELECT SUM(CAST(size AS BIGINT))*8/1024 FROM sys.master_files WHERE database_id = DB_ID('$targetDb')), 0) AS VARCHAR(30));
 "@
 
 $metaResult = Invoke-SqlStatement -Sql $metaSql
@@ -216,11 +222,15 @@ $sqlVersion = "Microsoft SQL Server"
 $dbSizeMB = 0
 
 if ($metaResult.ExitCode -eq 0 -and $metaResult.Output) {
-    $lines = $metaResult.Output -split "\r?\n" | Where-Object { $_.Trim() -ne "" }
-    if ($lines.Count -ge 1) {
-        $tokens = $lines[0] -split '\s{2,}'
-        if ($tokens.Count -ge 1) { $sqlVersion = $tokens[0].Trim() }
-        if ($tokens.Count -ge 2) { $dbSizeMB = [int]($tokens[1].Trim()) }
+    $lines = $metaResult.Output -split "\r?\n"
+    foreach ($line in $lines) {
+        $trimLine = $line.Trim()
+        if ($trimLine -like "VER_VAL:*") {
+            $sqlVersion = ($trimLine -replace "^VER_VAL:\s*", "").Trim()
+        } elseif ($trimLine -like "SIZE_VAL:*") {
+            $numOnly = ($trimLine -replace "^SIZE_VAL:\s*", "") -replace "[^\d]", ""
+            if ($numOnly -match "^\d+$") { $dbSizeMB = [int64]$numOnly }
+        }
     }
 }
 Write-Log "SQL Server Version: $sqlVersion | DB Size: $dbSizeMB MB" "SUCCESS"
@@ -233,15 +243,18 @@ Write-Log "Executing Query 1: Index Fragmentation Analysis on [$targetDb]..." "I
 $query1Sql = @"
 SET NOCOUNT ON;
 USE [$targetDb];
-SELECT 
-    TableName = object_name(dm.object_id),
-    IndexName = i.name,
-    IndexType = dm.index_type_desc,
-    [%Fragmented] = CAST(avg_fragmentation_in_percent AS DECIMAL(5,2))
+SELECT 'FRAG_ROW:' + CAST(object_name(dm.object_id) AS VARCHAR(128)) + ':::' + 
+       CAST(i.name COLLATE DATABASE_DEFAULT AS VARCHAR(128)) + ':::' + 
+       CAST(dm.index_type_desc COLLATE DATABASE_DEFAULT AS VARCHAR(60)) + ':::' + 
+       CAST(CAST(dm.avg_fragmentation_in_percent AS DECIMAL(5,2)) AS VARCHAR(20)) + ':::' + 
+       CAST(dm.page_count AS VARCHAR(20))
 FROM sys.dm_db_index_physical_stats(db_id(), null, null, null, 'sampled') dm
-JOIN sys.indexes i ON dm.object_id = dm.object_id AND dm.index_id = i.index_id
-WHERE avg_fragmentation_in_percent > 10.0
-ORDER BY avg_fragmentation_in_percent DESC;
+JOIN sys.indexes i ON dm.object_id = i.object_id AND dm.index_id = i.index_id
+WHERE dm.avg_fragmentation_in_percent > 10.0
+  AND dm.page_count > 8
+  AND i.name IS NOT NULL
+  AND dm.index_id > 0
+ORDER BY dm.avg_fragmentation_in_percent DESC;
 "@
 
 $q1Result = Invoke-SqlStatement -Sql $query1Sql
@@ -249,18 +262,25 @@ $fragBeforeMax = 0.0
 $fragBeforeCount = 0
 
 if ($q1Result.ExitCode -eq 0 -and $q1Result.Output) {
-    $q1Lines = $q1Result.Output -split "\r?\n" | Where-Object { $_.Trim() -ne "" }
+    $q1Lines = @($q1Result.Output -split "\r?\n" | Where-Object { $_ -match "FRAG_ROW:" })
     $fragBeforeCount = $q1Lines.Count
     if ($q1Lines.Count -gt 0) {
-        # Top line has highest fragmentation
-        $firstCols = $q1Lines[0] -split '\s+'
-        if ($firstCols.Count -ge 1) {
-            $fragVal = $firstCols[-1] -as [double]
-            if ($fragVal) { $fragBeforeMax = $fragVal }
+        $firstLine = $q1Lines[0].Trim()
+        $idx = $firstLine.IndexOf("FRAG_ROW:")
+        if ($idx -ge 0) {
+            $payload = $firstLine.Substring($idx + 9)
+            $firstCols = $payload -split ":::"
+            if ($firstCols.Count -ge 4) {
+                try {
+                    $fragBeforeMax = [double]::Parse($firstCols[3].Trim(), [System.Globalization.CultureInfo]::InvariantCulture)
+                } catch {
+                    $fragBeforeMax = 0.0
+                }
+            }
         }
     }
 }
-$fragBeforeSummary = "$fragBeforeCount indexes fragmented (>10%). Max fragmentation: ${fragBeforeMax}%"
+$fragBeforeSummary = "$fragBeforeCount indexes fragmented (>10%, >8 pages). Max fragmentation: ${fragBeforeMax}%"
 Write-Log "Query 1 Completed. $fragBeforeSummary" "SUCCESS"
 
 # ------------------------------------------------------------------------------
@@ -307,7 +327,7 @@ Write-Log "CHECKDB Result: $checkdbStatus" $(if ($checkdbResult.ExitCode -eq 0) 
 
 # Step 2b: DBCC DBREINDEX with FillFactor 80
 Write-Log "Running EXEC sp_MSforeachtable DBCC DBREINDEX ('?', ' ', 80)..." "INFO"
-$reindexSql = "USE [$targetDb]; EXEC sp_MSforeachtable @command1=""print '?' DBCC DBREINDEX ('?', ' ', 80)"";"
+$reindexSql = "USE [$targetDb]; EXEC sp_MSforeachtable @command1='print ''?'' DBCC DBREINDEX (''?'', '' '', 80)';"
 $reindexResult = Invoke-SqlStatement -Sql $reindexSql -TimeoutSec 1200
 $reindexStatus = if ($reindexResult.ExitCode -eq 0) { "Reindexed (FillFactor 80)" } else { "Reindex Error" }
 Write-Log "DBREINDEX Result: $reindexStatus" "SUCCESS"
@@ -328,13 +348,21 @@ $fragAfterMax = 0.0
 $fragAfterCount = 0
 
 if ($q1AfterResult.ExitCode -eq 0 -and $q1AfterResult.Output) {
-    $q1AfterLines = $q1AfterResult.Output -split "\r?\n" | Where-Object { $_.Trim() -ne "" }
+    $q1AfterLines = @($q1AfterResult.Output -split "\r?\n" | Where-Object { $_ -match "FRAG_ROW:" })
     $fragAfterCount = $q1AfterLines.Count
     if ($q1AfterLines.Count -gt 0) {
-        $firstCols = $q1AfterLines[0] -split '\s+'
-        if ($firstCols.Count -ge 1) {
-            $fragVal = $firstCols[-1] -as [double]
-            if ($fragVal) { $fragAfterMax = $fragVal }
+        $firstLine = $q1AfterLines[0].Trim()
+        $idx = $firstLine.IndexOf("FRAG_ROW:")
+        if ($idx -ge 0) {
+            $payload = $firstLine.Substring($idx + 9)
+            $firstCols = $payload -split ":::"
+            if ($firstCols.Count -ge 4) {
+                try {
+                    $fragAfterMax = [double]::Parse($firstCols[3].Trim(), [System.Globalization.CultureInfo]::InvariantCulture)
+                } catch {
+                    $fragAfterMax = 0.0
+                }
+            }
         }
     }
 }
