@@ -677,9 +677,10 @@ class InstallerApp(ctk.CTk):
                         self._reset_install_buttons()
                         return
 
-            # Restore previous config/logs on upgrade. Keep a newly enrolled token.
+            # Clean Installation: Do NOT restore previous customer databases, SQL credentials, or email settings.
+            # Preserve only audit log history if present. Keep a newly enrolled token.
             if is_upgrade and os.path.exists(temp_safety_dir):
-                restore_files = ["config.json", "backup_log.txt"]
+                restore_files = ["backup_log.txt"]
                 if not enrolled_ok:
                     restore_files.append("token.dpapi")
                 for save_file in restore_files:
@@ -689,32 +690,50 @@ class InstallerApp(ctk.CTk):
                         shutil.copy2(backed_f, os.path.join(self.data_dir, save_file))
                 shutil.rmtree(temp_safety_dir, ignore_errors=True)
 
-            # 2. Update config.json with verified Broker URL and customer slug
+            # 2. Deploy pristine template config.json with verified Broker URL and customer slug
             self.status_lbl.configure(text="Configuring settings and module tabs...")
             b_url = self.broker_url_var.get().strip()
+
+            # Load clean template from source package to guarantee no previous saved values bleed in
+            clean_template_path = os.path.join(self.source_app_dir, "config.json")
+            clean_cfg = {}
+            if os.path.exists(clean_template_path):
+                try:
+                    with open(clean_template_path, 'r', encoding='utf-8') as f:
+                        clean_cfg = json.load(f)
+                except Exception:
+                    clean_cfg = {}
+            if not clean_cfg:
+                from backup_core import load_config
+                clean_cfg = load_config(clean_template_path)
+
+            if b_url:
+                clean_cfg["BROKER_URL"] = b_url
+                clean_cfg["TELEMETRY_BROKER_URL"] = b_url
+            if self.customer_slug:
+                clean_cfg["CUSTOMER_SLUG"] = self.customer_slug
+            clean_cfg["BROKER_TOKEN_FILE"] = "token.dpapi"
+            clean_cfg["SHEET_TABS"] = {
+                "BACKUP": "DB Backups",
+                "CLEANUP": "Server Cleanup",
+                "PERFORMANCE": "Performance Query"
+            }
+            # Ensure all customer-specific fields are strictly pristine
+            clean_cfg["SQL_SERVER_NAME"] = ""
+            clean_cfg["SQL_USERNAME"] = ""
+            clean_cfg["SQL_PASSWORD"] = ""
+            clean_cfg["TARGET_DATABASES"] = []
+            clean_cfg["GOOGLE_DRIVE_FOLDER_ID"] = ""
+            clean_cfg["GOOGLE_SHEET_ID"] = ""
+            clean_cfg["STORAGE_ALERT_EMAIL_RECIPIENT"] = ""
+            clean_cfg["STORAGE_ALERT_SMTP_SERVER"] = ""
+            clean_cfg["STORAGE_ALERT_SENDER_EMAIL"] = ""
+            clean_cfg["STORAGE_ALERT_SENDER_PASSWORD"] = ""
+
             cfg_paths = [os.path.join(self.target_dir, "config.json"), os.path.join(self.data_dir, "config.json")]
-            last_cfg = {}
             for cp in cfg_paths:
-                cfg = {}
-                if os.path.exists(cp):
-                    try:
-                        with open(cp, 'r', encoding='utf-8') as f:
-                            cfg = json.load(f)
-                    except Exception:
-                        cfg = {}
-                if b_url:
-                    cfg["BROKER_URL"] = b_url
-                    cfg["TELEMETRY_BROKER_URL"] = b_url
-                if self.customer_slug:
-                    cfg["CUSTOMER_SLUG"] = self.customer_slug
-                cfg["BROKER_TOKEN_FILE"] = "token.dpapi"
-                cfg["SHEET_TABS"] = {
-                    "BACKUP": "Backup Automation",
-                    "CLEANUP": "Server Cleanup"
-                }
                 with open(cp, 'w', encoding='utf-8') as f:
-                    json.dump(cfg, f, indent=4)
-                last_cfg = cfg
+                    json.dump(clean_cfg, f, indent=4)
 
             # 3. Create Shortcuts
             target_exe = os.path.join(self.target_dir, "DatabaseBackupApp.exe")

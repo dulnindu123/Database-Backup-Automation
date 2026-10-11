@@ -468,14 +468,17 @@ def load_config(config_path=None):
     """
     target_file = config_path or CONFIG_FILE
     default_config = {
-        "SQL_SERVER_NAME": "localhost\\SQLEXPRESS",
+        "SQL_SERVER_NAME": "",
         "SQL_USERNAME": "",
         "SQL_PASSWORD": "",
         "BACKUP_FOLDER": "C:\\temp\\backups",
         "BACKUP_EXTENSION": ".zip",
-        "TARGET_DATABASES": ["SuperForm", "GeelongGlass"],
-        "GOOGLE_DRIVE_FOLDER_ID": "1LKuo7j4cHvvP0-p0C6PVo6gdkgoVBaQ4",
-        "GOOGLE_SHEET_ID": "1FAnmfTAixeDgwA5f3TvJ9IEtFp1OuFTyw3UpDiOdvwg",
+        "TARGET_DATABASES": [],
+        "BROKER_URL": "",
+        "CUSTOMER_SLUG": "",
+        "TELEMETRY_BROKER_URL": "",
+        "GOOGLE_DRIVE_FOLDER_ID": "",
+        "GOOGLE_SHEET_ID": "",
         "STRICTLY_MONDAYS_ONLY": True,
         "SCHEDULE_DAYS": ["MON"],
         "SCHEDULE_TIME": "02:00",
@@ -485,13 +488,20 @@ def load_config(config_path=None):
         "STORAGE_C_DRIVE_ALERT_GB": 30,
         "STORAGE_OTHER_DRIVES_ALERT_PERCENT": 90,
         "STORAGE_INCLUDE_NETWORK_DRIVES": True,
-        "STORAGE_ALERT_EMAIL_RECIPIENT": "support@spillabs.com",
-        "STORAGE_ALERT_SMTP_SERVER": "smtp-mail.outlook.com",
+        "STORAGE_ALERT_EMAIL_RECIPIENT": "",
+        "STORAGE_ALERT_SMTP_SERVER": "",
         "STORAGE_ALERT_SMTP_PORT": 587,
         "STORAGE_ALERT_SENDER_EMAIL": "",
         "STORAGE_ALERT_SENDER_PASSWORD": "",
         "STORAGE_SHEET_TAB_NAME": "Storage Monitor",
-        "STORAGE_SCAN_FREQUENCY": "Daily"
+        "STORAGE_SCAN_FREQUENCY": "Daily",
+        "PERFORMANCE_SCHEDULE_TIME": "03:30",
+        "PERFORMANCE_SCHEDULE_DAY": "Sunday",
+        "SHEET_TABS": {
+            "BACKUP": "DB Backups",
+            "CLEANUP": "Server Cleanup",
+            "PERFORMANCE": "Performance Query"
+        }
     }
 
     if not os.path.exists(target_file):
@@ -1505,7 +1515,7 @@ def run_full_backup(config=None, log_cb=None, progress_cb=None, status_cb=None, 
         backup_zip = generate_and_compress_backup(
             folder=config.get("BACKUP_FOLDER", "C:\\temp\\backups"),
             db_name=db_name,
-            sql_server=config.get("SQL_SERVER_NAME", "localhost\\SQLEXPRESS"),
+            sql_server=config.get("SQL_SERVER_NAME", ""),
             sql_user=config.get("SQL_USERNAME", ""),
             sql_password=config.get("SQL_PASSWORD", ""),
             log_cb=log_cb,
@@ -2464,11 +2474,11 @@ def send_storage_alert_email(critical_drives, config, log_cb=None):
     if not critical_drives:
         return False
 
-    smtp_server = config.get("STORAGE_ALERT_SMTP_SERVER", "smtp-mail.outlook.com")
+    smtp_server = config.get("STORAGE_ALERT_SMTP_SERVER", "")
     smtp_port = config.get("STORAGE_ALERT_SMTP_PORT", 587)
     sender_email = config.get("STORAGE_ALERT_SENDER_EMAIL", "")
     sender_password = config.get("STORAGE_ALERT_SENDER_PASSWORD", "") or load_smtp_password()
-    recipient = config.get("STORAGE_ALERT_EMAIL_RECIPIENT", "support@spillabs.com")
+    recipient = config.get("STORAGE_ALERT_EMAIL_RECIPIENT", "")
 
     if not sender_email or not sender_password:
         emit_log("Storage alert email skipped: Sender email or password not configured.", "warning", log_cb)
@@ -2614,11 +2624,11 @@ def send_test_storage_email(config, log_cb=None):
     Sends a test email to verify SMTP connectivity and credentials.
     Uses the same High Importance headers as real alerts.
     """
-    smtp_server = config.get("STORAGE_ALERT_SMTP_SERVER", "smtp-mail.outlook.com")
+    smtp_server = config.get("STORAGE_ALERT_SMTP_SERVER", "")
     smtp_port = config.get("STORAGE_ALERT_SMTP_PORT", 587)
     sender_email = config.get("STORAGE_ALERT_SENDER_EMAIL", "")
     sender_password = config.get("STORAGE_ALERT_SENDER_PASSWORD", "")
-    recipient = config.get("STORAGE_ALERT_EMAIL_RECIPIENT", "support@spillabs.com")
+    recipient = config.get("STORAGE_ALERT_EMAIL_RECIPIENT", "")
 
     if not sender_email or not sender_password:
         emit_log("Test email failed: Sender email or password not configured.", "error", log_cb)

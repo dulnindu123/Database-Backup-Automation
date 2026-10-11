@@ -238,7 +238,8 @@ class BackupAutomationApp(ctk.CTk):
         c1 = ctk.CTkFrame(stats_frame, corner_radius=10, fg_color=("#374151", "#1f2937"))
         c1.grid(row=0, column=0, padx=6, sticky="nsew")
         ctk.CTkLabel(c1, text="SQL SERVER", font=ctk.CTkFont(size=11, weight="bold"), text_color="#60a5fa").pack(anchor="w", padx=15, pady=(12, 2))
-        self.card_sql_label = ctk.CTkLabel(c1, text=self.config_data.get("SQL_SERVER_NAME", "localhost"), font=ctk.CTkFont(size=14, weight="bold"))
+        sql_name = self.config_data.get("SQL_SERVER_NAME", "").strip()
+        self.card_sql_label = ctk.CTkLabel(c1, text=sql_name if sql_name else "Not Configured", font=ctk.CTkFont(size=14, weight="bold"))
         self.card_sql_label.pack(anchor="w", padx=15)
         dbs_count = len(self.config_data.get("TARGET_DATABASES", []))
         self.card_dbs_label = ctk.CTkLabel(c1, text=f"{dbs_count} Databases Configured", font=ctk.CTkFont(size=12), text_color="#9ca3af")
@@ -1080,7 +1081,7 @@ class BackupAutomationApp(ctk.CTk):
         """Populates UI input fields from self.config_data."""
         c = self.config_data
         self.entry_sql_server.delete(0, "end")
-        self.entry_sql_server.insert(0, c.get("SQL_SERVER_NAME", "localhost\\SQLEXPRESS"))
+        self.entry_sql_server.insert(0, c.get("SQL_SERVER_NAME", ""))
 
         self.entry_sql_user.delete(0, "end")
         self.entry_sql_user.insert(0, c.get("SQL_USERNAME", ""))
@@ -1091,7 +1092,7 @@ class BackupAutomationApp(ctk.CTk):
 
         dbs = c.get("TARGET_DATABASES", [])
         self.entry_databases.delete(0, "end")
-        self.entry_databases.insert(0, ", ".join(dbs))
+        self.entry_databases.insert(0, ", ".join(dbs) if dbs else "")
 
         self.entry_backup_folder.delete(0, "end")
         self.entry_backup_folder.insert(0, c.get("BACKUP_FOLDER", "C:\\temp\\backups"))
@@ -1886,7 +1887,7 @@ class BackupAutomationApp(ctk.CTk):
             messagebox.showwarning(
                 "No Target Databases",
                 "No target databases are specified for backup.\n\n"
-                "Please go to the Settings tab, enter your database name (e.g. BARTONGLASS_TEST_NEW) "
+                "Please go to the Settings tab, enter your database name "
                 "under 'Target Databases', and click 'Save Settings'."
             )
             return
@@ -2183,7 +2184,7 @@ class BackupAutomationApp(ctk.CTk):
 
         # Recipient
         self._sh_email_row(email_card, "Recipient Email:", "sh_recipient",
-                          self.config_data.get("STORAGE_ALERT_EMAIL_RECIPIENT", "support@spillabs.com"))
+                          self.config_data.get("STORAGE_ALERT_EMAIL_RECIPIENT", ""))
         # Sender
         self._sh_email_row(email_card, "Sender Email:", "sh_sender",
                           self.config_data.get("STORAGE_ALERT_SENDER_EMAIL", ""))
@@ -2192,7 +2193,7 @@ class BackupAutomationApp(ctk.CTk):
                           self.config_data.get("STORAGE_ALERT_SENDER_PASSWORD", ""), show="●")
         # SMTP Server
         self._sh_email_row(email_card, "SMTP Server:", "sh_smtp",
-                          self.config_data.get("STORAGE_ALERT_SMTP_SERVER", "smtp-mail.outlook.com"))
+                          self.config_data.get("STORAGE_ALERT_SMTP_SERVER", ""))
         # SMTP Port
         self._sh_email_row(email_card, "SMTP Port:", "sh_smtp_port",
                           str(self.config_data.get("STORAGE_ALERT_SMTP_PORT", 587)), width=80)
@@ -2472,14 +2473,15 @@ class BackupAutomationApp(ctk.CTk):
         if not dbs_list and self.config_data.get("DATABASE_NAME"):
             dbs_list = [self.config_data.get("DATABASE_NAME")]
         if not dbs_list:
-            dbs_list = ["BARTONGLASS_TEST_NEW", "TuffCoGlass", "WAGlassKote", "TheDatabase"]
+            dbs_list = []
 
-        self.perf_db_var = tk.StringVar(value=dbs_list[0] if dbs_list else "TheDatabase")
-        self.perf_db_entry = ctk.CTkComboBox(row1, values=dbs_list, variable=self.perf_db_var, width=220)
+        db_default = dbs_list[0] if dbs_list else ""
+        self.perf_db_var = tk.StringVar(value=db_default)
+        self.perf_db_entry = ctk.CTkComboBox(row1, values=dbs_list if dbs_list else [""], variable=self.perf_db_var, width=220)
         self.perf_db_entry.pack(side="left", padx=(0, 20))
 
         ctk.CTkLabel(row1, text="SQL Instance:", font=ctk.CTkFont(size=12, weight="bold")).pack(side="left", padx=(0, 8))
-        inst_default = self.config_data.get("SQL_SERVER_INSTANCE") or self.config_data.get("SQL_SERVER_NAME") or "localhost\\SQLDULLA"
+        inst_default = self.config_data.get("SQL_SERVER_INSTANCE") or self.config_data.get("SQL_SERVER_NAME") or ""
         self.perf_inst_var = tk.StringVar(value=inst_default)
         self.perf_inst_entry = ctk.CTkEntry(row1, textvariable=self.perf_inst_var, width=180)
         self.perf_inst_entry.pack(side="left", padx=(0, 10))
