@@ -18,8 +18,6 @@ ALLOWED_PACKAGE_ROOT_FILES = {
     "Update_App.bat",
     "Uninstall.bat",
     "READ_ME_FIRST.txt",
-    "README.md",
-    "CLIENT_INSTALLATION_GUIDE.md",
     "CLIENT_INSTALLATION_AND_OPERATIONS_GUIDE.docx",
     "Google_Sheets_Architecture_and_Structure_Guide.docx",
     "app_icon.ico",
@@ -149,6 +147,8 @@ def audit_master_package(pkg_dir):
                             errors.append(f"Private encryption key leaked in client package: '{p}'")
                 except Exception:
                     pass
+            if f.lower().endswith(".md"):
+                errors.append(f"Disallowed markdown documentation file in client package: '{os.path.join(root, f)}'")
 
     return errors
 

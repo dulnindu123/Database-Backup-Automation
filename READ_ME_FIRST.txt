@@ -62,7 +62,6 @@ HOW TO UNINSTALL:
 --------------------------------------------------------------------------------
 DOCUMENTATION & SUPPORT:
 --------------------------------------------------------------------------------
-- Full installation guide: CLIENT_INSTALLATION_GUIDE.md
-- Technical details: README.md
-- Shell client guide: shell_client\README.md
+- Full installation guide: CLIENT_INSTALLATION_AND_OPERATIONS_GUIDE.docx
+- Cloud Architecture: Google_Sheets_Architecture_and_Structure_Guide.docx
 ================================================================================

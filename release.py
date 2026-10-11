@@ -231,7 +231,7 @@ def sync_to_client_package(build_info: dict):
 
     # 5. Sync batch scripts, docs, and shell_client (NO ADMIN TOOLS IN CLIENT PACKAGE)
     print("[SYNC] Copying root scripts and documentation...")
-    for file in ['Update_App.bat', 'Uninstall.bat', 'READ_ME_FIRST.txt', 'README.md', 'CLIENT_INSTALLATION_GUIDE.md', 'CLIENT_INSTALLATION_AND_OPERATIONS_GUIDE.docx']:
+    for file in ['Update_App.bat', 'Uninstall.bat', 'READ_ME_FIRST.txt', 'CLIENT_INSTALLATION_AND_OPERATIONS_GUIDE.docx', 'Google_Sheets_Architecture_and_Structure_Guide.docx']:
         if os.path.exists(file):
             shutil.copy2(file, os.path.join(PKG_DIR, file))
 
@@ -258,6 +258,19 @@ def sync_to_client_package(build_info: dict):
     if os.path.exists(src_shell):
         print(f"[SYNC] Syncing shell_client folder: {src_shell} -> {dst_shell}")
         shutil.copytree(src_shell, dst_shell, dirs_exist_ok=True)
+        # Purge markdown from client package shell_client
+        shell_readme = os.path.join(dst_shell, 'README.md')
+        if os.path.exists(shell_readme):
+            os.remove(shell_readme)
+
+    # Purge all markdown files across entire Client_Installation_Package
+    for root, _, files in os.walk(PKG_DIR):
+        for f in files:
+            if f.lower().endswith('.md'):
+                try:
+                    os.remove(os.path.join(root, f))
+                except Exception:
+                    pass
 
     # 6. Audit Client_Installation_Package
     pkg_errors = audit_master_package(PKG_DIR)
