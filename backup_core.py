@@ -888,7 +888,8 @@ def find_sql_cli_executable():
 
 def _sql_argv(cli_type, cli_path, sql_server, sql_user, timeout, query, trust_cert, for_query):
     """Builds an argument LIST (never a shell string). Passwords go via environment, not argv."""
-    argv = [cli_path, "-b", "-l", str(timeout), "-S", sql_server]
+    login_timeout = min(timeout, 15) if (timeout and timeout > 0) else 15
+    argv = [cli_path, "-b", "-l", str(login_timeout), "-t", str(timeout), "-S", sql_server]
     argv += ["-U", sql_user] if sql_user else ["-E"]
     if cli_type == "sqlcmd":
         if trust_cert:
@@ -2716,6 +2717,7 @@ def run_storage_monitor(config=None, log_cb=None, status_cb=None):
     telemetry_broker_url = config.get("TELEMETRY_BROKER_URL", config.get("BROKER_URL", ""))
     token_filename = config.get("BROKER_TOKEN_FILE", "token.dpapi")
     prog_data = os.environ.get("ALLUSERSPROFILE", r"C:\ProgramData")
+    token_path = None
     search_dirs = [DATA_DIR, os.path.join(prog_data, "DatabaseBackupApp"), BASE_DIR]
     for s_dir in search_dirs:
         for s_name in [token_filename, "token.dpapi", "broker_token.dat"]:

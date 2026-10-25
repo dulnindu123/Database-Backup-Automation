@@ -132,9 +132,16 @@ if (Test-Path $BundlePath) {
     Write-Host "[+] Reading configuration from: $BundlePath" -ForegroundColor Green
     try {
         $bundle = Get-Content $BundlePath -Raw | ConvertFrom-Json
-        $brokerUrl    = $bundle.broker_url
-        $customerSlug = $bundle.customer_slug
-        $enrollCode   = $bundle.enroll_code
+        if ($bundle.BUNDLE_B64) {
+            $inner = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($bundle.BUNDLE_B64)) | ConvertFrom-Json
+            $brokerUrl    = $inner.broker_url
+            $customerSlug = $inner.customer
+            $enrollCode   = $inner.enroll_code
+        } else {
+            $brokerUrl    = $bundle.broker_url
+            $customerSlug = $bundle.customer_slug
+            $enrollCode   = $bundle.enroll_code
+        }
     } catch {
         Write-Warning "[-] Could not parse bundle.json: $_"
     }
