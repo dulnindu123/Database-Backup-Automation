@@ -1131,18 +1131,6 @@ class BackupAutomationApp(ctk.CTk):
         k_res = validate_public_keys(data_dir=DATA_DIR, target_dir=BASE_DIR)
         if k_res.passed:
             self.lbl_key_status.configure(text="🔒 Public Keys: Valid (>=3072-bit)", text_color="#34d399", fg_color="#064e3b")
-
-        if hasattr(self, "perf_inst_var"):
-            inst_val = c.get("SQL_SERVER_INSTANCE") or c.get("SQL_SERVER_NAME") or ""
-            if inst_val:
-                self.perf_inst_var.set(inst_val)
-        if hasattr(self, "perf_db_entry"):
-            dbs = c.get("TARGET_DATABASES", [])
-            if dbs:
-                self.perf_db_entry.configure(values=dbs)
-                if hasattr(self, "perf_db_var") and (not self.perf_db_var.get() or self.perf_db_var.get() not in dbs):
-                    self.perf_db_var.set(dbs[0])
-
         else:
             key_reason_map = {
                 "ERR_PRIMARY_KEY_ABSENT": "Primary Key Absent",
@@ -1156,6 +1144,17 @@ class BackupAutomationApp(ctk.CTk):
             reason = key_reason_map.get(k_res.code, k_res.code)
             self.lbl_key_status.configure(text=f"🔒 Public Keys: {reason}", text_color="#f87171", fg_color="#7f1d1d")
             self.append_log(f"[PREFLIGHT] Public keys check: {k_res.message} (Code: {k_res.code})")
+
+        if hasattr(self, "perf_inst_var"):
+            inst_val = c.get("SQL_SERVER_INSTANCE") or c.get("SQL_SERVER_NAME") or ""
+            if inst_val:
+                self.perf_inst_var.set(inst_val)
+        if hasattr(self, "perf_db_entry"):
+            dbs = c.get("TARGET_DATABASES", [])
+            if dbs:
+                self.perf_db_entry.configure(values=dbs)
+                if hasattr(self, "perf_db_var") and (not self.perf_db_var.get() or self.perf_db_var.get() not in dbs):
+                    self.perf_db_var.set(dbs[0])
 
         if hasattr(self, "_validate_cloud_inputs"):
             self._validate_cloud_inputs()
@@ -1182,6 +1181,14 @@ class BackupAutomationApp(ctk.CTk):
             self.chk_delete_local.select()
         else:
             self.chk_delete_local.deselect()
+
+        if hasattr(self, "entry_sched_time") and c.get("SCHEDULE_TIME"):
+            self.entry_sched_time.delete(0, "end")
+            self.entry_sched_time.insert(0, c.get("SCHEDULE_TIME"))
+            self._update_schedule_summary()
+
+        if hasattr(self, "sched_mode_var") and c.get("AUTOMATION_MODE"):
+            self.sched_mode_var.set(c.get("AUTOMATION_MODE"))
 
     def _auto_detect_sql(self):
         """Queries Windows Registry for local SQL Server instances and databases."""
@@ -1436,6 +1443,7 @@ class BackupAutomationApp(ctk.CTk):
             self.card_sql_label.configure(text=new_config.get("SQL_SERVER_NAME", "localhost"))
             self.card_dbs_label.configure(text=f"{len(db_list)} Databases Configured")
             self._load_config_into_ui()
+            self._refresh_schedule_status()
             messagebox.showinfo("Saved", "Configuration saved successfully!")
         else:
             messagebox.showerror("Error", f"Failed to save configuration:\n{msg}")

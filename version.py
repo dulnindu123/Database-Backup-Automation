@@ -17,9 +17,9 @@ PROGRAM_DATA_DIR = r"C:\ProgramData\DatabaseBackupApp"
 DEFAULT_TASK_NAME = "Database Cloud Backup"
 
 # Single Source of Truth for Build ID
-BUILD_ID = "4.3.0-20261101"
-BUILD_TIME = "2026-11-01T23:15:00Z"
-BUILD_COMMIT = "20261101"
+BUILD_ID = "4.3.0-20261102"
+BUILD_TIME = "2026-11-02T02:00:00Z"
+BUILD_COMMIT = "20261102"
 DEV_MODE = False
 
 def get_build_info():
