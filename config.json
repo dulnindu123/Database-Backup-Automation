@@ -33,5 +33,6 @@
         "BACKUP": "DB Backups",
         "CLEANUP": "Server Cleanup",
         "PERFORMANCE": "Performance Query"
-    }
+    },
+    "PERF_EXECUTE_SAFETY_BACKUP": false
 }

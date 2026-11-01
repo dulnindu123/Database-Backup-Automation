@@ -5,7 +5,7 @@ Its only secret is a per-PC broker token that can request "start an upload" and 
 import os, time, base64, hashlib, json, requests
 from urllib.parse import urljoin
 
-CHUNK = 8 * 1024 * 1024  # must be a multiple of 256 KiB for GCS resumable uploads
+CHUNK = 512 * 1024  # 512 KiB chunk (2x 256 KiB), ultra-resilient for slow/broadband uploads
 RETRYABLE = (429, 500, 502, 503, 504)
 _REDIRECT_CODES = (301, 302, 303, 307, 308)
 
@@ -351,9 +351,9 @@ def _put_all(uri, path, total, log, progress_cb, telemetry_cb, cancel_check):
             data = f.read(min(CHUNK, total - pos))
             hdr = {"Content-Length": str(len(data)),
                    "Content-Range": f"bytes {pos}-{pos + len(data) - 1}/{total}"}
-            for attempt in range(1, 11):
+            for attempt in range(1, 16):
                 try:
-                    r = requests.put(uri, data=data, headers=hdr, timeout=(15, 180))
+                    r = requests.put(uri, data=data, headers=hdr, timeout=(60, 600))
                     if r.status_code in (200, 201):
                         pos, final = total, r
                     elif r.status_code == 308:
@@ -365,14 +365,14 @@ def _put_all(uri, path, total, log, progress_cb, telemetry_cb, cancel_check):
                         log(f"Upload rejected by storage: HTTP {r.status_code}", "error")
                         return None
                     break
-                except (requests.ConnectionError, requests.Timeout, ConnectionError) as e:
-                    wait = min(60, 2 ** attempt)
-                    log(f"Network problem ({e}); resuming in {wait}s (try {attempt}/10)", "warning")
+                except (requests.ConnectionError, requests.Timeout, ConnectionError, Exception) as e:
+                    wait = min(30, 2 ** min(attempt, 5))
+                    log(f"Network problem ({e}); resuming in {wait}s (try {attempt}/15)", "warning")
                     time.sleep(wait)
                     try:
                         pos, done = _query_offset(uri, total)
                         if done is not None:
-                            final = done
+                            pos, final = total, done
                             break
                         f.seek(pos)
                         data = f.read(min(CHUNK, total - pos))
@@ -381,7 +381,7 @@ def _put_all(uri, path, total, log, progress_cb, telemetry_cb, cancel_check):
                     except Exception:
                         pass
             else:
-                log("Upload failed after 10 retries.", "error")
+                log("Upload failed after 15 retries.", "error")
                 return None
             elapsed = max(0.001, time.time() - start)
             frac = pos / total if total else 1.0
@@ -441,25 +441,25 @@ def secure_upload(file_path, db_name, config, base_dir, log_cb=None, progress_cb
             info = data
             break
         if status in (409, 429):
-            log(
-                f"Upload slot {seq}/3 for database '{db_name}' is already used today "
-                f"(HTTP {status} Conflict). Trying slot {seq + 1}...",
-                "warning",
-            )
             if status == 429:
-                # Apps Script counts by day, not by seq; further slot retries will also 429.
                 log(
-                    f"SECURITY ALERT: All 3 upload slots for database '{db_name}' are exhausted today. "
-                    "If you did not execute 3 backups today, your token may be compromised or experiencing slot-burning.",
+                    f"Daily upload quota reached for database '{db_name}' today (HTTP 429). "
+                    f"Broker response: {err or 'Daily limit reached'}. "
+                    "Notice: If earlier uploads timed out or failed mid-stream, clear today's UPLOAD_REQUEST rows in the Broker 'Audit' sheet tab, or deploy updated Code.gs with higher quota.",
                     "critical",
                 )
                 return None
+            log(
+                f"Upload slot {seq} for database '{db_name}' is already used today "
+                f"(HTTP {status} Conflict). Trying slot {seq + 1}...",
+                "warning",
+            )
             continue
         log(f"Broker refused the upload (HTTP {status}: {err or r.text[:120]}).", "error")
         return None
     else:
-        log(f"SECURITY ALERT: All 3 upload slots for database '{db_name}' are exhausted today. "
-            f"If you did not execute 3 backups today, your token may be compromised or experiencing slot-burning.", "critical")
+        log(f"Daily upload quota reached for database '{db_name}' today. "
+            "Notice: If earlier uploads timed out or failed mid-stream, clear today's UPLOAD_REQUEST rows in the Broker 'Audit' sheet tab.", "critical")
         return None
 
     if status_cb:
@@ -564,4 +564,52 @@ def report_performance_telemetry(
         return False, f"Broker rejected report: HTTP {status_code} - {err or r.text[:100]}"
     except Exception as e:
         return False, f"Performance telemetry error: {e}"
+
+def report_backup_telemetry(
+    broker_url,
+    token,
+    file_name,
+    db_name,
+    file_size_bytes=0,
+    run_mode="Manual",
+    duration_secs=0.0,
+    status="SUCCESS",
+    customer_sheet_id=None
+):
+    """
+    Sends database backup telemetry to the Upload Broker.
+    Routes to the Customer Sheet [DB Backups] tab and Master Application Report.
+    Returns (success_boolean, message)
+    """
+    if not broker_url or not token:
+        return False, "Broker URL or token missing"
+
+    try:
+        valid_url = validate_broker_url(broker_url)
+    except ValueError as e:
+        return False, f"Broker URL rejected: {e}"
+
+    payload = {
+        "action": "report_status",
+        "token": token,
+        "module": "DB_BACKUP",
+        "file_name": file_name,
+        "db_name": db_name,
+        "bytes": file_size_bytes,
+        "run_mode": run_mode,
+        "duration_secs": duration_secs,
+        "status": status
+    }
+    if customer_sheet_id:
+        payload["customer_sheet_id"] = customer_sheet_id
+
+    try:
+        r = post_broker(valid_url, payload, timeout=20)
+        status_code, data, err = parse_broker_response(r)
+        if not err and status_code < 400:
+            link = data.get("download_link", "")
+            return True, f"Backup telemetry recorded successfully in Google Sheet ({link})"
+        return False, f"Broker rejected report: HTTP {status_code} - {err or r.text[:100]}"
+    except Exception as e:
+        return False, f"Backup telemetry error: {e}"
 

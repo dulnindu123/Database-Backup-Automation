@@ -9,18 +9,18 @@ if %errorLevel% neq 0 (
     exit /b
 )
 
-title Enterprise Database Cloud Backup - Zero-Trust In-Place Updater v4.2.0
+title Enterprise Database Cloud Backup - Zero-Trust In-Place Updater v4.3.0
 color 0b
 
 echo ============================================================
 echo   ENTERPRISE DATABASE CLOUD BACKUP
-echo   Zero-Trust In-Place Application Updater — v4.2.0
+echo   Zero-Trust In-Place Application Updater — v4.3.0
 echo ============================================================
 echo.
 echo This tool safely updates Database Cloud Backup on client
 echo servers and workstations to the Zero-Trust Architecture.
 echo.
-echo ARCHITECTURE ENHANCEMENTS IN v4.2.0:
+echo ARCHITECTURE ENHANCEMENTS IN v4.3.0:
 echo   - Performance Query & Re-Indexing Maintenance module (Tab 6).
 echo   - Zero Google Credentials: All client Google keys removed.
 echo   - Hybrid DBK2 Encryption: AES-256-GCM + RSA-4096 dual key wrap (64 KiB chunks).

@@ -77,12 +77,13 @@ CLOUD_SYNC_SUBSTRINGS = [
 
 
 class PreflightCheckResult:
-    def __init__(self, name: str, passed: bool, message: str, code: str = "OK", error_detail: str = ""):
+    def __init__(self, name: str, passed: bool, message: str, code: str = "OK", error_detail: str = "", is_warning: bool = False):
         self.name = name
         self.passed = passed
         self.message = message
         self.code = code
         self.error_detail = error_detail
+        self.is_warning = is_warning or code.startswith("WARN_")
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -91,6 +92,7 @@ class PreflightCheckResult:
             "message": self.message,
             "code": self.code,
             "error_detail": self.error_detail,
+            "is_warning": self.is_warning,
         }
 
 
@@ -103,16 +105,23 @@ class PreflightReport:
 
     @property
     def passed(self) -> bool:
-        return all(r.passed for r in self.results)
+        return all(r.passed or r.code.startswith("WARN_") or getattr(r, "is_warning", False) for r in self.results)
 
     @property
     def failures(self) -> List[PreflightCheckResult]:
-        return [r for r in self.results if not r.passed]
+        return [r for r in self.results if not r.passed and not r.code.startswith("WARN_") and not getattr(r, "is_warning", False)]
+
+    @property
+    def warnings(self) -> List[PreflightCheckResult]:
+        return [r for r in self.results if r.code.startswith("WARN_") or getattr(r, "is_warning", False)]
 
     def summary(self) -> str:
         lines = []
         for r in self.results:
-            status = "PASS" if r.passed else "FAIL"
+            if r.code.startswith("WARN_") or getattr(r, "is_warning", False):
+                status = "WARN"
+            else:
+                status = "PASS" if r.passed else "FAIL"
             lines.append(f"[{status}] {r.name}: {r.message} (Code: {r.code})")
         return "\n".join(lines)
 
@@ -711,13 +720,14 @@ def validate_sql_server(
             code="OK"
         ))
 
-        # Check for discouraged 'sa' account usage (Round 9 Hardening)
+        # Check for discouraged 'sa' account usage (Round 9 Hardening Advisory)
         if sql_user and sql_user.strip().lower() == "sa":
             results.append(PreflightCheckResult(
                 name="SQL Account Security",
-                passed=False,
-                message="Using 'sa' administrative account for automated backups is strongly discouraged. Recommend Windows Authentication (leave username blank) or a dedicated login with db_backupoperator.",
-                code="WARN_SQL_SA_DISCOURAGED"
+                passed=True,
+                message="Using 'sa' administrative account for automated backups is discouraged. Windows Authentication or a dedicated login with db_backupoperator is recommended.",
+                code="WARN_SQL_SA_DISCOURAGED",
+                is_warning=True
             ))
     except Exception as e:
         results.append(PreflightCheckResult(

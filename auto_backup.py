@@ -267,7 +267,7 @@ def run_performance_mode():
     for db in target_dbs:
         emit_log(f"Starting performance maintenance suite for [{db}]...")
         fill_factor = int(config.get("PERF_FILL_FACTOR", 80))
-        skip_safety_backup = not config.get("PERF_EXECUTE_SAFETY_BACKUP", True)
+        skip_safety_backup = not config.get("PERF_EXECUTE_SAFETY_BACKUP", False)
         res = run_performance_query(
             config=config,
             target_db=db,

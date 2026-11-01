@@ -1131,6 +1131,18 @@ class BackupAutomationApp(ctk.CTk):
         k_res = validate_public_keys(data_dir=DATA_DIR, target_dir=BASE_DIR)
         if k_res.passed:
             self.lbl_key_status.configure(text="🔒 Public Keys: Valid (>=3072-bit)", text_color="#34d399", fg_color="#064e3b")
+
+        if hasattr(self, "perf_inst_var"):
+            inst_val = c.get("SQL_SERVER_INSTANCE") or c.get("SQL_SERVER_NAME") or ""
+            if inst_val:
+                self.perf_inst_var.set(inst_val)
+        if hasattr(self, "perf_db_entry"):
+            dbs = c.get("TARGET_DATABASES", [])
+            if dbs:
+                self.perf_db_entry.configure(values=dbs)
+                if hasattr(self, "perf_db_var") and (not self.perf_db_var.get() or self.perf_db_var.get() not in dbs):
+                    self.perf_db_var.set(dbs[0])
+
         else:
             key_reason_map = {
                 "ERR_PRIMARY_KEY_ABSENT": "Primary Key Absent",
@@ -1810,8 +1822,9 @@ class BackupAutomationApp(ctk.CTk):
             cfg_to_test = test_cfg if test_cfg is not None else self.config_data
             report = run_preflight_suite(cfg_to_test, target_dir=BASE_DIR, data_dir=DATA_DIR, mode="test_button")
             for res in report.results:
-                status_icon = "✓" if res.passed else "⚠️"
-                level = "info" if res.passed else "error"
+                is_warn = getattr(res, "is_warning", False) or res.code.startswith("WARN_")
+                status_icon = "⚠️" if is_warn else ("✓" if res.passed else "❌")
+                level = "warning" if is_warn else ("info" if res.passed else "error")
                 self.append_log(f"[PREFLIGHT] {status_icon} {res.name}: {res.message} (Code: {res.code})", level)
 
             if report.passed:
@@ -1820,7 +1833,7 @@ class BackupAutomationApp(ctk.CTk):
                     text_color="#10b981",
                     fg_color="#064e3b"
                 ))
-                token_passed = any(r.name == "Broker Token Authentication" and r.passed for r in report.results)
+                token_passed = any(r.name in ("Broker Token Authentication", "Token Broker Verification") and r.passed for r in report.results)
                 if token_passed and hasattr(self, "lbl_token_status"):
                     self.after(0, lambda: self.lbl_token_status.configure(
                         text="🔑 Token: Active (Verified)",
@@ -2496,7 +2509,7 @@ class BackupAutomationApp(ctk.CTk):
             font=ctk.CTkFont(size=12)
         )
         self.perf_backup_chk.pack(side="left", padx=(0, 25))
-        if self.config_data.get("PERF_EXECUTE_SAFETY_BACKUP", True):
+        if self.config_data.get("PERF_EXECUTE_SAFETY_BACKUP", False):
             self.perf_backup_chk.select()
         else:
             self.perf_backup_chk.deselect()

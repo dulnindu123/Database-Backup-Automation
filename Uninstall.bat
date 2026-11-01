@@ -58,7 +58,7 @@ set "DATA_DIR=%ALLUSERSPROFILE%\DatabaseBackupApp"
 if /i not "%~1"=="/silent" if /i not "%~1"=="/quiet" (
     cls
     echo ============================================================
-    echo   DATABASE CLOUD BACKUP - ENTERPRISE UNINSTALLER (v4.2.0)
+    echo   DATABASE CLOUD BACKUP - ENTERPRISE UNINSTALLER (v4.3.0)
     echo ============================================================
     echo.
     echo Target Installation Directory:

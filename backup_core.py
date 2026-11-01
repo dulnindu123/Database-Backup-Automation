@@ -1511,6 +1511,7 @@ def run_full_backup(config=None, log_cb=None, progress_cb=None, status_cb=None, 
             status_cb(f"Processing database {idx + 1}/{total_dbs}: {db_name}")
             
         emit_log(f"--- Processing Database: {db_name} ---", "info", log_cb)
+        db_start_time = time.time()
         
         # Step 1: SQL Backup + Level 9 Compression + Phase 1 Cleanup
         backup_zip = generate_and_compress_backup(
@@ -1600,6 +1601,36 @@ def run_full_backup(config=None, log_cb=None, progress_cb=None, status_cb=None, 
                 if status_cb:
                     status_cb(f"Logging {file_name} to Google Sheet...")
                 emit_log(f"AUDIT: uploaded and verified {link} ({file_size_str})", "info", log_cb)
+                try:
+                    from broker_client import load_token, report_backup_telemetry
+                    broker_url = config.get("BROKER_URL") or config.get("TELEMETRY_BROKER_URL")
+                    token_name = config.get("BROKER_TOKEN_FILE", "token.dpapi")
+                    token_path = token_name if os.path.isabs(token_name) else os.path.join(BASE_DIR, token_name)
+                    if not os.path.exists(token_path):
+                        prog_data = os.environ.get("ALLUSERSPROFILE", r"C:\ProgramData")
+                        alt = os.path.join(prog_data, "DatabaseBackupApp", os.path.basename(token_name))
+                        if os.path.exists(alt):
+                            token_path = alt
+                    tok = load_token(token_path)
+                    if broker_url and tok:
+                        tel_ok, tel_msg = report_backup_telemetry(
+                            broker_url=broker_url,
+                            token=tok,
+                            file_name=link,
+                            db_name=db_name,
+                            file_size_bytes=file_size_bytes,
+                            run_mode="Manual",
+                            duration_secs=round(time.time() - db_start_time, 1),
+                            status="SUCCESS",
+                            customer_sheet_id=config.get("GOOGLE_SHEET_ID")
+                        )
+                        if tel_ok:
+                            emit_log(f"Google Sheet Telemetry: {tel_msg}", "info", log_cb)
+                        else:
+                            emit_log(f"Google Sheet Telemetry Notice: {tel_msg}", "warning", log_cb)
+                except Exception as sheet_err:
+                    emit_log(f"Google Sheet Telemetry Warning: {sheet_err}", "warning", log_cb)
+
                 success_count += 1
                 
                 # Step 4: PHASE 2 STORAGE CLEANUP (Delete local .zip after upload)

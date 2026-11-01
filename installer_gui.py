@@ -734,6 +734,15 @@ class InstallerApp(ctk.CTk):
             for cp in cfg_paths:
                 with open(cp, 'w', encoding='utf-8') as f:
                     json.dump(clean_cfg, f, indent=4)
+            # Grant BUILTIN Users modify permissions to ProgramData so non-elevated app sessions can save settings
+            try:
+                subprocess.run(
+                    ["icacls.exe", self.data_dir, "/grant", "*S-1-5-32-545:(OI)(CI)M", "/T", "/C", "/Q"],
+                    capture_output=True
+                )
+            except Exception:
+                pass
+
 
             # 3. Create Shortcuts
             target_exe = os.path.join(self.target_dir, "DatabaseBackupApp.exe")
@@ -813,7 +822,7 @@ class InstallerApp(ctk.CTk):
             # 6. Shared Preflight Validation (Requirement B: Fails installer and names failing check)
             self.status_lbl.configure(text="Executing preflight validation suite...")
             self.update()
-            preflight_cfg = dict(last_cfg)
+            preflight_cfg = dict(clean_cfg)
             preflight_cfg["_ENABLE_SCHEDULE"] = bool(self.cb_schedule.get())
             report = run_preflight_suite(preflight_cfg, target_dir=self.target_dir, data_dir=self.data_dir, mode="installer")
             if not report.passed:
