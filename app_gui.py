@@ -440,7 +440,7 @@ class BackupAutomationApp(ctk.CTk):
             text_color="#60a5fa"
         ).pack(anchor="w", padx=15, pady=(12, 6))
 
-        self.sched_mode_var = tk.StringVar(value="SYSTEM")
+        self.sched_mode_var = tk.StringVar(value=self.config_data.get("AUTOMATION_MODE", "SYSTEM"))
 
         # Option A: System Service
         self.radio_system = ctk.CTkRadioButton(
@@ -1603,19 +1603,49 @@ class BackupAutomationApp(ctk.CTk):
         self.lbl_sched_summary.configure(text=desc, fg_color=bg_col, text_color=txt_col)
 
     def _refresh_schedule_status(self):
-        """Queries Windows Task Scheduler and updates the UI status badge."""
+        """Queries Windows Task Scheduler and updates the UI status badge and Dashboard card."""
         active, status_desc, mode = get_scheduler_status()
+        saved_mode = self.config_data.get("AUTOMATION_MODE", "SYSTEM")
         if active:
-            if mode == "SYSTEM_SERVICE":
-                self.sched_status_badge.configure(text=f"● {status_desc}", text_color="#10b981")
-                self.sched_mode_var.set("SYSTEM")
-            else:
+            effective_mode = mode if mode in ("SYSTEM_SERVICE", "USER_TASK") else ("USER_TASK" if saved_mode == "USER" else "SYSTEM_SERVICE")
+            if effective_mode == "USER_TASK":
                 self.sched_status_badge.configure(text=f"● {status_desc}", text_color="#60a5fa")
                 self.sched_mode_var.set("USER")
+            else:
+                self.sched_status_badge.configure(text=f"● {status_desc}", text_color="#10b981")
+                self.sched_mode_var.set("SYSTEM")
             self.card_sched_sub.configure(text="Automation: ACTIVE", text_color="#10b981")
+
+            # Update Dashboard Auto Schedule card with friendly schedule description
+            days = self.config_data.get("SCHEDULE_DAYS", ["MON"])
+            t_str = self.config_data.get("SCHEDULE_TIME", "02:00")
+            try:
+                dt = datetime.strptime(t_str, "%H:%M")
+                t_12 = dt.strftime("%I:%M %p").lstrip("0")
+            except Exception:
+                t_12 = t_str
+
+            day_map = {
+                "MON": "Mondays", "TUE": "Tuesdays", "WED": "Wednesdays",
+                "THU": "Thursdays", "FRI": "Fridays", "SAT": "Saturdays", "SUN": "Sundays"
+            }
+            if set(days) == {"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"}:
+                summary_text = f"Every Day at {t_12}"
+            elif set(days) == {"MON", "TUE", "WED", "THU", "FRI"}:
+                summary_text = f"Weekdays at {t_12}"
+            elif len(days) == 1:
+                summary_text = f"{day_map.get(days[0], days[0])} at {t_12}"
+            elif len(days) > 1:
+                summary_text = f"{', '.join([day_map.get(d, d) for d in days])} at {t_12}"
+            else:
+                summary_text = f"Active at {t_12}"
+            self.card_sched_label.configure(text=summary_text)
         else:
             self.sched_status_badge.configure(text="○ Not Scheduled", text_color="#9ca3af")
             self.card_sched_sub.configure(text="Automation: INACTIVE", text_color="#9ca3af")
+            self.card_sched_label.configure(text="Inactive / Not Scheduled")
+            if saved_mode:
+                self.sched_mode_var.set(saved_mode)
 
     def _enable_schedule(self):
         """Enables the recurring schedule as either a Windows System Service or User Task."""
@@ -1636,6 +1666,7 @@ class BackupAutomationApp(ctk.CTk):
         self.config_data["SCHEDULE_DAYS"] = selected_days
         self.config_data["SCHEDULE_TIME"] = time_str
         self.config_data["STRICTLY_MONDAYS_ONLY"] = (selected_days == ["MON"])
+        self.config_data["AUTOMATION_MODE"] = "SYSTEM" if as_system else "USER"
         save_config(self.config_data)
 
         mode_label = "Unattended System Service (Session 0)" if as_system else "Standard User Task"

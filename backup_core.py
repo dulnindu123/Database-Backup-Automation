@@ -1743,27 +1743,57 @@ def get_scheduler_status():
                 return True, "Active (macOS LaunchAgent)", "SYSTEM_SERVICE"
         return False, "Not Scheduled", "NONE"
 
-    # 1. Check Unattended Windows System Service
+    # 1. Query Windows Task Scheduler with detailed verbose inspection
     try:
-        res = subprocess.run(["schtasks", "/query", "/tn", SYSTEM_SERVICE_TASK_NAME, "/fo", "CSV", "/nh"], capture_output=True, text=True, timeout=10)
-        if res.returncode == 0 and SYSTEM_SERVICE_TASK_NAME in res.stdout:
-            status_line = res.stdout.strip().split("\n")[0]
-            parts = [p.strip('"\r') for p in status_line.split('","')]
-            status = parts[2] if len(parts) > 2 else "Scheduled"
-            next_run = parts[1] if len(parts) > 1 else "Unknown"
-            return True, f"Active (System Service - Session 0) - Next Run: {next_run}", "SYSTEM_SERVICE"
+        res = subprocess.run(["schtasks", "/query", "/tn", DEFAULT_TASK_NAME, "/fo", "LIST", "/v"], capture_output=True, text=True, timeout=10)
+        output = res.stdout or ""
+        err_out = res.stderr or ""
+        access_denied = ("access is denied" in err_out.lower() or "access is denied" in output.lower())
+        
+        cfg = load_config()
+        saved_mode = cfg.get("AUTOMATION_MODE", "") if isinstance(cfg, dict) else ""
+
+        # If access is denied to an unprivileged query, the task is registered under NT AUTHORITY\SYSTEM
+        if access_denied:
+            if saved_mode == "USER":
+                return True, "Active (Standard User Task) - Next Run: Scheduled", "USER_TASK"
+            return True, "Active (System Service - Session 0) - Next Run: Scheduled", "SYSTEM_SERVICE"
+            
+        if res.returncode == 0 and DEFAULT_TASK_NAME.lower() in output.lower():
+            run_as_user = ""
+            next_run = "Unknown"
+            for line in output.splitlines():
+                line_s = line.strip()
+                if line_s.lower().startswith("run as user:") or line_s.lower().startswith("author:"):
+                    if not run_as_user or line_s.lower().startswith("run as user:"):
+                        run_as_user = line_s.split(":", 1)[1].strip()
+                elif line_s.lower().startswith("next run time:"):
+                    next_run = line_s.split(":", 1)[1].strip()
+            
+            if "system" in run_as_user.lower() or "nt authority" in run_as_user.lower():
+                return True, f"Active (System Service - Session 0) - Next Run: {next_run}", "SYSTEM_SERVICE"
+            elif run_as_user:
+                return True, f"Active (Standard User Task - {run_as_user}) - Next Run: {next_run}", "USER_TASK"
+            elif saved_mode == "USER":
+                return True, f"Active (Standard User Task) - Next Run: {next_run}", "USER_TASK"
+            else:
+                return True, f"Active (System Service - Session 0) - Next Run: {next_run}", "SYSTEM_SERVICE"
     except Exception:
         pass
 
-    # 2. Check Standard User Scheduled Task
+    # 2. Fallback to standard CSV format query
     try:
-        res = subprocess.run(["schtasks", "/query", "/tn", TASK_SCHEDULER_NAME, "/fo", "CSV", "/nh"], capture_output=True, text=True, timeout=10)
-        if res.returncode == 0 and TASK_SCHEDULER_NAME in res.stdout:
+        res = subprocess.run(["schtasks", "/query", "/tn", DEFAULT_TASK_NAME, "/fo", "CSV", "/nh"], capture_output=True, text=True, timeout=10)
+        if res.returncode == 0 and DEFAULT_TASK_NAME in res.stdout:
             status_line = res.stdout.strip().split("\n")[0]
             parts = [p.strip('"\r') for p in status_line.split('","')]
-            status = parts[2] if len(parts) > 2 else "Scheduled"
             next_run = parts[1] if len(parts) > 1 else "Unknown"
-            return True, f"Active (Standard User Task) - Next Run: {next_run}", "USER_TASK"
+            cfg = load_config()
+            saved_mode = cfg.get("AUTOMATION_MODE", "SYSTEM") if isinstance(cfg, dict) else "SYSTEM"
+            if saved_mode == "USER":
+                return True, f"Active (Standard User Task) - Next Run: {next_run}", "USER_TASK"
+            else:
+                return True, f"Active (System Service - Session 0) - Next Run: {next_run}", "SYSTEM_SERVICE"
     except Exception:
         pass
 
@@ -1884,12 +1914,15 @@ def enable_scheduler(executable_path=None, days="MON", time_str="02:00", as_syst
                 return False, f"Scheduler error: {err}"
     else:
         # First remove any system-level task to avoid double-runs
-        subprocess.run(["schtasks", "/delete", "/tn", SYSTEM_SERVICE_TASK_NAME, "/f"], capture_output=True)
+        del_res = subprocess.run(["schtasks", "/delete", "/tn", SYSTEM_SERVICE_TASK_NAME, "/f"], capture_output=True, text=True)
+        if del_res.returncode != 0 and "access is denied" in (del_res.stderr or "").lower():
+            run_command_elevated(f'schtasks /delete /tn "{SYSTEM_SERVICE_TASK_NAME}" /f')
         subprocess.run(["schtasks", "/delete", "/tn", DAEMON_SERVICE_TASK_NAME, "/f"], capture_output=True)
         
         target_task = TASK_SCHEDULER_NAME
+        current_user = os.environ.get("USERNAME", "")
         user_cmd_args = ["schtasks", "/create", "/tn", target_task, "/tr", cmd_run_subp, "/f"]
-        if days == "EVERYDAY":
+        if is_daily:
             user_cmd_args.extend(["/sc", "daily", "/st", time_str])
         else:
             user_cmd_args.extend(["/sc", "weekly", "/d", ",".join(ordered_days), "/st", time_str])
@@ -1900,13 +1933,14 @@ def enable_scheduler(executable_path=None, days="MON", time_str="02:00", as_syst
             return True, f"Scheduled successfully: {friendly_schedule}."
         else:
             err = res.stderr or res.stdout
-            if not is_admin() and ("access is denied" in (err or "").lower() or "denied" in (err or "").lower()):
-                emit_log(f"User task creation denied. Requesting elevated administrator registration...")
+            if "access is denied" in (err or "").lower() or "denied" in (err or "").lower():
+                emit_log(f"User task creation requires elevated registration...")
                 elev_sched = " ".join(user_cmd_args[6:])
-                cmd_str = f'schtasks /create /tn "{target_task}" /tr "{cmd_run_elev}" {elev_sched} /f'
+                ru_arg = f'/ru "{current_user}"' if current_user else ""
+                cmd_str = f'schtasks /create /tn "{target_task}" /tr "{cmd_run_elev}" {elev_sched} {ru_arg} /f'
                 if run_command_elevated(cmd_str):
-                    emit_log(f"Task '{target_task}' registered via elevated UAC prompt ({friendly_schedule}).")
-                    return True, f"Scheduled successfully (Elevated): {friendly_schedule}."
+                    emit_log(f"Task '{target_task}' registered for user '{current_user}' via UAC prompt ({friendly_schedule}).")
+                    return True, f"Scheduled successfully (User Task): {friendly_schedule}."
             emit_log(f"Failed to create scheduled task: {err}", "error")
             return False, f"Scheduler error: {err}"
 

@@ -335,9 +335,10 @@ function handleRequestUpload(pcData, payload) {
       }
     }
     
-    if (countToday >= 3) {
+    const DAILY_LIMIT = 50;
+    if (countToday >= DAILY_LIMIT) {
       logAudit(pcData.pcId, "RATE_LIMIT_EXCEEDED", `DB: ${dbName}`);
-      return errorResponse("Daily upload limit reached for this DB", 429);
+      return errorResponse(`Daily upload limit reached for this DB (${countToday}/${DAILY_LIMIT} today)`, 429);
     }
     
     const seq = countToday + 1;
