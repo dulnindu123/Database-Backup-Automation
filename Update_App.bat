@@ -14,17 +14,18 @@ color 0b
 
 echo ============================================================
 echo   ENTERPRISE DATABASE CLOUD BACKUP
-echo   Zero-Trust In-Place Application Updater — v4.3.0
+echo   Zero-Trust In-Place Application Updater - v4.3.0
 echo ============================================================
 echo.
 echo This tool safely updates Database Cloud Backup on client
 echo servers and workstations to the Zero-Trust Architecture.
 echo.
 echo ARCHITECTURE ENHANCEMENTS IN v4.3.0:
+echo   - Selective Encryption Toggle: Choose DBK2 Encryption or Standard .ZIP (Auto & Manual).
 echo   - Performance Query & Re-Indexing Maintenance module (Tab 6).
 echo   - Zero Google Credentials: All client Google keys removed.
 echo   - Hybrid DBK2 Encryption: AES-256-GCM + RSA-4096 dual key wrap (64 KiB chunks).
-echo   - Upload Broker: Resumable upload sessions to retention-locked bucket.
+echo   - Upload Broker: Resumable upload sessions with unlimited daily uploads & retries.
 echo   - Telemetry Broker: Multi-module monitoring logged via broker.
 echo   - ACL Hardening: Application folder locked to Admin Write / User Read.
 echo   - Standard Token: Machine-scoped DPAPI token stored as token.dpapi.
@@ -208,6 +209,27 @@ if exist "!BUNDLE_FILE!" (
         "} catch {}"
 )
 
+:: 7b. Synchronize Windows Task Scheduler with active configuration
+echo.
+echo [5b/6] Synchronizing Windows Task Scheduler with active configuration...
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$cfgPath = '!DATA_DIR!\config.json'; if (-not (Test-Path $cfgPath)) { $cfgPath = '!TARGET_DIR!\config.json' }; " ^
+    "if (Test-Path $cfgPath) { " ^
+    "  $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json; " ^
+    "  $timeStr = if ($cfg.SCHEDULE_TIME) { $cfg.SCHEDULE_TIME } else { '02:00' }; " ^
+    "  $exePath = '!TARGET_DIR!\DatabaseBackupApp.exe'; " ^
+    "  $action = New-ScheduledTaskAction -Execute $exePath -Argument '--auto'; " ^
+    "  $days = if ($cfg.SCHEDULE_DAYS) { $cfg.SCHEDULE_DAYS } else { @('MON') }; " ^
+    "  $pwDays = @(); " ^
+    "  $dayMap = @{ 'MON'='Monday'; 'TUE'='Tuesday'; 'WED'='Wednesday'; 'THU'='Thursday'; 'FRI'='Friday'; 'SAT'='Saturday'; 'SUN'='Sunday' }; " ^
+    "  foreach ($d in $days) { if ($dayMap.ContainsKey($d)) { $pwDays += $dayMap[$d] } }; " ^
+    "  if ($pwDays.Count -eq 0) { $pwDays = @('Monday') }; " ^
+    "  $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek $pwDays -At $timeStr; " ^
+    "  $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -WakeToRun -ExecutionTimeLimit (New-TimeSpan -Hours 12); " ^
+    "  Register-ScheduledTask -TaskName 'Database Cloud Backup' -Action $action -Trigger $trigger -Settings $settings -User 'NT AUTHORITY\SYSTEM' -RunLevel Highest -Force | Out-Null; " ^
+    "  Write-Host '       [OK] Task Scheduler synchronized (Runs on battery & AC as NT AUTHORITY\SYSTEM at ' $timeStr ')' -ForegroundColor Green; " ^
+    "} else { Write-Host '       [NOTICE] config.json not found; Task Scheduler retained.' -ForegroundColor Yellow }"
+
 :: 8. Apply Folder & Token ACL Hardening
 echo.
 echo [6/6] Applying Folder Security Access Control Lists (ACLs)...
@@ -215,13 +237,13 @@ icacls.exe "!TARGET_DIR!" /grant:r Administrators:(OI)(CI)F /grant:r Users:(OI)(
 if exist "!TARGET_DIR!\token.dpapi" (
     icacls.exe "!TARGET_DIR!\token.dpapi" /inheritance:r /grant:r Administrators:F SYSTEM:F Users:R >nul 2>&1
 )
-reg.exe add "HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\DatabaseBackupApp" /v "DisplayVersion" /d "4.2.0" /t REG_SZ /f >nul 2>&1
+reg.exe add "HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\DatabaseBackupApp" /v "DisplayVersion" /d "4.3.0" /t REG_SZ /f >nul 2>&1
 
 echo.
 echo ============================================================
 echo   ZERO-TRUST APPLICATION UPDATE COMPLETED SUCCESSFULLY!
 echo ============================================================
-echo Database Cloud Backup upgraded to Version 4.2.0.
+echo Database Cloud Backup upgraded to Version 4.3.0.
 echo All operations configured for Zero-Trust architecture.
 echo.
 
@@ -231,3 +253,4 @@ if /i not "!LAUNCH!"=="N" (
 )
 
 exit /b 0
+

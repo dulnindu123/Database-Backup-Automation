@@ -1729,6 +1729,36 @@ def is_admin():
         return False
 
 
+def run_powershell_elevated(ps_script):
+    """
+    Executes a PowerShell script with elevated Windows Administrator privileges
+    via a temporary .ps1 script file and Start-Process powershell.exe -Verb RunAs.
+    Guarantees zero quote mangling, handles UAC, and returns True if successful.
+    """
+    import tempfile
+    import secrets
+    tmp_file = os.path.join(tempfile.gettempdir(), f"_run_elev_{secrets.token_hex(4)}.ps1")
+    try:
+        with open(tmp_file, "w", encoding="utf-8") as f:
+            f.write(ps_script)
+        
+        launcher = (
+            f'$p = Start-Process powershell.exe -ArgumentList \'-NoProfile -ExecutionPolicy Bypass -File "{tmp_file}"\' '
+            f'-Verb RunAs -WindowStyle Hidden -Wait -PassThru; exit $p.ExitCode'
+        )
+        res = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", launcher], capture_output=True, text=True, timeout=45)
+        return res.returncode == 0
+    except Exception as e:
+        emit_log(f"Elevated execution failed: {e}", "error")
+        return False
+    finally:
+        try:
+            if os.path.exists(tmp_file):
+                os.remove(tmp_file)
+        except Exception:
+            pass
+
+
 def run_command_elevated(cmd_string):
     """
     Executes a shell command with elevated Windows Administrator privileges
@@ -1736,8 +1766,8 @@ def run_command_elevated(cmd_string):
     """
     encoded_cmd = cmd_string.replace('"', '\\"')
     ps_cmd = (
-        f'Start-Process cmd.exe -ArgumentList \'/c "{encoded_cmd}"\' '
-        f'-Verb RunAs -WindowStyle Hidden -Wait'
+        f'$p = Start-Process cmd.exe -ArgumentList \'/c "{encoded_cmd}"\' '
+        f'-Verb RunAs -WindowStyle Hidden -Wait -PassThru; exit $p.ExitCode'
     )
     try:
         res = subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd], capture_output=True, text=True, timeout=30)
@@ -1889,84 +1919,61 @@ def enable_scheduler(executable_path=None, days="MON", time_str="02:00", as_syst
         emit_log("Non-Windows platforms (macOS/Linux) are unsupported and untested.")
         return False, "Operating System unsupported. Database Cloud Backup requires Windows."
 
-    # Windows Task Scheduler Implementation
-    if executable_path.startswith("python "):
-        cmd_run_subp = f'{executable_path} --auto'
-        cmd_run_elev = f'{executable_path} --auto'
+    # Windows Task Scheduler Implementation via Native PowerShell
+    clean_exe = executable_path.replace('"', '').strip()
+    if clean_exe.startswith("python "):
+        ps_action = f"$action = New-ScheduledTaskAction -Execute 'python' -Argument '{clean_exe[7:].strip()} --auto'"
     else:
-        cmd_run_subp = f'"{executable_path}" --auto'
-        cmd_run_elev = f'\\"{executable_path}\\" --auto'
+        ps_action = f"$action = New-ScheduledTaskAction -Execute '{clean_exe}' -Argument '--auto'"
 
     if is_daily:
-        schedule_args = f'/sc daily /st {time_str}'
+        ps_trigger = f"$trigger = New-ScheduledTaskTrigger -Daily -At '{time_str}'"
     else:
-        days_csv = ",".join(ordered_days)
-        schedule_args = f'/sc weekly /d {days_csv} /st {time_str}'
+        full_days = ",".join([f"'{day_names_map.get(d, d)}'" for d in ordered_days])
+        ps_trigger = f"$trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek @({full_days}) -At '{time_str}'"
+
+    ps_settings = "$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -WakeToRun -ExecutionTimeLimit (New-TimeSpan -Hours 12)"
+    target_task = TASK_SCHEDULER_NAME
 
     if as_system_service:
-        # First remove any user-level task to avoid conflicting double-executions
-        subprocess.run(["schtasks", "/delete", "/tn", TASK_SCHEDULER_NAME, "/f"], capture_output=True)
-        
-        target_task = SYSTEM_SERVICE_TASK_NAME
-        cmd_args = ["schtasks", "/create", "/tn", target_task, "/tr", cmd_run_subp, "/ru", "NT AUTHORITY\\SYSTEM", "/rl", "HIGHEST", "/f"]
-        if days == "EVERYDAY":
-            cmd_args.extend(["/sc", "daily", "/st", time_str])
-        else:
-            cmd_args.extend(["/sc", "weekly", "/d", ",".join(ordered_days), "/st", time_str])
-        
-        if not is_admin():
-            cmd_str = f'schtasks /create /tn "{target_task}" /tr "{cmd_run_elev}" {schedule_args} /ru "NT AUTHORITY\\SYSTEM" /rl HIGHEST /f'
-            ok = run_command_elevated(cmd_str)
-            if ok:
-                emit_log(f"Unattended System Service '{target_task}' configured via elevated prompt.")
-                if on_boot:
-                    boot_cmd = f'schtasks /create /tn "{DAEMON_SERVICE_TASK_NAME}" /tr "{cmd_run_elev}" /sc ONSTART /ru "NT AUTHORITY\\SYSTEM" /rl HIGHEST /f'
-                    run_command_elevated(boot_cmd)
-                return True, f"Windows System Service Active: {friendly_schedule} (Unattended Session 0)."
-            else:
-                return False, "Administrator elevation was cancelled or denied."
-        else:
-            res = subprocess.run(cmd_args, capture_output=True, text=True)
-            if res.returncode == 0:
-                emit_log(f"Unattended System Service '{target_task}' created successfully.")
-                if on_boot:
-                    boot_args = ["schtasks", "/create", "/tn", DAEMON_SERVICE_TASK_NAME, "/tr", cmd_run_subp, "/sc", "ONSTART", "/ru", "NT AUTHORITY\\SYSTEM", "/rl", "HIGHEST", "/f"]
-                    subprocess.run(boot_args, capture_output=True)
-                return True, f"Windows System Service Active: {friendly_schedule} (Unattended Session 0)."
-            else:
-                err = res.stderr or res.stdout
-                return False, f"Scheduler error: {err}"
+        reg_ps = (
+            f"{ps_action}\n"
+            f"{ps_trigger}\n"
+            f"{ps_settings}\n"
+            f"Register-ScheduledTask -TaskName '{target_task}' -Action $action -Trigger $trigger -Settings $settings -User 'NT AUTHORITY\\SYSTEM' -RunLevel Highest -Force | Out-Null\n"
+        )
+        if on_boot:
+            reg_ps += (
+                f"$bTrigger = New-ScheduledTaskTrigger -AtStartup\n"
+                f"Register-ScheduledTask -TaskName '{DAEMON_SERVICE_TASK_NAME}' -Action $action -Trigger $bTrigger -Settings $settings -User 'NT AUTHORITY\\SYSTEM' -RunLevel Highest -Force | Out-Null\n"
+            )
+        mode_desc = f"Windows System Service Active: {friendly_schedule} (Unattended Session 0)."
     else:
-        # First remove any system-level task to avoid double-runs
-        del_res = subprocess.run(["schtasks", "/delete", "/tn", SYSTEM_SERVICE_TASK_NAME, "/f"], capture_output=True, text=True)
-        if del_res.returncode != 0 and "access is denied" in (del_res.stderr or "").lower():
-            run_command_elevated(f'schtasks /delete /tn "{SYSTEM_SERVICE_TASK_NAME}" /f')
-        subprocess.run(["schtasks", "/delete", "/tn", DAEMON_SERVICE_TASK_NAME, "/f"], capture_output=True)
-        
-        target_task = TASK_SCHEDULER_NAME
-        current_user = os.environ.get("USERNAME", "")
-        user_cmd_args = ["schtasks", "/create", "/tn", target_task, "/tr", cmd_run_subp, "/f"]
-        if is_daily:
-            user_cmd_args.extend(["/sc", "daily", "/st", time_str])
-        else:
-            user_cmd_args.extend(["/sc", "weekly", "/d", ",".join(ordered_days), "/st", time_str])
-            
-        res = subprocess.run(user_cmd_args, capture_output=True, text=True)
-        if res.returncode == 0:
-            emit_log(f"Standard user task '{target_task}' created successfully ({friendly_schedule}).")
-            return True, f"Scheduled successfully: {friendly_schedule}."
-        else:
-            err = res.stderr or res.stdout
-            if "access is denied" in (err or "").lower() or "denied" in (err or "").lower():
-                emit_log(f"User task creation requires elevated registration...")
-                elev_sched = " ".join(user_cmd_args[6:])
-                ru_arg = f'/ru "{current_user}"' if current_user else ""
-                cmd_str = f'schtasks /create /tn "{target_task}" /tr "{cmd_run_elev}" {elev_sched} {ru_arg} /f'
-                if run_command_elevated(cmd_str):
-                    emit_log(f"Task '{target_task}' registered for user '{current_user}' via UAC prompt ({friendly_schedule}).")
-                    return True, f"Scheduled successfully (User Task): {friendly_schedule}."
-            emit_log(f"Failed to create scheduled task: {err}", "error")
-            return False, f"Scheduler error: {err}"
+        reg_ps = (
+            f"{ps_action}\n"
+            f"{ps_trigger}\n"
+            f"{ps_settings}\n"
+            f"$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited\n"
+            f"Register-ScheduledTask -TaskName '{target_task}' -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null\n"
+        )
+        mode_desc = f"Scheduled successfully (Standard User Task): {friendly_schedule}."
+
+    # First attempt direct registration (works if process is already elevated or creating user-level task)
+    res = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", reg_ps], capture_output=True, text=True)
+    if res.returncode == 0:
+        emit_log(f"Scheduled task '{target_task}' registered successfully ({friendly_schedule}).")
+        return True, mode_desc
+
+    err = (res.stderr or res.stdout or "").strip()
+    emit_log(f"Direct scheduler registration returned: {err}. Requesting Administrator elevation...")
+
+    # Fallback to elevated UAC registration via temporary .ps1 script
+    if run_powershell_elevated(reg_ps):
+        emit_log(f"Task '{target_task}' registered via elevated UAC prompt ({friendly_schedule}).")
+        return True, mode_desc
+    else:
+        emit_log(f"Failed to register task via elevation: {err}", "error")
+        return False, f"Scheduler registration failed or elevation denied."
 
 
 def disable_scheduler():
