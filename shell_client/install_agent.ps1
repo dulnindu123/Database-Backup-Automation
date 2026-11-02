@@ -47,10 +47,12 @@ Write-Host "  Zero-Trust Architecture - 100% Native Windows Shell Agent (No Pyth
 Write-Host "================================================================================" -ForegroundColor Cyan
 
 # ------------------------------------------------------------------------------
-# 2. LOAD ASSEMBLIES
+# 2. LOAD ASSEMBLIES & SECURITY PROTOCOLS
 # ------------------------------------------------------------------------------
 Add-Type -AssemblyName System.Security
 Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls11 -bor [System.Net.SecurityProtocolType]::Tls
 
 # ------------------------------------------------------------------------------
 # 3. HELPER: APPS SCRIPT HTTP CLIENT (Handles 302 Redirect to Echo Service)
@@ -61,6 +63,8 @@ function Invoke-AppsScriptBroker {
         [hashtable]$Payload,
         [int]$TimeoutSec = 30
     )
+    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls11 -bor [System.Net.SecurityProtocolType]::Tls
+
     $json = $Payload | ConvertTo-Json -Compress
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
 
@@ -75,13 +79,27 @@ function Invoke-AppsScriptBroker {
     $stream.Write($bytes, 0, $bytes.Length)
     $stream.Close()
 
+    $resp = $null
     try {
         $resp = $req.GetResponse()
     } catch [System.Net.WebException] {
         $resp = $_.Exception.Response
+        if (-not $resp) {
+            throw "Connection failed to broker endpoint ($Url): $($_.Exception.Message)"
+        }
+    } catch {
+        throw "Unexpected network error ($Url): $_"
     }
 
-    $location = $resp.Headers["Location"]
+    if (-not $resp) {
+        throw "No response received from Upload Broker ($Url)."
+    }
+
+    $location = $null
+    if ($resp.Headers -and $resp.Headers["Location"]) {
+        $location = $resp.Headers["Location"]
+    }
+
     if ($location) {
         # Follow 302 redirect via GET to download ContentService JSON output
         $getReq = [System.Net.HttpWebRequest]::Create($location)
@@ -97,6 +115,9 @@ function Invoke-AppsScriptBroker {
     $sr = New-Object System.IO.StreamReader($resp.GetResponseStream())
     $content = $sr.ReadToEnd()
     $sr.Close()
+    if (-not $content) {
+        throw "Broker returned empty response ($Url)"
+    }
     return ($content | ConvertFrom-Json)
 }
 
@@ -111,11 +132,37 @@ if (Test-Path $BundlePath) {
     Write-Host "[+] Reading configuration from: $BundlePath" -ForegroundColor Green
     try {
         $bundle = Get-Content $BundlePath -Raw | ConvertFrom-Json
-        $brokerUrl    = $bundle.broker_url
-        $customerSlug = $bundle.customer_slug
-        $enrollCode   = $bundle.enroll_code
+        if ($bundle.BUNDLE_B64) {
+            $inner = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($bundle.BUNDLE_B64)) | ConvertFrom-Json
+            $brokerUrl    = $inner.broker_url
+            $customerSlug = $inner.customer
+            $enrollCode   = $inner.enroll_code
+        } else {
+            $brokerUrl    = $bundle.broker_url
+            $customerSlug = $bundle.customer_slug
+            $enrollCode   = $bundle.enroll_code
+        }
     } catch {
         Write-Warning "[-] Could not parse bundle.json: $_"
+    }
+} else {
+    $localCfgPath = Join-Path $PSScriptRoot "config.json"
+    if (Test-Path $localCfgPath) {
+        try {
+            $localCfg = Get-Content $localCfgPath -Raw | ConvertFrom-Json
+            if ($localCfg.BROKER_URL) { $brokerUrl = $localCfg.BROKER_URL.Trim() }
+            if ($localCfg.CUSTOMER_SLUG) { $customerSlug = $localCfg.CUSTOMER_SLUG.Trim().ToLower() }
+            if ($localCfg.ENROLL_CODE) { $enrollCode = $localCfg.ENROLL_CODE.Trim() }
+            if ($localCfg.DATABASE_NAME -and -not $DatabaseName) { $DatabaseName = $localCfg.DATABASE_NAME }
+            if ($localCfg.DATABASE_ENGINE -and ($DatabaseEngine -eq "MSSQL")) { $DatabaseEngine = $localCfg.DATABASE_ENGINE }
+            if ($localCfg.SQL_SERVER_INSTANCE -and ($ServerInstance -eq "localhost")) { $ServerInstance = $localCfg.SQL_SERVER_INSTANCE }
+            if ($localCfg.BACKUP_FOLDER -and ($BackupFolder -eq "C:\Backups\Staging")) { $BackupFolder = $localCfg.BACKUP_FOLDER }
+            if ($localCfg.PERFORMANCE_SCHEDULE_DAY -and ($PerformanceScheduleDay -eq "Sunday")) { $PerformanceScheduleDay = $localCfg.PERFORMANCE_SCHEDULE_DAY }
+            if ($localCfg.PERFORMANCE_SCHEDULE_TIME -and ($PerformanceScheduleTime -eq "03:30")) { $PerformanceScheduleTime = $localCfg.PERFORMANCE_SCHEDULE_TIME }
+            Write-Host "[+] Loaded initial parameters from local config.json" -ForegroundColor Green
+        } catch {
+            Write-Warning "[-] Could not parse local config.json: $_"
+        }
     }
 }
 
@@ -218,7 +265,7 @@ if (-not (Test-Path $BackupFolder)) {
 }
 
 $currentScriptDir = $PSScriptRoot
-$filesToCopy = @("backup_agent.ps1", "storage_monitor.ps1", "performance_query.ps1", "run_automation.ps1", "backup_public.pem", "escrow_public.pem")
+$filesToCopy = @("backup_agent.ps1", "storage_monitor.ps1", "performance_query.ps1", "run_automation.ps1", "uninstall_agent.ps1", "backup_public.pem", "escrow_public.pem")
 
 foreach ($f in $filesToCopy) {
     $src = Join-Path $currentScriptDir $f
@@ -300,4 +347,6 @@ Write-Host "====================================================================
 Write-Host "  INSTALLATION COMPLETE! Native PowerShell Agent is fully configured." -ForegroundColor Green
 Write-Host "  To run a manual test backup right now, execute:" -ForegroundColor White
 Write-Host "    powershell.exe -ExecutionPolicy Bypass -File `"$backupScript`"" -ForegroundColor Yellow
+Write-Host "  To cleanly uninstall this agent in the future, execute:" -ForegroundColor White
+Write-Host "    powershell.exe -ExecutionPolicy Bypass -File `"$(Join-Path $InstallDir 'uninstall_agent.ps1')`"" -ForegroundColor Yellow
 Write-Host "================================================================================" -ForegroundColor Cyan

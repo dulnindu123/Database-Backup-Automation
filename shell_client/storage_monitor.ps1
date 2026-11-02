@@ -17,7 +17,15 @@ param(
 Add-Type -AssemblyName System.Security
 
 $configFile = Join-Path $ConfigDir "config.json"
+if (-not (Test-Path $configFile)) {
+    $fallbackCfg = Join-Path $PSScriptRoot "config.json"
+    if (Test-Path $fallbackCfg) { $configFile = $fallbackCfg }
+}
 $tokenFile  = Join-Path $ConfigDir "token.dpapi"
+if (-not (Test-Path $tokenFile)) {
+    $fallbackToken = Join-Path $PSScriptRoot "token.dpapi"
+    if (Test-Path $fallbackToken) { $tokenFile = $fallbackToken }
+}
 $logFile    = Join-Path $ConfigDir "backup_log.txt"
 
 function Write-Log {
@@ -27,8 +35,14 @@ function Write-Log {
     try { Add-Content -Path $logFile -Value $logLine -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
 }
 
-if (-not (Test-Path $configFile) -or -not (Test-Path $tokenFile)) {
-    exit 0
+if (-not (Test-Path $configFile)) {
+    Write-Host "[-] Configuration file missing: $configFile" -ForegroundColor Red
+    exit 1
+}
+if (-not (Test-Path $tokenFile)) {
+    Write-Host "[-] DPAPI Machine Token missing: $tokenFile" -ForegroundColor Yellow
+    Write-Host "[-] You must run 'powershell.exe -ExecutionPolicy Bypass -File .\install_agent.ps1' first to enroll this computer with Google Sheets!" -ForegroundColor Cyan
+    exit 1
 }
 
 $config = Get-Content $configFile -Raw | ConvertFrom-Json
@@ -80,11 +94,13 @@ $telemetryPayload = @{
     sha256            = "STORAGE_PROBE"
     duration_secs     = 1
     metrics           = $diskMetrics
-    customer_sheet_id = if ($config.CUSTOMER_SHEET_ID) { $config.CUSTOMER_SHEET_ID } else { "" }
+    customer_sheet_id = if ($config.CUSTOMER_SHEET_ID) { $config.CUSTOMER_SHEET_ID } elseif ($config.GOOGLE_SHEET_ID) { $config.GOOGLE_SHEET_ID } else { "" }
 }
 
 $json = $telemetryPayload | ConvertTo-Json -Depth 4 -Compress
 $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls11 -bor [System.Net.SecurityProtocolType]::Tls
 
 $req = [System.Net.HttpWebRequest]::Create($brokerUrl)
 $req.Method = "POST"

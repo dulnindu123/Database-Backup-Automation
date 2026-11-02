@@ -2083,7 +2083,7 @@
 }
 }
 },
-"revision": "20260818",
+"revision": "20260917",
 "rootUrl": "https://alloydb.googleapis.com/",
 "schemas": {
 "AuthorizedNetwork": {
@@ -2204,11 +2204,13 @@
 "POSTGRES_15",
 "POSTGRES_16",
 "POSTGRES_17",
-"POSTGRES_18"
+"POSTGRES_18",
+"POSTGRES_19"
 ],
 "enumDeprecated": [
 false,
 true,
+false,
 false,
 false,
 false,
@@ -2222,7 +2224,8 @@ false
 "The database version is Postgres 15.",
 "The database version is Postgres 16.",
 "The database version is Postgres 17.",
-"The database version is Postgres 18."
+"The database version is Postgres 18.",
+"The database version is Postgres 19."
 ],
 "readOnly": true,
 "type": "string"
@@ -2239,6 +2242,21 @@ false
 },
 "displayName": {
 "description": "User-settable and human-readable display name for the Backup.",
+"type": "string"
+},
+"edition": {
+"description": "Output only. The edition of the cluster this backup was created from. Any restored cluster created from this backup will have the same edition.",
+"enum": [
+"EDITION_UNSPECIFIED",
+"EDITION_ALLOYDB",
+"EDITION_ALLOYDB_DEVELOPER"
+],
+"enumDescriptions": [
+"An unknown Edition type.",
+"Standard AlloyDB cluster.",
+"Developer edition cluster."
+],
+"readOnly": true,
 "type": "string"
 },
 "encryptionConfig": {
@@ -2598,11 +2616,13 @@ false
 "POSTGRES_15",
 "POSTGRES_16",
 "POSTGRES_17",
-"POSTGRES_18"
+"POSTGRES_18",
+"POSTGRES_19"
 ],
 "enumDeprecated": [
 false,
 true,
+false,
 false,
 false,
 false,
@@ -2616,7 +2636,8 @@ false
 "The database version is Postgres 15.",
 "The database version is Postgres 16.",
 "The database version is Postgres 17.",
-"The database version is Postgres 18."
+"The database version is Postgres 18.",
+"The database version is Postgres 19."
 ],
 "type": "string"
 },
@@ -2632,6 +2653,20 @@ false
 },
 "displayName": {
 "description": "User-settable and human-readable display name for the Cluster.",
+"type": "string"
+},
+"edition": {
+"description": "Optional. Edition of the cluster. If left unspecified, the cluster behaves as `EDITION_ALLOYDB`.",
+"enum": [
+"EDITION_UNSPECIFIED",
+"EDITION_ALLOYDB",
+"EDITION_ALLOYDB_DEVELOPER"
+],
+"enumDescriptions": [
+"An unknown Edition type.",
+"Standard AlloyDB cluster.",
+"Developer edition cluster."
+],
 "type": "string"
 },
 "encryptionConfig": {
@@ -2838,11 +2873,13 @@ false
 "POSTGRES_15",
 "POSTGRES_16",
 "POSTGRES_17",
-"POSTGRES_18"
+"POSTGRES_18",
+"POSTGRES_19"
 ],
 "enumDeprecated": [
 false,
 true,
+false,
 false,
 false,
 false,
@@ -2856,7 +2893,8 @@ false
 "The database version is Postgres 15.",
 "The database version is Postgres 16.",
 "The database version is Postgres 17.",
-"The database version is Postgres 18."
+"The database version is Postgres 18.",
+"The database version is Postgres 19."
 ],
 "type": "string"
 },
@@ -3206,6 +3244,39 @@ false
 "time": {
 "$ref": "GoogleTypeTimeOfDay",
 "description": "Time in UTC when the deny period starts on start_date and ends on end_date. This can be: * Full time OR * All zeros for 00:00:00 UTC"
+}
+},
+"type": "object"
+},
+"DnsAutomationInfo": {
+"description": "DnsAutomationInfo contains information about the DNS automation for the instance.",
+"id": "DnsAutomationInfo",
+"properties": {
+"fullyQualifiedDomainName": {
+"description": "Output only. The fully qualified domain name of the instance for DNS automation. Example: \"...alloydb.goog.\". Note: The AUDIT directive is intentionally omitted because this field contains sensitive network topology information.",
+"readOnly": true,
+"type": "string"
+},
+"state": {
+"description": "Output only. The state of the DNS automation.",
+"enum": [
+"STATE_UNSPECIFIED",
+"PENDING_CREATE",
+"ACTIVE",
+"PENDING_DELETE",
+"CREATE_FAILED",
+"DELETE_FAILED"
+],
+"enumDescriptions": [
+"Default value. This value is unused.",
+"DNS record creation is pending.",
+"DNS record is active.",
+"DNS record deletion is pending.",
+"DNS record creation failed.",
+"DNS record deletion failed."
+],
+"readOnly": true,
+"type": "string"
 }
 },
 "type": "object"
@@ -4335,7 +4406,8 @@ false
 "type": "boolean"
 },
 "trackActiveQueryPlan": {
-"description": "Indicates whether to track active query plans for an instance. If not set, the default value is \"off\". Can only be enabled if track_active_queries is enabled.",
+"deprecated": true,
+"description": "Indicates whether to track active query plans for an instance. If not set, the default value is \"off\". Can only be enabled if track_active_queries is enabled. Deprecated: Use track_active_queries instead.",
 "type": "boolean"
 },
 "trackClientAddress": {
@@ -4518,8 +4590,26 @@ false
 "description": "The consumer project to which the PSC service automation endpoint will be created.",
 "type": "string"
 },
+"dnsAutomationInfos": {
+"description": "Output only. List of DNS automation info for the PSC auto connection.",
+"items": {
+"$ref": "DnsAutomationInfo"
+},
+"readOnly": true,
+"type": "array"
+},
 "ipAddress": {
 "description": "Output only. The IP address of the PSC service automation endpoint.",
+"readOnly": true,
+"type": "string"
+},
+"serviceConnectionPolicy": {
+"description": "Output only. The PSC service connection policy name. The format is \"projects//regions//serviceConnectionPolicies/\"",
+"readOnly": true,
+"type": "string"
+},
+"serviceConnectionPolicyCreationState": {
+"description": "Output only. The creation state or result of the connection policy. Possible values include: - `ACTIVE`: The policy was created successfully. - `PERMISSION_DENIED`: Sufficient permissions were not provided. Note that this field is an unstructured output and customers should not rely on the specific string value or error message directly.",
 "readOnly": true,
 "type": "string"
 },
@@ -7433,11 +7523,13 @@ false
 "POSTGRES_15",
 "POSTGRES_16",
 "POSTGRES_17",
-"POSTGRES_18"
+"POSTGRES_18",
+"POSTGRES_19"
 ],
 "enumDeprecated": [
 false,
 true,
+false,
 false,
 false,
 false,
@@ -7451,7 +7543,8 @@ false
 "The database version is Postgres 15.",
 "The database version is Postgres 16.",
 "The database version is Postgres 17.",
-"The database version is Postgres 18."
+"The database version is Postgres 18.",
+"The database version is Postgres 19."
 ],
 "type": "string"
 },
@@ -7577,11 +7670,13 @@ false
 "POSTGRES_15",
 "POSTGRES_16",
 "POSTGRES_17",
-"POSTGRES_18"
+"POSTGRES_18",
+"POSTGRES_19"
 ],
 "enumDeprecated": [
 false,
 true,
+false,
 false,
 false,
 false,
@@ -7595,7 +7690,8 @@ false
 "The database version is Postgres 15.",
 "The database version is Postgres 16.",
 "The database version is Postgres 17.",
-"The database version is Postgres 18."
+"The database version is Postgres 18.",
+"The database version is Postgres 19."
 ],
 "type": "string"
 }
@@ -7661,11 +7757,13 @@ false
 "POSTGRES_15",
 "POSTGRES_16",
 "POSTGRES_17",
-"POSTGRES_18"
+"POSTGRES_18",
+"POSTGRES_19"
 ],
 "enumDeprecated": [
 false,
 true,
+false,
 false,
 false,
 false,
@@ -7679,7 +7777,8 @@ false
 "The database version is Postgres 15.",
 "The database version is Postgres 16.",
 "The database version is Postgres 17.",
-"The database version is Postgres 18."
+"The database version is Postgres 18.",
+"The database version is Postgres 19."
 ],
 "type": "string"
 },
@@ -7723,11 +7822,13 @@ false
 "POSTGRES_15",
 "POSTGRES_16",
 "POSTGRES_17",
-"POSTGRES_18"
+"POSTGRES_18",
+"POSTGRES_19"
 ],
 "enumDeprecated": [
 false,
 true,
+false,
 false,
 false,
 false,
@@ -7741,7 +7842,8 @@ false
 "The database version is Postgres 15.",
 "The database version is Postgres 16.",
 "The database version is Postgres 17.",
-"The database version is Postgres 18."
+"The database version is Postgres 18.",
+"The database version is Postgres 19."
 ],
 "type": "string"
 }
