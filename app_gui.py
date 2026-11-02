@@ -191,6 +191,7 @@ class BackupAutomationApp(ctk.CTk):
         self.tab_diagnostics = self.tabview.add("  Live Logs  ")
         self.tab_server_health = self.tabview.add("  Server Health  ")
         self.tab_performance = self.tabview.add("  Performance Query  ")
+        self.tab_restore = self.tabview.add("  Database Restore  ")
 
         # Initialize individual tabs
         self._build_dashboard_tab()
@@ -199,6 +200,7 @@ class BackupAutomationApp(ctk.CTk):
         self._build_diagnostics_tab()
         self._build_server_health_tab()
         self._build_performance_tab()
+        self._build_restore_tab()
 
         # ── Bottom Footer Bar (Version Number Display) ────────────────
         self.footer_frame = ctk.CTkFrame(self, fg_color="transparent", height=24)
@@ -3117,6 +3119,642 @@ class BackupAutomationApp(ctk.CTk):
             else:
                 messagebox.showerror("Error", f"Failed to disable automation:\n{msg}")
             self._refresh_perf_schedule_status()
+
+
+# =============================================================================
+# TAB 7: DATABASE RESTORE & CLOUD DECRYPTION ENGINE (MODULE 4)
+# =============================================================================
+
+    def _build_restore_tab(self):
+        """Builds the Database Restore & Decryption tab for restoring .dbk2, .zip, and .bak backups."""
+        tab = self.tab_restore
+
+        scroll = ctk.CTkScrollableFrame(tab, corner_radius=10, fg_color=("#374151", "#1f2937"))
+        scroll.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # ── Section Header ─────────────────────────────────────────────
+        ctk.CTkLabel(
+            scroll,
+            text="Database Restore & Cloud Decryption Engine",
+            font=ctk.CTkFont(size=18, weight="bold")
+        ).pack(anchor="w", padx=20, pady=(15, 5))
+
+        ctk.CTkLabel(
+            scroll,
+            text="Module 4: Decrypts .dbk2 cloud backups (AES-256-GCM + RSA-4096), unpacks compressed archives (.zip), and restores native .bak files directly to SQL Server with exclusive connection handling.",
+            font=ctk.CTkFont(size=12),
+            text_color="#9ca3af"
+        ).pack(anchor="w", padx=20, pady=(0, 15))
+
+        # ── Card 1: Source Backup File Selection ───────────────────────
+        file_card = ctk.CTkFrame(scroll, corner_radius=8, fg_color=("#1e293b", "#111827"), border_width=1, border_color="#374151")
+        file_card.pack(fill="x", padx=20, pady=(0, 15))
+
+        ctk.CTkLabel(
+            file_card,
+            text="SOURCE BACKUP ARCHIVE OR FILE (.DBK2, .ZIP, .BAK)",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#38bdf8"
+        ).pack(anchor="w", padx=15, pady=(12, 10))
+
+        # File Selection Row
+        frow = ctk.CTkFrame(file_card, fg_color="transparent")
+        frow.pack(fill="x", padx=15, pady=(0, 10))
+
+        self.restore_file_var = tk.StringVar(value="")
+        self.restore_file_entry = ctk.CTkEntry(
+            frow,
+            textvariable=self.restore_file_var,
+            placeholder_text="Select or paste path to .dbk2 cloud backup, .zip archive, or .bak file...",
+            font=ctk.CTkFont(size=12),
+            height=36
+        )
+        self.restore_file_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        self.restore_file_entry.bind("<KeyRelease>", lambda e: self._on_restore_file_text_changed())
+
+        btn_browse_file = ctk.CTkButton(
+            frow,
+            text="📁 Browse Backup...",
+            width=150,
+            height=36,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#2563eb",
+            hover_color="#1d4ed8",
+            command=self._browse_restore_file
+        )
+        btn_browse_file.pack(side="left")
+
+        # Format & Metadata Badges Row
+        badges_row = ctk.CTkFrame(file_card, fg_color="transparent")
+        badges_row.pack(fill="x", padx=15, pady=(0, 12))
+
+        self.restore_format_badge = ctk.CTkLabel(
+            badges_row,
+            text="Format: None Selected",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#94a3b8",
+            fg_color="#0f172a",
+            corner_radius=6,
+            padx=10,
+            pady=4
+        )
+        self.restore_format_badge.pack(side="left", padx=(0, 10))
+
+        self.restore_size_badge = ctk.CTkLabel(
+            badges_row,
+            text="Size: --",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#94a3b8",
+            fg_color="#0f172a",
+            corner_radius=6,
+            padx=10,
+            pady=4
+        )
+        self.restore_size_badge.pack(side="left", padx=(0, 10))
+
+        self.restore_detected_db_badge = ctk.CTkLabel(
+            badges_row,
+            text="Detected DB: --",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#94a3b8",
+            fg_color="#0f172a",
+            corner_radius=6,
+            padx=10,
+            pady=4
+        )
+        self.restore_detected_db_badge.pack(side="left")
+
+        # ── Card 2: Cloud Decryption Credentials (Required for .dbk2) ──
+        self.restore_crypto_card = ctk.CTkFrame(scroll, corner_radius=8, fg_color=("#1e293b", "#111827"), border_width=1, border_color="#374151")
+        self.restore_crypto_card.pack(fill="x", padx=20, pady=(0, 15))
+
+        self.restore_crypto_title = ctk.CTkLabel(
+            self.restore_crypto_card,
+            text="CLOUD DECRYPTION CREDENTIALS (REQUIRED FOR .DBK2 ENCRYPTED BACKUPS)",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#a855f7"
+        )
+        self.restore_crypto_title.pack(anchor="w", padx=15, pady=(12, 4))
+
+        ctk.CTkLabel(
+            self.restore_crypto_card,
+            text="For zero-trust .dbk2 backups downloaded from Google Drive, provide your private key (.pem) and recovery passphrase. Unencrypted .zip/.bak files bypass decryption automatically.",
+            font=ctk.CTkFont(size=11),
+            text_color="#9ca3af"
+        ).pack(anchor="w", padx=15, pady=(0, 10))
+
+        # Row A: Private Key (.pem)
+        krow = ctk.CTkFrame(self.restore_crypto_card, fg_color="transparent")
+        krow.pack(fill="x", padx=15, pady=(0, 8))
+
+        ctk.CTkLabel(krow, text="Private Key (.pem):", font=ctk.CTkFont(size=12, weight="bold"), width=130, anchor="w").pack(side="left", padx=(0, 10))
+
+        self.restore_key_var = tk.StringVar(value="")
+        self.restore_key_entry = ctk.CTkEntry(
+            krow,
+            textvariable=self.restore_key_var,
+            placeholder_text="Path to backup_private.pem or escrow_private.pem...",
+            font=ctk.CTkFont(size=12),
+            height=32
+        )
+        self.restore_key_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
+
+        btn_browse_key = ctk.CTkButton(
+            krow,
+            text="🔑 Browse Key...",
+            width=130,
+            height=32,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color="#7c3aed",
+            hover_color="#6d28d9",
+            command=self._browse_restore_key
+        )
+        btn_browse_key.pack(side="left")
+
+        # Row B: Decryption Passphrase
+        prow = ctk.CTkFrame(self.restore_crypto_card, fg_color="transparent")
+        prow.pack(fill="x", padx=15, pady=(0, 12))
+
+        ctk.CTkLabel(prow, text="Recovery Passphrase:", font=ctk.CTkFont(size=12, weight="bold"), width=130, anchor="w").pack(side="left", padx=(0, 10))
+
+        self.restore_pass_var = tk.StringVar(value="")
+        self.restore_pass_entry = ctk.CTkEntry(
+            prow,
+            textvariable=self.restore_pass_var,
+            placeholder_text="Enter passphrase or paste RECOVERY_PASSPHRASE.txt contents...",
+            font=ctk.CTkFont(size=12),
+            show="*",
+            height=32
+        )
+        self.restore_pass_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
+
+        self.restore_pass_visible = False
+        self.btn_toggle_pass = ctk.CTkButton(
+            prow,
+            text="👁 Show",
+            width=80,
+            height=32,
+            font=ctk.CTkFont(size=11),
+            fg_color="#374151",
+            hover_color="#4b5563",
+            command=self._toggle_restore_pass_visibility
+        )
+        self.btn_toggle_pass.pack(side="left")
+
+        # ── Card 3: Target SQL Server & Options ─────────────────────────
+        target_card = ctk.CTkFrame(scroll, corner_radius=8, fg_color=("#1e293b", "#111827"), border_width=1, border_color="#374151")
+        target_card.pack(fill="x", padx=20, pady=(0, 15))
+
+        ctk.CTkLabel(
+            target_card,
+            text="TARGET DATABASE & RESTORE PARAMETERS",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#10b981"
+        ).pack(anchor="w", padx=15, pady=(12, 10))
+
+        # Row 1: Target Database Name & SQL Instance
+        trow1 = ctk.CTkFrame(target_card, fg_color="transparent")
+        trow1.pack(fill="x", padx=15, pady=(0, 10))
+
+        ctk.CTkLabel(trow1, text="Target Database:", font=ctk.CTkFont(size=12, weight="bold")).pack(side="left", padx=(0, 8))
+        self.restore_target_db_var = tk.StringVar(value="")
+        self.restore_target_db_entry = ctk.CTkEntry(
+            trow1,
+            textvariable=self.restore_target_db_var,
+            placeholder_text="e.g. WAGlassKote",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            width=220,
+            height=32
+        )
+        self.restore_target_db_entry.pack(side="left", padx=(0, 20))
+
+        ctk.CTkLabel(trow1, text="SQL Instance:", font=ctk.CTkFont(size=12, weight="bold")).pack(side="left", padx=(0, 8))
+        inst_val = self.config_data.get("SQL_SERVER_INSTANCE") or self.config_data.get("SQL_SERVER_NAME") or "localhost\\SQLDULLA"
+        self.restore_sql_inst_var = tk.StringVar(value=inst_val)
+        self.restore_sql_inst_entry = ctk.CTkEntry(
+            trow1,
+            textvariable=self.restore_sql_inst_var,
+            font=ctk.CTkFont(size=12),
+            width=200,
+            height=32
+        )
+        self.restore_sql_inst_entry.pack(side="left")
+
+        # Row 2: Options Checkboxes
+        trow2 = ctk.CTkFrame(target_card, fg_color="transparent")
+        trow2.pack(fill="x", padx=15, pady=(0, 12))
+
+        self.restore_replace_chk = ctk.CTkCheckBox(
+            trow2,
+            text="Overwrite existing database (WITH REPLACE)",
+            font=ctk.CTkFont(size=12)
+        )
+        self.restore_replace_chk.select()
+        self.restore_replace_chk.pack(side="left", padx=(0, 20))
+
+        self.restore_single_user_chk = ctk.CTkCheckBox(
+            trow2,
+            text="Close active connections (SINGLE_USER mode)",
+            font=ctk.CTkFont(size=12)
+        )
+        self.restore_single_user_chk.select()
+        self.restore_single_user_chk.pack(side="left", padx=(0, 20))
+
+        self.restore_relocate_chk = ctk.CTkCheckBox(
+            trow2,
+            text="Auto-Relocate Data & Log files (WITH MOVE)",
+            font=ctk.CTkFont(size=12)
+        )
+        self.restore_relocate_chk.select()
+        self.restore_relocate_chk.pack(side="left")
+
+        # ── Card 4: Action Buttons & Progress Bar ───────────────────────
+        action_card = ctk.CTkFrame(scroll, fg_color="transparent")
+        action_card.pack(fill="x", padx=20, pady=(0, 12))
+
+        self.btn_run_restore = ctk.CTkButton(
+            action_card,
+            text="⚡  Start Decryption & Restore Database",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color="#059669",
+            hover_color="#047857",
+            height=42,
+            width=300,
+            corner_radius=21,
+            command=self._start_restore_thread
+        )
+        self.btn_run_restore.pack(side="left", padx=(0, 12))
+
+        self.btn_cancel_restore = ctk.CTkButton(
+            action_card,
+            text="⏹  Abort Restore",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color="#dc2626",
+            hover_color="#b91c1c",
+            height=42,
+            width=150,
+            corner_radius=21,
+            state="disabled",
+            command=self._abort_restore
+        )
+        self.btn_cancel_restore.pack(side="left", padx=(0, 15))
+
+        # Status & Progress Frame
+        status_frame = ctk.CTkFrame(scroll, fg_color=("#1e293b", "#0f172a"), corner_radius=8)
+        status_frame.pack(fill="x", padx=20, pady=(0, 10))
+
+        self.restore_status_lbl = ctk.CTkLabel(
+            status_frame,
+            text="Status: Ready. Please select a backup file (.dbk2, .zip, or .bak) to begin.",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#9ca3af"
+        )
+        self.restore_status_lbl.pack(side="left", padx=15, pady=10)
+
+        self.restore_progress = ctk.CTkProgressBar(scroll, width=600, height=8, corner_radius=4)
+        self.restore_progress.pack(fill="x", padx=20, pady=(0, 15))
+        self.restore_progress.set(0)
+
+        # ── Card 5: Restoration Console Log ─────────────────────────────
+        log_header = ctk.CTkFrame(scroll, fg_color="transparent")
+        log_header.pack(fill="x", padx=20, pady=(0, 5))
+
+        ctk.CTkLabel(
+            log_header,
+            text="RESTORATION CONSOLE & EXECUTION AUDIT",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#9ca3af"
+        ).pack(side="left")
+
+        ctk.CTkButton(
+            log_header,
+            text="Copy Output",
+            width=90,
+            height=26,
+            font=ctk.CTkFont(size=10),
+            fg_color="#374151",
+            hover_color="#4b5563",
+            command=self._copy_restore_console
+        ).pack(side="right", padx=(5, 0))
+
+        ctk.CTkButton(
+            log_header,
+            text="Clear Console",
+            width=90,
+            height=26,
+            font=ctk.CTkFont(size=10),
+            fg_color="#374151",
+            hover_color="#4b5563",
+            command=self._clear_restore_console
+        ).pack(side="right")
+
+        self.restore_console = ctk.CTkTextbox(
+            scroll,
+            height=220,
+            font=ctk.CTkFont(family="Consolas", size=11),
+            fg_color="#0f172a",
+            text_color="#e2e8f0"
+        )
+        self.restore_console.pack(fill="x", padx=20, pady=(0, 20))
+
+        self.restore_cancel_requested = False
+        self.is_restoring = False
+
+    def _on_restore_file_text_changed(self):
+        """Called when user types or pastes into the backup file entry."""
+        path = self.restore_file_var.get().strip().strip('"').strip("'")
+        if path and os.path.exists(path):
+            self._update_restore_file_info(path)
+
+    def _browse_restore_file(self):
+        """Opens file dialog for selecting .dbk2, .zip, or .bak files."""
+        init_dir = self.config_data.get("BACKUP_DIRECTORY") or r"E:\DatabaseBackups"
+        if not os.path.exists(init_dir):
+            init_dir = os.path.expanduser("~")
+
+        fpath = filedialog.askopenfilename(
+            title="Select Backup File to Restore",
+            initialdir=init_dir,
+            filetypes=[
+                ("All Supported Backups (*.dbk2, *.zip, *.bak)", "*.dbk2;*.zip;*.bak"),
+                ("Zero-Trust Cloud Backups (*.dbk2)", "*.dbk2"),
+                ("Compressed Backups (*.zip)", "*.zip"),
+                ("Native SQL Server Backups (*.bak)", "*.bak"),
+                ("All Files (*.*)", "*.*")
+            ]
+        )
+        if fpath:
+            fpath = os.path.normpath(fpath)
+            self.restore_file_var.set(fpath)
+            self._update_restore_file_info(fpath)
+
+    def _update_restore_file_info(self, fpath):
+        """Inspects selected file format, size, and auto-detects target database name."""
+        if not os.path.isfile(fpath):
+            return
+
+        size_bytes = os.path.getsize(fpath)
+        size_str = format_file_size(size_bytes)
+        self.restore_size_badge.configure(text=f"Size: {size_str}", text_color="#38bdf8")
+
+        ext = os.path.splitext(fpath)[1].lower()
+        basename = os.path.basename(fpath)
+
+        # Detect DB Name from filename (e.g. WAGlassKote_20261102_003228.dbk2 -> WAGlassKote)
+        m = re.match(r"^(.+?)_\d{8}_\d{6}", basename)
+        detected_db = m.group(1) if m else os.path.splitext(basename)[0]
+        self.restore_detected_db_badge.configure(text=f"Detected DB: {detected_db}", text_color="#10b981")
+        if not self.restore_target_db_var.get():
+            self.restore_target_db_var.set(detected_db)
+
+        if ext == ".dbk2":
+            self.restore_format_badge.configure(text="Format: .dbk2 (Zero-Trust Cloud Encrypted)", text_color="#38bdf8")
+            self.restore_crypto_card.configure(border_color="#a855f7", border_width=2)
+            self.restore_crypto_title.configure(text="CLOUD DECRYPTION CREDENTIALS (REQUIRED FOR .DBK2 ENCRYPTED BACKUPS) 🔐", text_color="#c084fc")
+            # Auto-locate private key if empty
+            if not self.restore_key_var.get():
+                self._auto_detect_private_key(detected_db)
+        elif ext == ".zip":
+            self.restore_format_badge.configure(text="Format: .zip (Compressed Archive)", text_color="#f59e0b")
+            self.restore_crypto_card.configure(border_color="#374151", border_width=1)
+            self.restore_crypto_title.configure(text="CLOUD DECRYPTION CREDENTIALS (NOT REQUIRED FOR .ZIP ARCHIVE)", text_color="#6b7280")
+        elif ext == ".bak":
+            self.restore_format_badge.configure(text="Format: .bak (Native SQL Backup)", text_color="#10b981")
+            self.restore_crypto_card.configure(border_color="#374151", border_width=1)
+            self.restore_crypto_title.configure(text="CLOUD DECRYPTION CREDENTIALS (NOT REQUIRED FOR .BAK FILE)", text_color="#6b7280")
+        else:
+            self.restore_format_badge.configure(text=f"Format: {ext} (Unrecognized)", text_color="#ef4444")
+
+    def _auto_detect_private_key(self, db_name=""):
+        """Attempts to auto-detect a matching customer private key from Admin_Vault or local keys folder."""
+        search_dirs = [
+            os.path.join(BASE_DIR, "keys"),
+            os.path.join(BASE_DIR, "Admin_Vault", "Keys"),
+            os.path.join(os.path.dirname(BASE_DIR), "Admin_Installation_Package", "Admin_Vault", "Keys")
+        ]
+        db_clean = db_name.lower().replace("_", "").replace("-", "")
+        for sdir in search_dirs:
+            if not os.path.isdir(sdir):
+                continue
+            # Check subfolders (customer slugs)
+            for item in os.listdir(sdir):
+                sub = os.path.join(sdir, item)
+                if os.path.isdir(sub):
+                    if db_clean and (item.lower() in db_clean or db_clean in item.lower()):
+                        pk = os.path.join(sub, "backup_private.pem")
+                        if os.path.isfile(pk):
+                            self.restore_key_var.set(os.path.normpath(pk))
+                            # Check passphrase
+                            pf = os.path.join(sub, "RECOVERY_PASSPHRASE.txt")
+                            if os.path.isfile(pf):
+                                try:
+                                    with open(pf, "r", encoding="utf-8") as f:
+                                        for line in f:
+                                            if line.startswith("Passphrase:"):
+                                                self.restore_pass_var.set(line.split(":", 1)[1].strip())
+                                                break
+                                except Exception:
+                                    pass
+                            return
+
+    def _browse_restore_key(self):
+        """Opens file dialog for selecting a private key (.pem) or recovery file."""
+        init_dir = os.path.join(BASE_DIR, "Admin_Vault") if os.path.isdir(os.path.join(BASE_DIR, "Admin_Vault")) else BASE_DIR
+        kpath = filedialog.askopenfilename(
+            title="Select Customer Private Key (.pem)",
+            initialdir=init_dir,
+            filetypes=[
+                ("PEM Private Keys (*.pem;*.key)", "*.pem;*.key"),
+                ("Recovery Text Files (*.txt)", "*.txt"),
+                ("All Files (*.*)", "*.*")
+            ]
+        )
+        if kpath:
+            kpath = os.path.normpath(kpath)
+            if kpath.lower().endswith(".txt"):
+                # User selected RECOVERY_PASSPHRASE.txt! Auto-read passphrase and locate companion .pem
+                try:
+                    with open(kpath, "r", encoding="utf-8") as f:
+                        for line in f:
+                            if line.startswith("Passphrase:"):
+                                self.restore_pass_var.set(line.split(":", 1)[1].strip())
+                                break
+                    companion = os.path.join(os.path.dirname(kpath), "backup_private.pem")
+                    if os.path.isfile(companion):
+                        self.restore_key_var.set(companion)
+                    else:
+                        self.restore_key_var.set(kpath)
+                except Exception as ex:
+                    messagebox.showerror("Error", f"Failed to read recovery file:\n{ex}")
+            else:
+                self.restore_key_var.set(kpath)
+
+    def _toggle_restore_pass_visibility(self):
+        """Toggles show/hide on the passphrase entry."""
+        if self.restore_pass_visible:
+            self.restore_pass_entry.configure(show="*")
+            self.btn_toggle_pass.configure(text="👁 Show")
+            self.restore_pass_visible = False
+        else:
+            self.restore_pass_entry.configure(show="")
+            self.btn_toggle_pass.configure(text="🔒 Hide")
+            self.restore_pass_visible = True
+
+    def _clear_restore_console(self):
+        """Clears the restoration console textbox."""
+        self.restore_console.delete("1.0", "end")
+
+    def _copy_restore_console(self):
+        """Copies console text to clipboard."""
+        text = self.restore_console.get("1.0", "end").strip()
+        if text:
+            self.clipboard_clear()
+            self.clipboard_append(text)
+            messagebox.showinfo("Copied", "Restoration console output copied to clipboard.")
+
+    def _append_restore_log(self, text, level="info"):
+        """Appends timestamped message to the restoration console and main log."""
+        timestamp = time.strftime("[%Y-%m-%d %H:%M:%S]")
+        formatted = f"{timestamp} {text}\n"
+
+        def _do_append():
+            self.restore_console.insert("end", formatted)
+            self.restore_console.see("end")
+
+        self.after(0, _do_append)
+        self.append_log(f"[RESTORE] {text}", level)
+
+    def _update_restore_status(self, text):
+        """Updates the status label."""
+        self.after(0, lambda: self.restore_status_lbl.configure(text=f"Status: {text}", text_color="#38bdf8"))
+
+    def _update_restore_progress(self, val):
+        """Updates the progress bar (0.0 to 1.0)."""
+        self.after(0, lambda: self.restore_progress.set(val))
+
+    def _start_restore_thread(self):
+        """Validates inputs, prompts confirmation, and launches the restore worker thread."""
+        if self.is_restoring:
+            messagebox.showwarning("Busy", "A database restore workflow is already in progress!")
+            return
+
+        source_file = self.restore_file_var.get().strip().strip('"').strip("'")
+        if not source_file or not os.path.exists(source_file):
+            messagebox.showerror("Missing Source File", "Please select a valid backup file (.dbk2, .zip, or .bak).")
+            return
+
+        target_db = self.restore_target_db_var.get().strip()
+        if not target_db:
+            messagebox.showerror("Missing Database Name", "Please specify the target database name to restore.")
+            return
+
+        sql_server = self.restore_sql_inst_var.get().strip()
+        if not sql_server:
+            messagebox.showerror("Missing SQL Server", "Please specify the target SQL Server instance.")
+            return
+
+        ext = os.path.splitext(source_file)[1].lower()
+        if ext == ".dbk2":
+            key_path = self.restore_key_var.get().strip().strip('"').strip("'")
+            if not key_path or not os.path.isfile(key_path):
+                messagebox.showerror(
+                    "Private Key Required",
+                    "A private key (.pem) is required to decrypt a .dbk2 cloud backup.\n\n"
+                    "Please browse and select your customer private key or Escrow private key."
+                )
+                return
+
+        # Explicit Safety Confirmation Dialog
+        warn_msg = (
+            f"Are you sure you want to restore to database:\n\n"
+            f"  Target Database: [{target_db}]\n"
+            f"  SQL Server Instance: {sql_server}\n"
+            f"  Source File: {os.path.basename(source_file)}\n\n"
+            f"WARNING: If the database already exists, all existing data will be overwritten with the contents of this backup!\n\n"
+            f"Proceed with database restoration?"
+        )
+        if not messagebox.askyesno("Confirm Database Restoration", warn_msg, icon="warning"):
+            return
+
+        self.is_restoring = True
+        self.restore_cancel_requested = False
+        self.btn_run_restore.configure(state="disabled", fg_color="#374151")
+        self.btn_cancel_restore.configure(state="normal")
+        self.restore_progress.set(0)
+        self._clear_restore_console()
+
+        threading.Thread(target=self._restore_worker, daemon=True).start()
+
+    def _abort_restore(self):
+        """Requests cancellation of active restore."""
+        if messagebox.askyesno("Abort Restore", "Are you sure you want to abort the database restoration?"):
+            self.restore_cancel_requested = True
+            self._append_restore_log("Cancellation requested by user. Aborting...", "warning")
+
+    def _restore_worker(self):
+        """Worker thread executing restore_database_pipeline."""
+        from backup_core import restore_database_pipeline
+
+        source_file = self.restore_file_var.get().strip().strip('"').strip("'")
+        target_db = self.restore_target_db_var.get().strip()
+        sql_server = self.restore_sql_inst_var.get().strip()
+        key_path = self.restore_key_var.get().strip().strip('"').strip("'")
+        passphrase = self.restore_pass_var.get().strip()
+        staging_dir = self.config_data.get("BACKUP_DIRECTORY")
+
+        with_replace = bool(self.restore_replace_chk.get())
+        close_conns = bool(self.restore_single_user_chk.get())
+        auto_relocate = bool(self.restore_relocate_chk.get())
+
+        try:
+            res = restore_database_pipeline(
+                source_file_path=source_file,
+                target_db_name=target_db,
+                sql_server=sql_server,
+                private_key_path=key_path,
+                private_key_password=passphrase,
+                staging_dir=staging_dir,
+                with_replace=with_replace,
+                close_connections=close_conns,
+                auto_relocate=auto_relocate,
+                log_cb=self._append_restore_log,
+                status_cb=self._update_restore_status,
+                progress_cb=self._update_restore_progress,
+                cancel_check=lambda: self.restore_cancel_requested
+            )
+
+            success = res.get("success", False)
+            msg = res.get("message", "Operation finished.")
+
+            def _on_done():
+                self.is_restoring = False
+                self.btn_run_restore.configure(state="normal", fg_color="#059669")
+                self.btn_cancel_restore.configure(state="disabled")
+                if success:
+                    self.restore_status_lbl.configure(text=f"Status: Restore Successful! [{target_db}] ready.", text_color="#10b981")
+                    messagebox.showinfo(
+                        "Database Restore Complete",
+                        f"Database [{target_db}] was restored successfully to {sql_server}!\n\n"
+                        f"Duration: {res.get('duration_secs', 0)} seconds.\n\n"
+                        f"You can now query and manage this database in SQL Server Management Studio (SSMS)."
+                    )
+                else:
+                    self.restore_status_lbl.configure(text="Status: Restore Failed.", text_color="#ef4444")
+                    messagebox.showerror("Restore Failed", f"Database restore encountered an error:\n\n{msg}")
+
+            self.after(0, _on_done)
+
+        except Exception as e:
+            def _on_err(err_msg=str(e)):
+                self.is_restoring = False
+                self.btn_run_restore.configure(state="normal", fg_color="#059669")
+                self.btn_cancel_restore.configure(state="disabled")
+                self.restore_status_lbl.configure(text=f"Status: Error - {err_msg[:60]}", text_color="#ef4444")
+                self._append_restore_log(f"CRITICAL EXCEPTION: {err_msg}", "error")
+                messagebox.showerror("Restore Exception", f"Unexpected failure during restoration:\n\n{err_msg}")
+
+            self.after(0, _on_err)
+
 
 
 def main():

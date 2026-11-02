@@ -47,7 +47,8 @@ from googleapiclient.http import MediaFileUpload
 from googleapiclient.errors import HttpError
 import re
 import requests
-from crypto_stream import encrypt_file
+import tempfile
+from crypto_stream import encrypt_file, decrypt_file
 from broker_client import secure_upload
 
 # -----------------------------------------------------------------------------
@@ -3163,4 +3164,353 @@ SELECT 'SIZE_VAL:' + CAST(ISNULL((SELECT SUM(CAST(size AS BIGINT))*8/1024 FROM s
         "tables_after": tables_after
     }
 
+# =============================================================================
+# MODULE 4: DATABASE RESTORE & CLOUD DECRYPTION ENGINE
+# =============================================================================
+
+def get_sql_instance_default_data_log_paths(sql_server, sql_user="", sql_password=""):
+    """
+    Queries SQL Server instance for its default data and log directories.
+    Handles collations and paths with spaces safely.
+    """
+    q = """
+    SET NOCOUNT ON;
+    SELECT 'DATA_PATH=' + ISNULL(CAST(SERVERPROPERTY('InstanceDefaultDataPath') AS VARCHAR(500)), '');
+    SELECT 'LOG_PATH=' + ISNULL(CAST(SERVERPROPERTY('InstanceDefaultLogPath') AS VARCHAR(500)), '');
+    """
+    code, out, _ = execute_sql_query_adaptive(sql_server, q, sql_user, sql_password, timeout=15)
+    data_dir, log_dir = "", ""
+    if code == 0 and out.strip():
+        for line in out.splitlines():
+            line = line.strip()
+            if line.startswith("DATA_PATH="):
+                data_dir = line[len("DATA_PATH="):].strip()
+            elif line.startswith("LOG_PATH="):
+                log_dir = line[len("LOG_PATH="):].strip()
+    return data_dir, log_dir
+
+
+def get_backup_filelist(sql_server, bak_filepath, sql_user="", sql_password=""):
+    """
+    Inspects a .bak file using RESTORE FILELISTONLY to discover its logical file structure.
+    Returns a list of dicts: [{'type': 'D'|'L', 'logical_name': str, 'physical_name': str}, ...]
+    """
+    bak_filepath_esc = bak_filepath.replace("'", "''")
+    q = f"""
+    SET NOCOUNT ON;
+    DECLARE @fl TABLE (
+        LogicalName NVARCHAR(128),
+        PhysicalName NVARCHAR(260),
+        Type CHAR(1),
+        FileGroupName NVARCHAR(128) NULL,
+        Size NUMERIC(20,0) NULL,
+        MaxSize NUMERIC(20,0) NULL,
+        FileId BIGINT NULL,
+        CreateLSN NUMERIC(25,0) NULL,
+        DropLSN NUMERIC(25,0) NULL,
+        UniqueId UNIQUEIDENTIFIER NULL,
+        ReadOnlyLSN NUMERIC(25,0) NULL,
+        ReadWriteLSN NUMERIC(25,0) NULL,
+        BackupSizeInBytes BIGINT NULL,
+        SourceBlockSize INT NULL,
+        FileGroupId INT NULL,
+        LogGroupGUID UNIQUEIDENTIFIER NULL,
+        DifferentialBaseLSN NUMERIC(25,0) NULL,
+        DifferentialBaseGUID UNIQUEIDENTIFIER NULL,
+        IsReadOnly BIT NULL,
+        IsPresent BIT NULL,
+        TDEThumbprint VARBINARY(32) NULL,
+        SnapshotURL NVARCHAR(360) NULL
+    );
+    INSERT INTO @fl EXEC('RESTORE FILELISTONLY FROM DISK = N''{bak_filepath_esc}''');
+    SELECT 'FILE_ENTRY|' + (Type COLLATE DATABASE_DEFAULT) + '|' + (LogicalName COLLATE DATABASE_DEFAULT) + '|' + (PhysicalName COLLATE DATABASE_DEFAULT) FROM @fl;
+    """
+    code, out, err = execute_sql_query_adaptive(sql_server, q, sql_user, sql_password, timeout=30)
+    entries = []
+    if code == 0 and out.strip():
+        for line in out.splitlines():
+            line = line.strip()
+            if line.startswith("FILE_ENTRY|"):
+                parts = line.split("|")
+                if len(parts) >= 4:
+                    entries.append({
+                        "type": parts[1].strip(),
+                        "logical_name": parts[2].strip(),
+                        "physical_name": parts[3].strip()
+                    })
+    return entries
+
+
+def execute_sql_restore_command(sql_server, target_db_name, bak_filepath, sql_user="", sql_password="",
+                                with_replace=True, close_connections=True, auto_relocate=True,
+                                cancel_check=None, log_cb=None):
+    """
+    Restores a database from a .bak file to SQL Server with robust safety controls:
+    - Strict validation of database name and file path to prevent SQL injection.
+    - Automated permissions assignment on the folder containing the .bak file.
+    - Optional automated relocation of Data (.mdf) and Log (.ldf) files to default instance paths.
+    - Optional exclusive single-user connection handling (SET SINGLE_USER WITH ROLLBACK IMMEDIATE).
+    - Transactional error handling to guarantee the database is reset to MULTI_USER on failure.
+    - Infinite query timeout (-t 0) so multi-gigabyte restores are not killed prematurely.
+    """
+    if not _valid_db_name(target_db_name):
+        return 1, "", f"Refused: invalid database name {target_db_name!r}"
+    if "'" in bak_filepath or "\n" in bak_filepath or "\r" in bak_filepath:
+        return 1, "", "Refused: invalid backup file path"
+    if not os.path.isfile(bak_filepath):
+        return 1, "", f"Backup file does not exist: {bak_filepath}"
+
+    # Ensure SQL service has permissions to read the folder
+    folder = os.path.dirname(os.path.abspath(bak_filepath))
+    grant_sql_folder_permissions(folder)
+
+    move_clauses = []
+    if auto_relocate:
+        data_dir, log_dir = get_sql_instance_default_data_log_paths(sql_server, sql_user, sql_password)
+        if data_dir or log_dir:
+            file_entries = get_backup_filelist(sql_server, bak_filepath, sql_user, sql_password)
+            for fe in file_entries:
+                log_name = fe["logical_name"]
+                if fe["type"] == "D":
+                    d_path = data_dir or folder
+                    tgt = os.path.join(d_path, f"{target_db_name}_{log_name}.mdf")
+                else:
+                    l_path = log_dir or data_dir or folder
+                    tgt = os.path.join(l_path, f"{target_db_name}_{log_name}.ldf")
+                move_clauses.append(f"MOVE N'{log_name}' TO N'{tgt}'")
+                if log_cb:
+                    emit_log(f"Auto-relocating {fe['type']} logical file '{log_name}' -> {tgt}", "info", log_cb)
+
+    move_sql = (", " + ", ".join(move_clauses)) if move_clauses else ""
+    replace_sql = "REPLACE, " if with_replace else ""
+    bak_filepath_esc = bak_filepath.replace("'", "''")
+
+    single_user_sql = f"IF DB_ID(N'{target_db_name}') IS NOT NULL BEGIN ALTER DATABASE [{target_db_name}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; END;" if close_connections else ""
+
+    restore_sql = f"""
+USE master;
+{single_user_sql}
+BEGIN TRY
+    RESTORE DATABASE [{target_db_name}] FROM DISK = N'{bak_filepath_esc}'
+    WITH {replace_sql}RECOVERY{move_sql}, STATS = 5;
+    ALTER DATABASE [{target_db_name}] SET MULTI_USER;
+END TRY
+BEGIN CATCH
+    IF DB_ID(N'{target_db_name}') IS NOT NULL
+    BEGIN
+        ALTER DATABASE [{target_db_name}] SET MULTI_USER;
+    END;
+    THROW;
+END CATCH;
+"""
+
+    cli_type, cli_path = find_sql_cli_executable()
+    env = _sql_env(cli_type, sql_user, sql_password)
+
+    def _run_cmd(trust):
+        # Query timeout = 0 (infinite wait for database restoration)
+        argv = _sql_argv(cli_type, cli_path, sql_server, sql_user, 0, restore_sql, trust, False)
+        proc = subprocess.Popen(argv, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, env=env, creationflags=_CREATE_NO_WINDOW)
+        backup_controller.set_active_process(proc)
+        try:
+            # Stream output in real-time if log_cb is provided
+            stdout_lines = []
+            if log_cb:
+                for line in iter(proc.stdout.readline, ""):
+                    if cancel_check and cancel_check():
+                        proc.terminate()
+                        break
+                    line_s = line.strip()
+                    if line_s:
+                        stdout_lines.append(line)
+                        if "percent processed" in line_s.lower() or "processed" in line_s.lower():
+                            emit_log(line_s, "info", log_cb)
+                stderr = proc.stderr.read()
+                proc.wait()
+                return proc.returncode, "".join(stdout_lines), stderr
+            else:
+                stdout, stderr = proc.communicate()
+                return proc.returncode, stdout, stderr
+        finally:
+            backup_controller.clear_active_process()
+
+    code, out, err = _run_cmd(True)
+    if cli_type == "sqlcmd" and _looks_like_bad_c_flag(out, err):
+        code, out, err = _run_cmd(False)
+    return code, out, err
+
+
+def restore_database_pipeline(source_file_path, target_db_name, sql_server, sql_user="", sql_password="",
+                              private_key_path="", private_key_password=None, staging_dir="",
+                              with_replace=True, close_connections=True, auto_relocate=True,
+                              log_cb=None, status_cb=None, progress_cb=None, cancel_check=None):
+    """
+    End-to-end Database Restore Pipeline:
+    1. Validates source file existence and determines archive format (.dbk2, .zip, .bak).
+    2. If .dbk2: Decrypts using AES-256-GCM + RSA-4096 private key into staging directory.
+    3. If .zip: Extracts inner .bak file.
+    4. If .bak: Restores directly into SQL Server with exclusive connection handling.
+    5. Cleans up intermediate staging files safely.
+    Returns a result dict: {'success': bool, 'target_db': str, 'message': str, 'duration_secs': float}
+    """
+    t_start = time.time()
+    emit_log("=" * 60, "info", log_cb)
+    emit_log("STARTING DATABASE RESTORATION PIPELINE", "info", log_cb)
+    emit_log("=" * 60, "info", log_cb)
+
+    if not source_file_path or not os.path.exists(source_file_path):
+        msg = f"Source backup file does not exist: {source_file_path}"
+        emit_log(f"ERROR: {msg}", "error", log_cb)
+        if status_cb: status_cb("Restore Failed: Source file not found")
+        return {"success": False, "target_db": target_db_name, "message": msg, "duration_secs": 0}
+
+    if not _valid_db_name(target_db_name):
+        msg = f"Target database name '{target_db_name}' contains invalid characters."
+        emit_log(f"ERROR: {msg}", "error", log_cb)
+        if status_cb: status_cb("Restore Failed: Invalid database name")
+        return {"success": False, "target_db": target_db_name, "message": msg, "duration_secs": 0}
+
+    # Determine staging directory
+    if not staging_dir or not os.path.isdir(staging_dir):
+        staging_dir = get_sql_instance_default_backup_path(sql_server, sql_user, sql_password) or tempfile.gettempdir()
+    
+    stage_work_dir = os.path.join(staging_dir, f"_restore_stage_{int(time.time())}_{os.getpid()}")
+    os.makedirs(stage_work_dir, exist_ok=True)
+    grant_sql_folder_permissions(stage_work_dir)
+
+    temp_files_to_cleanup = []
+    
+    try:
+        current_file = os.path.abspath(source_file_path)
+        ext = os.path.splitext(current_file)[1].lower()
+        emit_log(f"Source Backup: {current_file} ({ext.upper()})", "info", log_cb)
+        emit_log(f"Target Database: {target_db_name} on {sql_server}", "info", log_cb)
+        if progress_cb: progress_cb(0.1)
+
+        # -------------------------------------------------------------
+        # Step A: Decrypt DBK2 if encrypted
+        # -------------------------------------------------------------
+        if ext == ".dbk2":
+            if not private_key_path or not os.path.isfile(private_key_path):
+                msg = "Private key file (.pem) is required to decrypt a .dbk2 cloud backup."
+                emit_log(f"ERROR: {msg}", "error", log_cb)
+                if status_cb: status_cb("Restore Failed: Missing private key")
+                return {"success": False, "target_db": target_db_name, "message": msg, "duration_secs": round(time.time() - t_start, 2)}
+
+            decrypted_zip = os.path.join(stage_work_dir, "decrypted_archive.zip")
+            temp_files_to_cleanup.append(decrypted_zip)
+
+            emit_log(f"Decrypting cloud backup using RSA private key: {os.path.basename(private_key_path)}...", "info", log_cb)
+            if status_cb: status_cb("Decrypting .dbk2 cloud backup...")
+            if progress_cb: progress_cb(0.25)
+
+            # Sanitize passphrase if full RECOVERY_PASSPHRASE.txt was provided
+            pw_to_use = private_key_password
+            if isinstance(pw_to_use, str):
+                pw_to_use = pw_to_use.strip()
+                for pline in pw_to_use.splitlines():
+                    if pline.strip().startswith("Passphrase:"):
+                        pw_to_use = pline.split(":", 1)[1].strip()
+                        break
+
+            try:
+                meta = decrypt_file(
+                    current_file, decrypted_zip, private_key_path,
+                    password=pw_to_use.encode("utf-8") if isinstance(pw_to_use, str) else pw_to_use,
+                    cancel_check=cancel_check
+                )
+                emit_log(f"Decryption SUCCESS! Verified backup metadata: {meta.get('db_name', target_db_name)} created on {meta.get('host', 'unknown')} at {meta.get('utc_time', 'N/A')}", "info", log_cb)
+            except Exception as e:
+                msg = f"Cryptographic decryption failed: {e}"
+                emit_log(f"ERROR: {msg}", "error", log_cb)
+                if status_cb: status_cb("Restore Failed: Decryption error")
+                return {"success": False, "target_db": target_db_name, "message": msg, "duration_secs": round(time.time() - t_start, 2)}
+
+            current_file = decrypted_zip
+            ext = ".zip"
+
+        # -------------------------------------------------------------
+        # Step B: Extract .bak from ZIP archive
+        # -------------------------------------------------------------
+        if ext == ".zip":
+            emit_log(f"Unpacking compressed archive: {os.path.basename(current_file)}...", "info", log_cb)
+            if status_cb: status_cb("Extracting SQL backup file (.bak)...")
+            if progress_cb: progress_cb(0.4)
+
+            extracted_bak = None
+            with zipfile.ZipFile(current_file, "r") as zf:
+                namelist = zf.namelist()
+                bak_names = [n for n in namelist if n.lower().endswith(".bak")]
+                if not bak_names:
+                    msg = "No .bak file found inside the compressed archive."
+                    emit_log(f"ERROR: {msg}", "error", log_cb)
+                    if status_cb: status_cb("Restore Failed: No .bak in archive")
+                    return {"success": False, "target_db": target_db_name, "message": msg, "duration_secs": round(time.time() - t_start, 2)}
+                
+                target_bak_name = bak_names[0]
+                zf.extract(target_bak_name, stage_work_dir)
+                extracted_bak = os.path.join(stage_work_dir, target_bak_name)
+                temp_files_to_cleanup.append(extracted_bak)
+
+            current_file = extracted_bak
+            ext = ".bak"
+            emit_log(f"Extracted native SQL backup: {os.path.basename(current_file)} ({os.path.getsize(current_file) / (1024*1024):.2f} MB)", "info", log_cb)
+
+        # -------------------------------------------------------------
+        # Step C: Execute SQL Server RESTORE
+        # -------------------------------------------------------------
+        if ext != ".bak":
+            msg = f"Unsupported file extension '{ext}'. Must be .dbk2, .zip, or .bak"
+            emit_log(f"ERROR: {msg}", "error", log_cb)
+            if status_cb: status_cb("Restore Failed: Invalid file format")
+            return {"success": False, "target_db": target_db_name, "message": msg, "duration_secs": round(time.time() - t_start, 2)}
+
+        emit_log(f"Executing SQL Server RESTORE to database [{target_db_name}]...", "info", log_cb)
+        if status_cb: status_cb(f"Restoring database [{target_db_name}]...")
+        if progress_cb: progress_cb(0.6)
+
+        retcode, stdout, stderr = execute_sql_restore_command(
+            sql_server=sql_server,
+            target_db_name=target_db_name,
+            bak_filepath=current_file,
+            sql_user=sql_user,
+            sql_password=sql_password,
+            with_replace=with_replace,
+            close_connections=close_connections,
+            auto_relocate=auto_relocate,
+            cancel_check=cancel_check,
+            log_cb=log_cb
+        )
+
+        duration = round(time.time() - t_start, 2)
+        if retcode == 0:
+            if progress_cb: progress_cb(1.0)
+            success_msg = f"Database [{target_db_name}] successfully restored in {duration} seconds!"
+            emit_log("=" * 60, "info", log_cb)
+            emit_log(f"RESTORE SUCCESS: {success_msg}", "info", log_cb)
+            emit_log("=" * 60, "info", log_cb)
+            if status_cb: status_cb(f"Restore Complete: [{target_db_name}] ready!")
+            return {"success": True, "target_db": target_db_name, "message": success_msg, "duration_secs": duration}
+        else:
+            err_details = (stderr.strip() or stdout.strip() or "Unknown SQL error")
+            msg = f"SQL RESTORE failed (code {retcode}): {err_details}"
+            emit_log(f"ERROR: {msg}", "error", log_cb)
+            if status_cb: status_cb(f"Restore Failed: {err_details[:60]}")
+            return {"success": False, "target_db": target_db_name, "message": msg, "duration_secs": duration}
+
+    finally:
+        # Safe cleanup of temporary unpacked/decrypted files
+        emit_log("Cleaning up temporary restoration staging files...", "info", log_cb)
+        for tf in temp_files_to_cleanup:
+            try:
+                if os.path.isfile(tf):
+                    os.remove(tf)
+            except Exception:
+                pass
+        try:
+            if os.path.isdir(stage_work_dir):
+                shutil.rmtree(stage_work_dir, ignore_errors=True)
+        except Exception:
+            pass
 
