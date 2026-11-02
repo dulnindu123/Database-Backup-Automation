@@ -615,8 +615,20 @@ class BackupAutomationApp(ctk.CTk):
             font=ctk.CTkFont(size=12),
             text_color="#d1d5db"
         )
-        self.chk_boot_trigger.pack(anchor="w", padx=15, pady=(0, 12))
+        self.chk_boot_trigger.pack(anchor="w", padx=15, pady=(0, 8))
         self.chk_boot_trigger.select()
+
+        # 6. Encryption Option for Automated Backups
+        self.chk_sched_encryption = ctk.CTkCheckBox(
+            trigger_card,
+            text="Enable Zero-Trust Encryption for Automated Backups (DBK2: AES-256 + RSA-4096)",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#60a5fa",
+            fg_color="#0284c7",
+            hover_color="#0369a1",
+            command=self._on_sched_encrypt_toggled
+        )
+        self.chk_sched_encryption.pack(anchor="w", padx=15, pady=(0, 12))
 
         # ── Action Buttons Row ─────────────────────────────────────────
         btn_row = ctk.CTkFrame(scroll, fg_color="transparent")
@@ -1230,6 +1242,11 @@ class BackupAutomationApp(ctk.CTk):
                 self.chk_encryption_enabled.select()
             else:
                 self.chk_encryption_enabled.deselect()
+        if hasattr(self, "chk_sched_encryption"):
+            if enc_val:
+                self.chk_sched_encryption.select()
+            else:
+                self.chk_sched_encryption.deselect()
         if hasattr(self, "chk_dash_encrypt"):
             if enc_val:
                 self.chk_dash_encrypt.select()
@@ -1747,6 +1764,8 @@ class BackupAutomationApp(ctk.CTk):
         self.config_data["SCHEDULE_TIME"] = time_str
         self.config_data["STRICTLY_MONDAYS_ONLY"] = (selected_days == ["MON"])
         self.config_data["AUTOMATION_MODE"] = "SYSTEM" if as_system else "USER"
+        if hasattr(self, "chk_sched_encryption"):
+            self.config_data["ENCRYPTION_ENABLED"] = bool(self.chk_sched_encryption.get())
         save_config(self.config_data)
 
         mode_label = "Unattended System Service (Session 0)" if as_system else "Standard User Task"
@@ -2032,21 +2051,34 @@ class BackupAutomationApp(ctk.CTk):
 
         threading.Thread(target=self._execute_backup_worker, daemon=True).start()
 
-    def _on_dash_encrypt_toggled(self):
-        """Called when user toggles encryption checkbox on Dashboard."""
-        val = bool(self.chk_dash_encrypt.get())
+    def _sync_encryption_ui(self, val: bool):
+        """Synchronizes encryption checkbox states across Dashboard, Auto Schedule, and Settings tabs."""
+        self.config_data["ENCRYPTION_ENABLED"] = val
         if hasattr(self, "dash_enc_mode_label"):
             if val:
                 self.dash_enc_mode_label.configure(text="DBK2 Encrypted (AES-256 + RSA)", text_color="#38bdf8")
             else:
                 self.dash_enc_mode_label.configure(text="Standard Archive (.ZIP Upload)", text_color="#f59e0b")
+        if hasattr(self, "chk_dash_encrypt"):
+            if val: self.chk_dash_encrypt.select()
+            else: self.chk_dash_encrypt.deselect()
+        if hasattr(self, "chk_sched_encryption"):
+            if val: self.chk_sched_encryption.select()
+            else: self.chk_sched_encryption.deselect()
         if hasattr(self, "chk_encryption_enabled"):
-            if val:
-                self.chk_encryption_enabled.select()
-            else:
-                self.chk_encryption_enabled.deselect()
-        self.config_data["ENCRYPTION_ENABLED"] = val
+            if val: self.chk_encryption_enabled.select()
+            else: self.chk_encryption_enabled.deselect()
         save_config(self.config_data)
+
+    def _on_dash_encrypt_toggled(self):
+        """Called when user toggles encryption checkbox on Dashboard."""
+        val = bool(self.chk_dash_encrypt.get()) if hasattr(self, "chk_dash_encrypt") else True
+        self._sync_encryption_ui(val)
+
+    def _on_sched_encrypt_toggled(self):
+        """Called when user toggles encryption checkbox on Auto Schedule tab."""
+        val = bool(self.chk_sched_encryption.get()) if hasattr(self, "chk_sched_encryption") else True
+        self._sync_encryption_ui(val)
 
     def _stop_backup(self):
         """Emergency stop handler invoked from Header or Dashboard."""
