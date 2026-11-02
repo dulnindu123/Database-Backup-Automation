@@ -252,7 +252,11 @@ class BackupAutomationApp(ctk.CTk):
         c2.grid(row=0, column=1, padx=6, sticky="nsew")
         ctk.CTkLabel(c2, text="ZERO-TRUST CLOUD WALL", font=ctk.CTkFont(size=11, weight="bold"), text_color="#34d399").pack(anchor="w", padx=15, pady=(12, 2))
         ctk.CTkLabel(c2, text="Upload & Telemetry Broker", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=15)
-        ctk.CTkLabel(c2, text="DBK2 Encrypted (AES-256 + RSA)", font=ctk.CTkFont(size=12), text_color="#9ca3af").pack(anchor="w", padx=15, pady=(2, 12))
+        init_enc = self.config_data.get("ENCRYPTION_ENABLED", True)
+        init_enc_txt = "DBK2 Encrypted (AES-256 + RSA)" if init_enc else "Standard Archive (.ZIP Upload)"
+        init_enc_col = "#38bdf8" if init_enc else "#f59e0b"
+        self.dash_enc_mode_label = ctk.CTkLabel(c2, text=init_enc_txt, font=ctk.CTkFont(size=12), text_color=init_enc_col)
+        self.dash_enc_mode_label.pack(anchor="w", padx=15, pady=(2, 12))
 
         # Card 3: Scheduler Status
         c3 = ctk.CTkFrame(stats_frame, corner_radius=10, fg_color=("#374151", "#1f2937"))
@@ -310,6 +314,23 @@ class BackupAutomationApp(ctk.CTk):
             command=self._stop_backup
         )
         self.btn_stop_backup.pack(side="left", padx=6)
+
+        # Quick Encryption Option for Manual Backup
+        dash_opt_frame = ctk.CTkFrame(action_card, fg_color="transparent")
+        dash_opt_frame.pack(pady=(6, 12))
+
+        self.chk_dash_encrypt = ctk.CTkCheckBox(
+            dash_opt_frame,
+            text="Encrypt backup with Zero-Trust DBK2 (Uncheck for standard .zip archive)",
+            font=ctk.CTkFont(size=12),
+            text_color="#cbd5e1",
+            command=self._on_dash_encrypt_toggled
+        )
+        self.chk_dash_encrypt.pack(side="left")
+        if self.config_data.get("ENCRYPTION_ENABLED", True):
+            self.chk_dash_encrypt.select()
+        else:
+            self.chk_dash_encrypt.deselect()
 
         # Dynamic master progress bar
         self.progress_bar = ctk.CTkProgressBar(action_card, width=520, height=14, corner_radius=7)
@@ -854,6 +875,25 @@ class BackupAutomationApp(ctk.CTk):
         self.lbl_key_status.pack(side="left")
 
 
+        # Cloud Encryption Mode Toggle
+        enc_card = ctk.CTkFrame(sec_box, fg_color="transparent")
+        enc_card.pack(fill="x", padx=15, pady=(0, 10))
+
+        self.chk_encryption_enabled = ctk.CTkCheckBox(
+            enc_card,
+            text="Enable Zero-Trust Cloud Encryption by Default (AES-256-GCM + RSA-4096)",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#e2e8f0"
+        )
+        self.chk_encryption_enabled.pack(anchor="w")
+
+        ctk.CTkLabel(
+            enc_card,
+            text="When enabled, backups are encrypted into .dbk2 before cloud upload. When disabled, backups are uploaded as standard compressed .zip archives (no private key needed to restore).",
+            font=ctk.CTkFont(size=11),
+            text_color="#9ca3af"
+        ).pack(anchor="w", padx=(28, 0), pady=(2, 0))
+
         # Storage Management / Zero-Footprint Toggle
         self.chk_delete_local = ctk.CTkCheckBox(
             scroll,
@@ -1184,6 +1224,23 @@ class BackupAutomationApp(ctk.CTk):
         else:
             self.chk_delete_local.deselect()
 
+        enc_val = c.get("ENCRYPTION_ENABLED", True)
+        if hasattr(self, "chk_encryption_enabled"):
+            if enc_val:
+                self.chk_encryption_enabled.select()
+            else:
+                self.chk_encryption_enabled.deselect()
+        if hasattr(self, "chk_dash_encrypt"):
+            if enc_val:
+                self.chk_dash_encrypt.select()
+            else:
+                self.chk_dash_encrypt.deselect()
+        if hasattr(self, "dash_enc_mode_label"):
+            if enc_val:
+                self.dash_enc_mode_label.configure(text="DBK2 Encrypted (AES-256 + RSA)", text_color="#38bdf8")
+            else:
+                self.dash_enc_mode_label.configure(text="Standard Archive (.ZIP Upload)", text_color="#f59e0b")
+
         if hasattr(self, "entry_sched_time") and c.get("SCHEDULE_TIME"):
             self.entry_sched_time.delete(0, "end")
             self.entry_sched_time.insert(0, c.get("SCHEDULE_TIME"))
@@ -1430,7 +1487,9 @@ class BackupAutomationApp(ctk.CTk):
             "STRICTLY_MONDAYS_ONLY": (selected_days == ["MON"]),
             "SCHEDULE_DAYS": selected_days,
             "SCHEDULE_TIME": time_val,
-            "DELETE_LOCAL_AFTER_UPLOAD": bool(self.chk_delete_local.get())
+            "DELETE_LOCAL_AFTER_UPLOAD": bool(self.chk_delete_local.get()),
+            "ENCRYPTION_ENABLED": bool(self.chk_encryption_enabled.get()) if hasattr(self, "chk_encryption_enabled") else True,
+            "AUTOMATION_MODE": self.sched_mode_var.get() if hasattr(self, "sched_mode_var") else self.config_data.get("AUTOMATION_MODE", "SYSTEM")
         })
         # Preserve customer Google Drive & Sheet IDs for multi-module integration
         drive_val = self.entry_google_drive.get().strip() if hasattr(self, "entry_google_drive") else ""
@@ -1442,6 +1501,17 @@ class BackupAutomationApp(ctk.CTk):
         ok, msg = save_config(new_config)
         if ok:
             self.config_data = new_config
+            enc_saved = new_config.get("ENCRYPTION_ENABLED", True)
+            if hasattr(self, "chk_dash_encrypt"):
+                if enc_saved:
+                    self.chk_dash_encrypt.select()
+                else:
+                    self.chk_dash_encrypt.deselect()
+            if hasattr(self, "dash_enc_mode_label"):
+                if enc_saved:
+                    self.dash_enc_mode_label.configure(text="DBK2 Encrypted (AES-256 + RSA)", text_color="#38bdf8")
+                else:
+                    self.dash_enc_mode_label.configure(text="Standard Archive (.ZIP Upload)", text_color="#f59e0b")
             self.card_sql_label.configure(text=new_config.get("SQL_SERVER_NAME", "localhost"))
             self.card_dbs_label.configure(text=f"{len(db_list)} Databases Configured")
             self._load_config_into_ui()
@@ -1962,6 +2032,22 @@ class BackupAutomationApp(ctk.CTk):
 
         threading.Thread(target=self._execute_backup_worker, daemon=True).start()
 
+    def _on_dash_encrypt_toggled(self):
+        """Called when user toggles encryption checkbox on Dashboard."""
+        val = bool(self.chk_dash_encrypt.get())
+        if hasattr(self, "dash_enc_mode_label"):
+            if val:
+                self.dash_enc_mode_label.configure(text="DBK2 Encrypted (AES-256 + RSA)", text_color="#38bdf8")
+            else:
+                self.dash_enc_mode_label.configure(text="Standard Archive (.ZIP Upload)", text_color="#f59e0b")
+        if hasattr(self, "chk_encryption_enabled"):
+            if val:
+                self.chk_encryption_enabled.select()
+            else:
+                self.chk_encryption_enabled.deselect()
+        self.config_data["ENCRYPTION_ENABLED"] = val
+        save_config(self.config_data)
+
     def _stop_backup(self):
         """Emergency stop handler invoked from Header or Dashboard."""
         if not self.is_running:
@@ -2001,13 +2087,16 @@ class BackupAutomationApp(ctk.CTk):
                 )
             self.after(0, _apply)
 
+        encrypt_choice = bool(self.chk_dash_encrypt.get()) if hasattr(self, "chk_dash_encrypt") else self.config_data.get("ENCRYPTION_ENABLED", True)
         try:
             success, summary = run_full_backup(
                 config=self.config_data,
                 log_cb=self.append_log,
                 progress_cb=update_progress,
                 status_cb=update_status,
-                telemetry_cb=update_telemetry
+                telemetry_cb=update_telemetry,
+                cancel_check=lambda: self.was_cancelled,
+                encrypt_backup=encrypt_choice
             )
             if self.was_cancelled or is_backup_cancelled():
                 self.after(0, lambda: messagebox.showinfo("Backup Stopped", "The backup and cloud sync process was safely stopped.\n\nAll temporary files have been cleaned up."))

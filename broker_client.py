@@ -317,10 +317,18 @@ def _md5_b64(path):
     return base64.b64encode(h.digest()).decode()
 
 
-def request_session(broker_url, token, db, size, seq=1):
+def request_session(broker_url, token, db, size, seq=1, extension="dbk2", is_encrypted=True):
     return post_broker(
         broker_url,
-        {"action": "request_upload", "token": token, "db_name": db, "size_bytes": size, "seq": seq},
+        {
+            "action": "request_upload",
+            "token": token,
+            "db_name": db,
+            "size_bytes": size,
+            "seq": seq,
+            "extension": extension,
+            "is_encrypted": is_encrypted
+        },
         timeout=30,
     )
 
@@ -401,7 +409,7 @@ def _put_all(uri, path, total, log, progress_cb, telemetry_cb, cancel_check):
 
 
 def secure_upload(file_path, db_name, config, base_dir, log_cb=None, progress_cb=None,
-                  telemetry_cb=None, cancel_check=None, status_cb=None):
+                  telemetry_cb=None, cancel_check=None, status_cb=None, extension=None, is_encrypted=True):
     """Returns the remote object name on VERIFIED success, else None.
     Never deletes anything; the caller deletes local files only after a non-None return."""
     def log(msg, level="info"):
@@ -422,10 +430,11 @@ def secure_upload(file_path, db_name, config, base_dir, log_cb=None, progress_cb
     token = load_token(token_path)
     total = os.path.getsize(file_path)
 
+    ext = extension or (os.path.splitext(file_path)[1].lower().lstrip(".") or ("dbk2" if is_encrypted else "zip"))
     info = None
     for seq in range(1, 100):
         try:
-            r = request_session(broker_url, token, db_name, total, seq)
+            r = request_session(broker_url, token, db_name, total, seq, extension=ext, is_encrypted=is_encrypted)
         except requests.RequestException as e:
             log(f"Broker unreachable: {e}", "error")
             return None
@@ -477,10 +486,10 @@ def secure_upload(file_path, db_name, config, base_dir, log_cb=None, progress_cb
     return info.get('file_name', info.get('object'))
 
 
-def report_storage_telemetry(telemetry_broker_url, token, drives, tab_name="Storage Monitor"):
+def report_storage_telemetry(telemetry_broker_url, token, drives, tab_name="Storage Monitor", customer_sheet_id=None):
     """
     Sends drive health stats to the separate Telemetry Broker endpoint (POST /report-status).
-    Note: Client NEVER sends a Sheet ID. The broker handles sheet insertion safely.
+    Routes to the Customer Sheet [Server Cleanup] tab and Master Application Report.
     Returns (success_boolean, message)
     """
     if not telemetry_broker_url or not token:
@@ -491,7 +500,13 @@ def report_storage_telemetry(telemetry_broker_url, token, drives, tab_name="Stor
     except ValueError as e:
         return False, f"Telemetry Broker URL rejected: {e}"
 
-    payload = {"action": "report_status", "token": token, "drives": drives, "tab_name": tab_name}
+    payload = {
+        "action": "report_status",
+        "token": token,
+        "drives": drives,
+        "tab_name": tab_name,
+        "customer_sheet_id": customer_sheet_id or ""
+    }
     try:
         r = post_broker(valid_url, payload, timeout=15)
         status, data, err = parse_broker_response(r)

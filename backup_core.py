@@ -122,18 +122,20 @@ def broker_ready(config, base_dir=None):
         else:
             return False, f"{os.path.basename(token_file)} missing (provision this PC's token)"
 
-    pub_file = config.get("PUBLIC_KEY_FILE", "backup_public.pem")
-    pub_path = pub_file if os.path.isabs(pub_file) else os.path.join(b_dir, pub_file)
-    if not os.path.exists(pub_path):
-        if base_dir is None:
-            data_dir = globals().get("DATA_DIR", b_dir)
-            alt_pub = os.path.join(data_dir, os.path.basename(pub_file))
-            if os.path.exists(alt_pub):
-                pub_path = alt_pub
+    encrypt_enabled = config.get("ENCRYPTION_ENABLED", True)
+    if encrypt_enabled:
+        pub_file = config.get("PUBLIC_KEY_FILE", "backup_public.pem")
+        pub_path = pub_file if os.path.isabs(pub_file) else os.path.join(b_dir, pub_file)
+        if not os.path.exists(pub_path):
+            if base_dir is None:
+                data_dir = globals().get("DATA_DIR", b_dir)
+                alt_pub = os.path.join(data_dir, os.path.basename(pub_file))
+                if os.path.exists(alt_pub):
+                    pub_path = alt_pub
+                else:
+                    return False, f"{os.path.basename(pub_file)} missing (encryption public key)"
             else:
                 return False, f"{os.path.basename(pub_file)} missing (encryption public key)"
-        else:
-            return False, f"{os.path.basename(pub_file)} missing (encryption public key)"
 
     if not config.get("ALLOW_NO_ESCROW", False):
         escrow_file = config.get("ESCROW_KEY_FILE", "escrow_public.pem")
@@ -1441,7 +1443,7 @@ def update_google_sheet(creds, sheet_id, backup_filename, file_size_str, downloa
 # 6. MASTER WORKFLOW ORCHESTRATION & STORAGE CLEANUP
 # =============================================================================
 
-def run_full_backup(config=None, log_cb=None, progress_cb=None, status_cb=None, cancel_check=None, telemetry_cb=None):
+def run_full_backup(config=None, log_cb=None, progress_cb=None, status_cb=None, cancel_check=None, telemetry_cb=None, encrypt_backup=None):
     """
     Master end-to-end backup orchestrator.
     
@@ -1553,44 +1555,64 @@ def run_full_backup(config=None, log_cb=None, progress_cb=None, status_cb=None, 
                     overall = db_base + (0.30 * db_weight) + (upload_fraction * 0.70 * db_weight)
                     progress_cb(min(0.98, max(0.0, overall)))
 
-            # Encrypt with the PUBLIC key(s) (private keys stay offline), then upload via the broker.
-            enc_path = os.path.splitext(backup_zip)[0] + ".dbk2"
-            pub_key = os.path.join(BASE_DIR, config.get("PUBLIC_KEY_FILE", "backup_public.pem"))
-            escrow_key = os.path.join(BASE_DIR, config.get("ESCROW_KEY_FILE", "escrow_public.pem"))
+            # Check if encryption is enabled (default True)
+            encrypt_enabled = config.get("ENCRYPTION_ENABLED", True) if encrypt_backup is None else bool(encrypt_backup)
             _log = lambda m, l="info": emit_log(m, l, log_cb)
             link = None
-            try:
-                if status_cb:
-                    status_cb(f"Encrypting {file_name} (DBK2)...")
-                allow_no_escrow = config.get("ALLOW_NO_ESCROW", False)
-                if not os.path.exists(escrow_key) and not allow_no_escrow:
-                    raise ValueError(
-                        f"Escrow key '{os.path.basename(escrow_key)}' missing! DBK2 encryption requires an escrow key "
-                        "by default. Either place escrow_public.pem in the application directory or set ALLOW_NO_ESCROW: true in config.json."
-                    )
-                escrow_to_pass = escrow_key if os.path.exists(escrow_key) else None
 
-                encrypt_file(
-                    backup_zip, enc_path, pub_key,
-                    cancel_check=cancel_check,
-                    escrow_key_path=escrow_to_pass,
-                    allow_no_escrow=allow_no_escrow,
-                    db_name=db_name
-                )
-                link = secure_upload(
-                    enc_path, db_name, config, BASE_DIR,
-                    log_cb=_log, progress_cb=_upload_progress_bridge,
-                    telemetry_cb=telemetry_cb, cancel_check=cancel_check, status_cb=status_cb)
-            except InterruptedError:
-                emit_log(f"Encryption of {file_name} cancelled.", "warning", log_cb)
-            except Exception as up_err:
-                emit_log(f"Encrypt/upload error for {db_name}: {up_err}", "error", log_cb)
-            finally:
+            if encrypt_enabled:
+                # Encrypt with the PUBLIC key(s) (private keys stay offline), then upload via the broker.
+                enc_path = os.path.splitext(backup_zip)[0] + ".dbk2"
+                pub_key = os.path.join(BASE_DIR, config.get("PUBLIC_KEY_FILE", "backup_public.pem"))
+                escrow_key = os.path.join(BASE_DIR, config.get("ESCROW_KEY_FILE", "escrow_public.pem"))
                 try:
-                    if os.path.exists(enc_path):
-                        os.remove(enc_path)
-                except Exception:
-                    pass
+                    if status_cb:
+                        status_cb(f"Encrypting {file_name} (DBK2)...")
+                    allow_no_escrow = config.get("ALLOW_NO_ESCROW", False)
+                    if not os.path.exists(escrow_key) and not allow_no_escrow:
+                        raise ValueError(
+                            f"Escrow key '{os.path.basename(escrow_key)}' missing! DBK2 encryption requires an escrow key "
+                            "by default. Either place escrow_public.pem in the application directory or set ALLOW_NO_ESCROW: true in config.json."
+                        )
+                    escrow_to_pass = escrow_key if os.path.exists(escrow_key) else None
+
+                    encrypt_file(
+                        backup_zip, enc_path, pub_key,
+                        cancel_check=cancel_check,
+                        escrow_key_path=escrow_to_pass,
+                        allow_no_escrow=allow_no_escrow,
+                        db_name=db_name
+                    )
+                    link = secure_upload(
+                        enc_path, db_name, config, BASE_DIR,
+                        log_cb=_log, progress_cb=_upload_progress_bridge,
+                        telemetry_cb=telemetry_cb, cancel_check=cancel_check, status_cb=status_cb,
+                        extension="dbk2", is_encrypted=True)
+                except InterruptedError:
+                    emit_log(f"Encryption of {file_name} cancelled.", "warning", log_cb)
+                except Exception as up_err:
+                    emit_log(f"Encrypt/upload error for {db_name}: {up_err}", "error", log_cb)
+                finally:
+                    try:
+                        if os.path.exists(enc_path):
+                            os.remove(enc_path)
+                    except Exception:
+                        pass
+            else:
+                # Upload compressed .zip directly without encryption
+                emit_log(f"Zero-Trust Cloud Encryption is disabled. Uploading standard compressed archive: {file_name} (.zip)", "info", log_cb)
+                try:
+                    if status_cb:
+                        status_cb(f"Uploading {file_name} (.zip)...")
+                    link = secure_upload(
+                        backup_zip, db_name, config, BASE_DIR,
+                        log_cb=_log, progress_cb=_upload_progress_bridge,
+                        telemetry_cb=telemetry_cb, cancel_check=cancel_check, status_cb=status_cb,
+                        extension="zip", is_encrypted=False)
+                except InterruptedError:
+                    emit_log(f"Upload of {file_name} cancelled.", "warning", log_cb)
+                except Exception as up_err:
+                    emit_log(f"Upload error for {db_name}: {up_err}", "error", log_cb)
 
             if (cancel_check and cancel_check()) or backup_controller.is_cancelled():
                 emit_log(f"EMERGENCY STOP: Upload stopped for {db_name}.", "warning", log_cb)
@@ -2801,7 +2823,13 @@ def run_storage_monitor(config=None, log_cb=None, status_cb=None):
             from broker_client import load_token, report_storage_telemetry
             token = load_token(token_path)
             tab_name = config.get("STORAGE_SHEET_TAB_NAME", "Storage Monitor")
-            sheet_logged, msg = report_storage_telemetry(telemetry_broker_url, token, drives, tab_name=tab_name)
+            sheet_logged, msg = report_storage_telemetry(
+                telemetry_broker_url,
+                token,
+                drives,
+                tab_name=tab_name,
+                customer_sheet_id=config.get("GOOGLE_SHEET_ID")
+            )
             emit_log(f"Telemetry Broker: {msg}", "info" if sheet_logged else "warning", log_cb)
         except Exception as tel_err:
             emit_log(f"Notice: Storage telemetry reporting skipped: {tel_err}", "warning", log_cb)
