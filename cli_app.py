@@ -316,16 +316,35 @@ def action_storage_cleanup():
     """Runs drive space health evaluation and reports telemetry."""
     print(f"\n{Colors.BOLD}{Colors.YELLOW}--- RUNNING SERVER STORAGE SCAN & TELEMETRY ---{Colors.RESET}")
     cfg = load_config()
-    success, summary = run_storage_monitor(
-        config=cfg,
-        progress_cb=progress_callback,
-        status_cb=status_callback,
-        log_cb=log_callback
-    )
-    print("\n" + "=" * 70)
-    print(f"Storage Scan Result: {Colors.GREEN if success else Colors.YELLOW}{summary}{Colors.RESET}")
-    print("=" * 70 + "\n")
-    return success
+    try:
+        res = run_storage_monitor(
+            config=cfg,
+            status_cb=status_callback,
+            log_cb=log_callback
+        )
+        if isinstance(res, tuple):
+            success = res[0]
+            summary = res[1] if len(res) > 1 else str(res)
+            drives_list = res[2] if len(res) > 2 else []
+        else:
+            success = bool(res)
+            summary = str(res)
+            drives_list = []
+
+        print("\n" + "=" * 70)
+        print(f"Storage Scan Result: {Colors.GREEN if success else Colors.YELLOW}{summary}{Colors.RESET}")
+        if drives_list:
+            print("\nDrive Storage Summary:")
+            for d in drives_list:
+                dr_letter = d.get('drive_letter') or d.get('drive', 'N/A')
+                lbl = f" [{d.get('label')}]" if d.get("label") else ""
+                status_icon = f"{Colors.RED}[CRITICAL]" if d.get("is_alert") else f"{Colors.GREEN}[NORMAL]"
+                print(f"  {status_icon} Drive {dr_letter}{lbl}: Free {d.get('free_gb', 0):.1f} GB / {d.get('total_gb', 0):.1f} GB ({d.get('usage_percent', 0):.1f}% used){Colors.RESET}")
+        print("=" * 70 + "\n")
+        return success
+    except Exception as e:
+        print(f"\n{Colors.RED}{Colors.BOLD}[ERROR] Storage scan encountered an exception: {e}{Colors.RESET}\n")
+        return False
 
 def action_performance_query(target_db=None):
     """Executes database integrity check and index re-indexing suite."""
@@ -345,25 +364,45 @@ def action_performance_query(target_db=None):
     print("Running DBCC CHECKDB, table fragmentation measurement, and DBREINDEX (FillFactor 80)...\n")
 
     t_start = time.time()
-    success, summary = run_performance_query(
-        config=cfg,
-        progress_cb=progress_callback,
-        status_cb=status_callback,
-        log_cb=log_callback,
-        target_db=target_db,
-        mode="Manual"
-    )
-    t_duration = round(time.time() - t_start, 1)
+    try:
+        skip_safety_backup = not cfg.get("PERF_EXECUTE_SAFETY_BACKUP", False)
+        res = run_performance_query(
+            config=cfg,
+            progress_cb=progress_callback,
+            status_cb=status_callback,
+            log_cb=log_callback,
+            target_db=target_db,
+            mode="Manual",
+            skip_backup=skip_safety_backup
+        )
+        t_duration = round(time.time() - t_start, 1)
 
-    print("\n" + "=" * 70)
-    if success:
-        print(f"{Colors.GREEN}{Colors.BOLD}[SUCCESS] PERFORMANCE SUITE COMPLETED ({t_duration}s){Colors.RESET}")
-        print(summary)
-    else:
-        print(f"{Colors.RED}{Colors.BOLD}[ERROR] PERFORMANCE SUITE FAILED ({t_duration}s){Colors.RESET}")
-        print(summary)
-    print("=" * 70 + "\n")
-    return success
+        if isinstance(res, dict):
+            success = res.get("success", False)
+            frag_before = res.get("frag_before_max", "N/A")
+            frag_after = res.get("frag_after_max", "N/A")
+            checkdb = res.get("checkdb_status", "N/A")
+            reindex = res.get("reindex_status", "N/A")
+            summary = f"Fragmentation: {frag_before}% -> {frag_after}% | DBCC: {checkdb} | Reindex: {reindex}"
+        elif isinstance(res, tuple):
+            success = res[0]
+            summary = res[1] if len(res) > 1 else str(res)
+        else:
+            success = bool(res)
+            summary = str(res)
+
+        print("\n" + "=" * 70)
+        if success:
+            print(f"{Colors.GREEN}{Colors.BOLD}[SUCCESS] PERFORMANCE SUITE COMPLETED ({t_duration}s){Colors.RESET}")
+            print(summary)
+        else:
+            print(f"{Colors.RED}{Colors.BOLD}[ERROR] PERFORMANCE SUITE FAILED ({t_duration}s){Colors.RESET}")
+            print(summary)
+        print("=" * 70 + "\n")
+        return success
+    except Exception as e:
+        print(f"\n{Colors.RED}{Colors.BOLD}[ERROR] Performance suite encountered an exception: {e}{Colors.RESET}\n")
+        return False
 
 def action_decrypt_wizard(enc_path=None, key_path=None, out_path=None):
     """Interactive or headless decryption of .dbk2 backup archives."""
@@ -563,33 +602,36 @@ def interactive_menu():
 
         choice = input(f"{Colors.BOLD}Enter your choice [0-9]: {Colors.RESET}").strip()
         
-        if choice == "1":
-            action_manual_backup()
-        elif choice == "2":
-            print(f"\n[A] View Status | [B] Configure / Enable | [C] Disable | [Back]")
-            sub = input("Select: ").strip().upper()
-            if sub == "A": action_schedule_status()
-            elif sub == "B": action_schedule_configure()
-            elif sub == "C": action_schedule_disable()
-        elif choice == "3":
-            action_view_settings(interactive=True)
-        elif choice == "4":
-            action_test_broker()
-        elif choice == "5":
-            action_test_sheet()
-        elif choice == "6":
-            action_storage_cleanup()
-        elif choice == "7":
-            action_performance_query()
-        elif choice == "8":
-            action_decrypt_wizard()
-        elif choice == "9":
-            action_view_logs()
-        elif choice in ("0", "q", "exit", "quit"):
-            print(f"\n{Colors.CYAN}Exiting Enterprise Database Cloud Backup CLI. Goodbye!{Colors.RESET}\n")
-            break
-        else:
-            print(f"{Colors.RED}Invalid selection. Please choose 0-9.{Colors.RESET}")
+        try:
+            if choice == "1":
+                action_manual_backup()
+            elif choice == "2":
+                print(f"\n[A] View Status | [B] Configure / Enable | [C] Disable | [Back]")
+                sub = input("Select: ").strip().upper()
+                if sub == "A": action_schedule_status()
+                elif sub == "B": action_schedule_configure()
+                elif sub == "C": action_schedule_disable()
+            elif choice == "3":
+                action_view_settings(interactive=True)
+            elif choice == "4":
+                action_test_broker()
+            elif choice == "5":
+                action_test_sheet()
+            elif choice == "6":
+                action_storage_cleanup()
+            elif choice == "7":
+                action_performance_query()
+            elif choice == "8":
+                action_decrypt_wizard()
+            elif choice == "9":
+                action_view_logs()
+            elif choice in ("0", "q", "exit", "quit"):
+                print(f"\n{Colors.CYAN}Exiting Enterprise Database Cloud Backup CLI. Goodbye!{Colors.RESET}\n")
+                break
+            else:
+                print(f"{Colors.RED}Invalid selection. Please choose 0-9.{Colors.RESET}")
+        except Exception as err:
+            print(f"\n{Colors.RED}{Colors.BOLD}[ERROR] Operation encountered an error: {err}{Colors.RESET}\n")
         
         input(f"\n{Colors.DIM}Press Enter to return to main menu...{Colors.RESET}")
 
