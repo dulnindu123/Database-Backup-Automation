@@ -402,22 +402,128 @@ def action_decrypt_wizard(enc_path=None, key_path=None, out_path=None):
         print(f"{Colors.RED}{Colors.BOLD}[ERROR] DECRYPTION FAILED: {msg}{Colors.RESET}")
         return False
 
-def action_view_settings():
+def _save_and_feedback(cfg):
+    ok, msg = save_config(cfg)
+    # Also synchronize to local BASE_DIR if config.json exists there
+    local_cfg = os.path.join(BASE_DIR, "config.json")
+    if os.path.exists(local_cfg):
+        try:
+            with open(local_cfg, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=4)
+        except Exception:
+            pass
+    if ok:
+        print(f"\n{Colors.GREEN}{Colors.BOLD}[SUCCESS] Settings saved successfully to config.json!{Colors.RESET}\n")
+    else:
+        print(f"\n{Colors.RED}{Colors.BOLD}[ERROR] Could not save settings: {msg}{Colors.RESET}\n")
+
+def action_view_settings(interactive=False):
     """Displays current system settings and provides configuration options."""
-    print(f"\n{Colors.BOLD}{Colors.CYAN}--- CURRENT SYSTEM CONFIGURATION (config.json) ---{Colors.RESET}")
     cfg = load_config()
-    print(f"  SQL Server Instance:    {Colors.BOLD}{cfg.get('SQL_SERVER_NAME', 'localhost')}{Colors.RESET}")
-    print(f"  SQL Authentication:     Username: '{cfg.get('SQL_USERNAME', 'sa')}', Password: [HIDDEN]")
-    print(f"  Target Databases:       {', '.join(cfg.get('TARGET_DATABASES', []))}")
-    print(f"  Local Backup Folder:    {cfg.get('BACKUP_FOLDER', 'E:\\DatabaseBackups')}")
-    print(f"  Delete Local On Sync:   {cfg.get('DELETE_LOCAL_AFTER_UPLOAD', True)}")
-    print(f"  Encryption By Default:  {cfg.get('ENCRYPTION_ENABLED', True)} (DBK2)")
-    print(f"  Apps Script Broker URL: {cfg.get('BROKER_URL', '')}")
-    print(f"  Google Drive Folder ID: {cfg.get('GOOGLE_DRIVE_FOLDER_ID', '')}")
-    print(f"  Google Sheet ID:        {cfg.get('GOOGLE_SHEET_ID', '')}")
-    print(f"  Schedule Days & Time:   {', '.join(cfg.get('SCHEDULE_DAYS', ['MON']))} at {cfg.get('SCHEDULE_TIME', '02:00')}")
-    print(f"  Automation Execution:   {cfg.get('AUTOMATION_MODE', 'SYSTEM')}")
-    print("-" * 70 + "\n")
+    while True:
+        print(f"\n{Colors.BOLD}{Colors.CYAN}--- SYSTEM CONFIGURATION & SETTINGS (config.json) ---{Colors.RESET}")
+        print(f"  [1] SQL Server Instance:    {Colors.BOLD}{cfg.get('SQL_SERVER_NAME', 'localhost')}{Colors.RESET}")
+        print(f"  [2] SQL Authentication:     Username: '{cfg.get('SQL_USERNAME', 'sa')}', Password: [HIDDEN]")
+        print(f"  [3] Target Databases:       {Colors.BOLD}{', '.join(cfg.get('TARGET_DATABASES', [])) or '[None]'}{Colors.RESET}")
+        print(f"  [4] Local Backup Folder:    {cfg.get('BACKUP_FOLDER', 'E:\\DatabaseBackups')}")
+        print(f"  [5] Delete Local On Sync:   {cfg.get('DELETE_LOCAL_AFTER_UPLOAD', True)}")
+        print(f"  [6] Encryption By Default:  {cfg.get('ENCRYPTION_ENABLED', True)} (DBK2)")
+        print(f"  [7] Apps Script Broker URL: {cfg.get('BROKER_URL', '')}")
+        print(f"  [8] Google Drive Folder ID: {cfg.get('GOOGLE_DRIVE_FOLDER_ID', '')}")
+        print(f"  [9] Google Sheet ID:        {cfg.get('GOOGLE_SHEET_ID', '')}")
+        print(f"  [10] Auto Schedule:         Every {', '.join(cfg.get('SCHEDULE_DAYS', ['MON']))} at {cfg.get('SCHEDULE_TIME', '02:00')}")
+        print(f"  [11] Storage Monitor Rules: C-Drive: {cfg.get('STORAGE_C_DRIVE_ALERT_GB', 30)} GB | Other: {cfg.get('STORAGE_OTHER_DRIVES_ALERT_PERCENT', 90)}%")
+        print("-" * 75)
+
+        if not interactive:
+            return
+
+        print(f"  [0] Return to Main Menu\n")
+        opt = input(f"{Colors.BOLD}Select a field number to edit [1-11, 0 to return]: {Colors.RESET}").strip()
+        if opt in ("0", "q", "exit", "back", ""):
+            break
+        elif opt == "1":
+            cur = cfg.get("SQL_SERVER_NAME", "localhost")
+            val = input(f"Enter SQL Server Instance [current: {cur}]: ").strip()
+            if val:
+                cfg["SQL_SERVER_NAME"] = val
+                _save_and_feedback(cfg)
+        elif opt == "2":
+            cur_u = cfg.get("SQL_USERNAME", "sa")
+            val_u = input(f"Enter SQL Username [current: {cur_u}]: ").strip()
+            if val_u:
+                cfg["SQL_USERNAME"] = val_u
+            val_p = input(f"Enter new SQL Password [press Enter to leave unchanged]: ").strip()
+            if val_p:
+                cfg["SQL_PASSWORD"] = val_p
+            _save_and_feedback(cfg)
+        elif opt == "3":
+            cur_dbs = ", ".join(cfg.get("TARGET_DATABASES", []))
+            print(f"Enter target databases separated by commas (e.g. WAGlassKote, WAGlassKote_Test)")
+            val = input(f"Databases [current: {cur_dbs}]: ").strip()
+            if val:
+                dbs = [d.strip() for d in val.split(",") if d.strip()]
+                cfg["TARGET_DATABASES"] = dbs
+                _save_and_feedback(cfg)
+        elif opt == "4":
+            cur = cfg.get("BACKUP_FOLDER", "E:\\DatabaseBackups")
+            val = input(f"Enter Local Backup Staging Directory [current: {cur}]: ").strip().strip('"')
+            if val:
+                cfg["BACKUP_FOLDER"] = val
+                _save_and_feedback(cfg)
+        elif opt == "5":
+            cur = cfg.get("DELETE_LOCAL_AFTER_UPLOAD", True)
+            inp = input(f"Delete local backup file after upload to cloud? [Y/n, current: {'Y' if cur else 'N'}]: ").strip().lower()
+            if inp in ("y", "yes", "true", "1"):
+                cfg["DELETE_LOCAL_AFTER_UPLOAD"] = True
+                _save_and_feedback(cfg)
+            elif inp in ("n", "no", "false", "0"):
+                cfg["DELETE_LOCAL_AFTER_UPLOAD"] = False
+                _save_and_feedback(cfg)
+        elif opt == "6":
+            cur = cfg.get("ENCRYPTION_ENABLED", True)
+            inp = input(f"Enable Zero-Trust Encryption (.dbk2) by default? [Y/n, current: {'Y' if cur else 'N'}]: ").strip().lower()
+            if inp in ("y", "yes", "true", "1"):
+                cfg["ENCRYPTION_ENABLED"] = True
+                _save_and_feedback(cfg)
+            elif inp in ("n", "no", "false", "0"):
+                cfg["ENCRYPTION_ENABLED"] = False
+                _save_and_feedback(cfg)
+        elif opt == "7":
+            cur = cfg.get("BROKER_URL", "")
+            val = input(f"Enter Apps Script Web App URL [current: {cur}]: ").strip()
+            if val:
+                cfg["BROKER_URL"] = val
+                _save_and_feedback(cfg)
+        elif opt == "8":
+            cur = cfg.get("GOOGLE_DRIVE_FOLDER_ID", "")
+            val = input(f"Enter Google Drive Folder ID or URL [current: {cur}]: ").strip()
+            if val:
+                ext_id = extract_google_id(val)
+                cfg["GOOGLE_DRIVE_FOLDER_ID"] = ext_id
+                _save_and_feedback(cfg)
+        elif opt == "9":
+            cur = cfg.get("GOOGLE_SHEET_ID", "")
+            val = input(f"Enter Customer Master Google Sheet ID or URL [current: {cur}]: ").strip()
+            if val:
+                ext_id = extract_google_id(val)
+                cfg["GOOGLE_SHEET_ID"] = ext_id
+                _save_and_feedback(cfg)
+        elif opt == "10":
+            action_schedule_configure()
+            cfg = load_config()
+        elif opt == "11":
+            cur_c = str(cfg.get("STORAGE_C_DRIVE_ALERT_GB", 30))
+            inp_c = input(f"Enter C: Drive Free Space Warning Alert (GB) [current: {cur_c}]: ").strip()
+            if inp_c and inp_c.isdigit():
+                cfg["STORAGE_C_DRIVE_ALERT_GB"] = int(inp_c)
+            cur_o = str(cfg.get("STORAGE_OTHER_DRIVES_ALERT_PERCENT", 90))
+            inp_o = input(f"Enter Other Drives Capacity Alert Threshold (%) [current: {cur_o}]: ").strip()
+            if inp_o and inp_o.isdigit():
+                cfg["STORAGE_OTHER_DRIVES_ALERT_PERCENT"] = int(inp_o)
+            _save_and_feedback(cfg)
+        else:
+            print(f"{Colors.RED}Invalid choice.{Colors.RESET}")
 
 def action_view_logs(lines=50):
     """Displays the most recent log entries."""
@@ -466,7 +572,7 @@ def interactive_menu():
             elif sub == "B": action_schedule_configure()
             elif sub == "C": action_schedule_disable()
         elif choice == "3":
-            action_view_settings()
+            action_view_settings(interactive=True)
         elif choice == "4":
             action_test_broker()
         elif choice == "5":
@@ -528,6 +634,7 @@ def main():
     parser.add_argument("-k", "--key", dest="key_path", type=str, help="Private key file for decryption")
     parser.add_argument("-o", "--output", dest="dec_output", type=str, help="Decrypted output file path (.zip)")
     parser.add_argument("--config-show", action="store_true", help="Display current config.json")
+    parser.add_argument("--config-set", nargs=2, metavar=("KEY", "VALUE"), help="Set configuration value (e.g. --config-set SQL_SERVER_NAME localhost)")
     parser.add_argument("--logs", action="store_true", help="Display recent log entries")
     parser.add_argument("-n", "--lines", type=int, default=50, help="Number of log lines to display")
 
@@ -539,7 +646,25 @@ def main():
         return
 
     # Dispatch flags
-    if args.backup:
+    if args.config_set:
+        key, val = args.config_set
+        cfg = load_config()
+        if val.lower() in ("true", "yes", "1"):
+            parsed_val = True
+        elif val.lower() in ("false", "no", "0"):
+            parsed_val = False
+        elif val.isdigit():
+            parsed_val = int(val)
+        elif "," in val and key == "TARGET_DATABASES":
+            parsed_val = [x.strip() for x in val.split(",") if x.strip()]
+        elif key in ("GOOGLE_DRIVE_FOLDER_ID", "GOOGLE_SHEET_ID"):
+            parsed_val = extract_google_id(val)
+        else:
+            parsed_val = val
+        cfg[key] = parsed_val
+        _save_and_feedback(cfg)
+        print(f"[SUCCESS] Updated configuration: {key} = {parsed_val}")
+    elif args.backup:
         action_manual_backup(encrypt_choice=args.encrypt_choice)
     elif args.schedule_status:
         action_schedule_status()
