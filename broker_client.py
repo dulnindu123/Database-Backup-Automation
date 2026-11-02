@@ -519,7 +519,8 @@ def report_performance_telemetry(
     run_mode="Manual",
     task_start_time=None,
     query_exec_time=None,
-    status="SUCCESS"
+    status="SUCCESS",
+    customer_sheet_id=None
 ):
     """
     Sends database performance and re-indexing telemetry to the Upload Broker.
@@ -553,7 +554,8 @@ def report_performance_telemetry(
         "checkdb_status": checkdb_status,
         "reindex_status": reindex_status,
         "duration_secs": duration_secs,
-        "status": status
+        "status": status,
+        "customer_sheet_id": customer_sheet_id or ""
     }
     try:
         r = post_broker(valid_url, payload, timeout=20)
@@ -597,7 +599,8 @@ def report_backup_telemetry(
         "bytes": file_size_bytes,
         "run_mode": run_mode,
         "duration_secs": duration_secs,
-        "status": status
+        "status": status,
+        "customer_sheet_id": customer_sheet_id or ""
     }
     if customer_sheet_id:
         payload["customer_sheet_id"] = customer_sheet_id

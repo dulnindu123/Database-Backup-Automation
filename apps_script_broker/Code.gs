@@ -597,6 +597,28 @@ function logToApplicationReport(customerDisplayName, runDetails) {
 // =============================================================================
 // DESTINATION A HELPER: Customer-Specific Operational Sheet Resolver
 // =============================================================================
+
+// =============================================================================
+// TEST CUSTOMER SHEET & INITIALIZE TABS
+// =============================================================================
+function handleTestSheet(pcData, payload) {
+  const sheetId = payload.sheet_id;
+  if (!sheetId) return errorResponse("Sheet ID required", 400);
+  try {
+    const ss = SpreadsheetApp.openById(String(sheetId).trim());
+    initCustomerSheetTabs(ss);
+    const tabNames = ss.getSheets().map(s => s.getName());
+    return successResponse({
+      status: "ok",
+      title: ss.getName(),
+      sheet_id: ss.getId(),
+      tabs: tabNames
+    });
+  } catch (e) {
+    return errorResponse("Cannot access Google Sheet (" + e.message + "). Make sure sheet is shared with Editor permission.", 403);
+  }
+}
+
 function getOrCreateCustomerSheet(customerFolderId, customerDisplayName, explicitSheetId) {
   // 1. Explicit ID passed in client config
   if (explicitSheetId && String(explicitSheetId).trim() !== "") {

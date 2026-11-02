@@ -94,7 +94,7 @@ $telemetryPayload = @{
     sha256            = "STORAGE_PROBE"
     duration_secs     = 1
     metrics           = $diskMetrics
-    customer_sheet_id = if ($config.CUSTOMER_SHEET_ID) { $config.CUSTOMER_SHEET_ID } else { "" }
+    customer_sheet_id = if ($config.CUSTOMER_SHEET_ID) { $config.CUSTOMER_SHEET_ID } elseif ($config.GOOGLE_SHEET_ID) { $config.GOOGLE_SHEET_ID } else { "" }
 }
 
 $json = $telemetryPayload | ConvertTo-Json -Depth 4 -Compress

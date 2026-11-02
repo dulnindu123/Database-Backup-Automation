@@ -274,8 +274,9 @@ if not os.path.exists(TOKEN_FILE) and os.path.exists(os.path.join(BASE_DIR, "tok
 
 # Default Worksheet Tabs for Customer Master Google Sheet
 DEFAULT_SHEET_TABS = {
-    "BACKUP": "Backup Automation",
-    "CLEANUP": "Server Cleanup"
+    "BACKUP": "DB Backups",
+    "CLEANUP": "Server Cleanup",
+    "PERFORMANCE": "Performance Query"
 }
 
 
@@ -3123,7 +3124,8 @@ SELECT 'SIZE_VAL:' + CAST(ISNULL((SELECT SUM(CAST(size AS BIGINT))*8/1024 FROM s
                 run_mode=mode,
                 task_start_time=now_str,
                 query_exec_time=query_exec_time,
-                status="SUCCESS" if r_code == 0 else "WARNING"
+                status="SUCCESS" if r_code == 0 else "WARNING",
+                customer_sheet_id=config.get("GOOGLE_SHEET_ID")
             )
             emit_log(f"Google Sheet Telemetry: {tel_msg}", "info" if sheet_logged else "warning", log_cb)
         except Exception as tel_err:
