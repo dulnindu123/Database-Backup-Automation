@@ -103,6 +103,30 @@ def _valid_db_name(db_name):
 is_safe_db_name = _valid_db_name
 
 
+def detect_backup_archive_type(file_path):
+    """
+    Inspects file header magic bytes to definitively determine the true archive format,
+    independent of any file extension anomalies:
+    - 'dbk2': Starts with b'DBK2' (bytes [0x44, 0x42, 0x4B, 0x32]) -> Zero-Trust Cloud Encrypted
+    - 'zip':  Starts with b'PK\x03\x04' or b'PK\x05\x06' or b'PK\x07\x08' -> Standard ZIP archive
+    - 'bak':  Starts with Microsoft SQL Server backup header (TAPE / SQL header) -> Native SQL Backup
+    """
+    if not file_path or not os.path.isfile(file_path):
+        return "unknown"
+    try:
+        with open(file_path, "rb") as f:
+            header = f.read(16)
+        if header.startswith(b"DBK2"):
+            return "dbk2"
+        elif header.startswith(b"PK\x03\x04") or header.startswith(b"PK\x05\x06") or header.startswith(b"PK\x07\x08"):
+            return "zip"
+        ext = os.path.splitext(file_path)[1].lower().lstrip(".")
+        return ext if ext in ("dbk2", "zip", "bak") else "unknown"
+    except Exception:
+        ext = os.path.splitext(file_path)[1].lower().lstrip(".")
+        return ext
+
+
 def broker_ready(config, base_dir=None):
     """Checks the prerequisites for a secure upload. Returns (ok, reason)."""
     b_dir = base_dir or BASE_DIR
@@ -3419,14 +3443,15 @@ def restore_database_pipeline(source_file_path, target_db_name, sql_server, sql_
     try:
         current_file = os.path.abspath(source_file_path)
         ext = os.path.splitext(current_file)[1].lower()
-        emit_log(f"Source Backup: {current_file} ({ext.upper()})", "info", log_cb)
+        archive_type = detect_backup_archive_type(current_file)
+        emit_log(f"Source Backup: {current_file} (Extension: {ext.upper()} | Header Format: {archive_type.upper()})", "info", log_cb)
         emit_log(f"Target Database: {target_db_name} on {sql_server}", "info", log_cb)
         if progress_cb: progress_cb(0.1)
 
         # -------------------------------------------------------------
-        # Step A: Decrypt DBK2 if encrypted
+        # Step A: Decrypt DBK2 if truly encrypted
         # -------------------------------------------------------------
-        if ext == ".dbk2":
+        if archive_type == "dbk2":
             if not private_key_path or not os.path.isfile(private_key_path):
                 msg = "Private key file (.pem) is required to decrypt a .dbk2 cloud backup."
                 emit_log(f"ERROR: {msg}", "error", log_cb)
@@ -3464,11 +3489,14 @@ def restore_database_pipeline(source_file_path, target_db_name, sql_server, sql_
 
             current_file = decrypted_zip
             ext = ".zip"
+            archive_type = "zip"
 
         # -------------------------------------------------------------
         # Step B: Extract .bak from ZIP archive
         # -------------------------------------------------------------
-        if ext == ".zip":
+        if archive_type == "zip" or ext == ".zip":
+            if ext == ".dbk2" and archive_type == "zip":
+                emit_log("Notice: File has .dbk2 extension but contains unencrypted standard .zip archive. Bypassing decryption automatically.", "info", log_cb)
             emit_log(f"Unpacking compressed archive: {os.path.basename(current_file)}...", "info", log_cb)
             if status_cb: status_cb("Extracting SQL backup file (.bak)...")
             if progress_cb: progress_cb(0.4)

@@ -53,6 +53,7 @@ from backup_core import (
     BASE_DIR,
     DATA_DIR,
     LOG_FILE,
+    detect_backup_archive_type,
     load_config,
     save_config,
     test_broker_connection,
@@ -3628,18 +3629,23 @@ class BackupAutomationApp(ctk.CTk):
         if not self.restore_target_db_var.get():
             self.restore_target_db_var.set(detected_db)
 
-        if ext == ".dbk2":
+        # Sniff actual file header magic bytes
+        actual_format = detect_backup_archive_type(fpath)
+        if actual_format == "dbk2":
             self.restore_format_badge.configure(text="Format: .dbk2 (Zero-Trust Cloud Encrypted)", text_color="#38bdf8")
             self.restore_crypto_card.configure(border_color="#a855f7", border_width=2)
             self.restore_crypto_title.configure(text="CLOUD DECRYPTION CREDENTIALS (REQUIRED FOR .DBK2 ENCRYPTED BACKUPS) 🔐", text_color="#c084fc")
             # Auto-locate private key if empty
             if not self.restore_key_var.get():
                 self._auto_detect_private_key(detected_db)
-        elif ext == ".zip":
-            self.restore_format_badge.configure(text="Format: .zip (Compressed Archive)", text_color="#f59e0b")
+        elif actual_format == "zip":
+            if ext == ".dbk2":
+                self.restore_format_badge.configure(text="Format: .zip (Unencrypted Archive - Decryption Bypassed)", text_color="#10b981")
+            else:
+                self.restore_format_badge.configure(text="Format: .zip (Compressed Archive)", text_color="#f59e0b")
             self.restore_crypto_card.configure(border_color="#374151", border_width=1)
             self.restore_crypto_title.configure(text="CLOUD DECRYPTION CREDENTIALS (NOT REQUIRED FOR .ZIP ARCHIVE)", text_color="#6b7280")
-        elif ext == ".bak":
+        elif actual_format == "bak":
             self.restore_format_badge.configure(text="Format: .bak (Native SQL Backup)", text_color="#10b981")
             self.restore_crypto_card.configure(border_color="#374151", border_width=1)
             self.restore_crypto_title.configure(text="CLOUD DECRYPTION CREDENTIALS (NOT REQUIRED FOR .BAK FILE)", text_color="#6b7280")
