@@ -5,7 +5,16 @@ Its only secret is a per-PC broker token that can request "start an upload" and 
 import os, time, base64, hashlib, json, requests
 from urllib.parse import urljoin
 
-CHUNK = 512 * 1024  # 512 KiB chunk (2x 256 KiB), ultra-resilient for slow/broadband uploads
+# ---- Adaptive High-Throughput Chunk Sizing ----
+# Google Drive Resumable Upload protocol requires all chunks (except the final chunk)
+# to be strictly a multiple of 256 KiB (262,144 bytes).
+CHUNK_MULTIPLE = 256 * 1024       # 256 KiB alignment
+MIN_CHUNK = 4 * 1024 * 1024       # 4 MiB (16x 256 KiB) - conservative baseline for slow/flaky links
+DEFAULT_CHUNK = 8 * 1024 * 1024   # 8 MiB (32x 256 KiB) - Google Drive recommended standard baseline
+HIGH_CHUNK = 16 * 1024 * 1024     # 16 MiB (64x 256 KiB) - for fast broadband (>= 5 MB/s)
+MAX_CHUNK = 32 * 1024 * 1024      # 32 MiB (128x 256 KiB) - for ultra-fast lines (>= 12 MB/s, e.g. 100-500 Mbps)
+CHUNK = DEFAULT_CHUNK             # Global fallback reference
+
 RETRYABLE = (429, 500, 502, 503, 504)
 _REDIRECT_CODES = (301, 302, 303, 307, 308)
 
@@ -351,61 +360,102 @@ def _put_all(uri, path, total, log, progress_cb, telemetry_cb, cancel_check):
     name = os.path.basename(path)
     start = time.time()
     pos, final = 0, None
-    with open(path, "rb") as f:
-        while pos < total:
-            if cancel_check and cancel_check():
-                return None
-            f.seek(pos)
-            data = f.read(min(CHUNK, total - pos))
-            hdr = {"Content-Length": str(len(data)),
-                   "Content-Range": f"bytes {pos}-{pos + len(data) - 1}/{total}"}
-            for attempt in range(1, 16):
-                try:
-                    r = requests.put(uri, data=data, headers=hdr, timeout=(60, 600))
-                    if r.status_code in (200, 201):
-                        pos, final = total, r
-                    elif r.status_code == 308:
-                        rng = r.headers.get("Range")
-                        pos = int(rng.split("-")[1]) + 1 if rng else 0
-                    elif r.status_code in RETRYABLE:
-                        raise ConnectionError(f"HTTP {r.status_code}")
-                    else:
-                        log(f"Upload rejected by storage: HTTP {r.status_code}", "error")
-                        return None
-                    break
-                except (requests.ConnectionError, requests.Timeout, ConnectionError, Exception) as e:
-                    wait = min(30, 2 ** min(attempt, 5))
-                    log(f"Network problem ({e}); resuming in {wait}s (try {attempt}/15)", "warning")
-                    time.sleep(wait)
+    current_chunk = DEFAULT_CHUNK
+
+    # Persistent HTTP session with connection pooling and TCP keep-alive
+    session = requests.Session()
+    adapter = requests.adapters.HTTPAdapter(pool_connections=2, pool_maxsize=4, max_retries=0)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+
+    try:
+        with open(path, "rb") as f:
+            while pos < total:
+                if cancel_check and cancel_check():
+                    return None
+
+                chunk_to_read = min(current_chunk, total - pos)
+                # Google Drive Resumable Upload requires all non-final chunks to be multiples of 256 KiB
+                if pos + chunk_to_read < total:
+                    chunk_to_read = (chunk_to_read // CHUNK_MULTIPLE) * CHUNK_MULTIPLE
+                    if chunk_to_read == 0:
+                        chunk_to_read = CHUNK_MULTIPLE
+
+                f.seek(pos)
+                data = f.read(chunk_to_read)
+                hdr = {"Content-Length": str(len(data)),
+                       "Content-Range": f"bytes {pos}-{pos + len(data) - 1}/{total}"}
+
+                chunk_start = time.time()
+                for attempt in range(1, 16):
                     try:
-                        pos, done = _query_offset(uri, total)
-                        if done is not None:
-                            pos, final = total, done
-                            break
-                        f.seek(pos)
-                        data = f.read(min(CHUNK, total - pos))
-                        hdr = {"Content-Length": str(len(data)),
-                               "Content-Range": f"bytes {pos}-{pos + len(data) - 1}/{total}"}
+                        r = session.put(uri, data=data, headers=hdr, timeout=(60, 600))
+                        if r.status_code in (200, 201):
+                            pos, final = total, r
+                        elif r.status_code == 308:
+                            rng = r.headers.get("Range")
+                            pos = int(rng.split("-")[1]) + 1 if rng else 0
+
+                            # Adaptive throughput scaling based on measured transfer speed:
+                            chunk_duration = max(0.001, time.time() - chunk_start)
+                            chunk_speed = len(data) / chunk_duration
+                            if chunk_speed >= 12 * 1024 * 1024:
+                                current_chunk = MAX_CHUNK       # 32 MiB (128x 256 KiB)
+                            elif chunk_speed >= 5 * 1024 * 1024:
+                                current_chunk = HIGH_CHUNK      # 16 MiB (64x 256 KiB)
+                            elif chunk_speed < 1.5 * 1024 * 1024:
+                                current_chunk = MIN_CHUNK       # 4 MiB (16x 256 KiB)
+                            else:
+                                current_chunk = DEFAULT_CHUNK   # 8 MiB (32x 256 KiB)
+                        elif r.status_code in RETRYABLE:
+                            raise ConnectionError(f"HTTP {r.status_code}")
+                        else:
+                            log(f"Upload rejected by storage: HTTP {r.status_code}", "error")
+                            return None
+                        break
+                    except (requests.ConnectionError, requests.Timeout, ConnectionError, Exception) as e:
+                        current_chunk = MIN_CHUNK
+                        wait = min(30, 2 ** min(attempt, 5))
+                        log(f"Network problem ({e}); resuming in {wait}s (try {attempt}/15)", "warning")
+                        time.sleep(wait)
+                        try:
+                            pos, done = _query_offset(uri, total)
+                            if done is not None:
+                                pos, final = total, done
+                                break
+                            chunk_to_read = min(current_chunk, total - pos)
+                            if pos + chunk_to_read < total:
+                                chunk_to_read = (chunk_to_read // CHUNK_MULTIPLE) * CHUNK_MULTIPLE
+                                if chunk_to_read == 0:
+                                    chunk_to_read = CHUNK_MULTIPLE
+                            f.seek(pos)
+                            data = f.read(chunk_to_read)
+                            hdr = {"Content-Length": str(len(data)),
+                                   "Content-Range": f"bytes {pos}-{pos + len(data) - 1}/{total}"}
+                            chunk_start = time.time()
+                        except Exception:
+                            pass
+                else:
+                    log("Upload failed after 15 retries.", "error")
+                    return None
+
+                elapsed = max(0.001, time.time() - start)
+                frac = pos / total if total else 1.0
+                if progress_cb:
+                    progress_cb(frac)
+                if telemetry_cb:
+                    bps = pos / elapsed
+                    try:
+                        telemetry_cb({"file_name": name, "bytes_done": pos, "total_bytes": total,
+                                      "percent": frac * 100, "fraction": frac, "speed_bps": bps,
+                                      "speed_str": f"{bps / 1048576:.1f} MB/s",
+                                      "eta_str": f"{int((total - pos) / bps)}s" if bps else "--",
+                                      "elapsed": elapsed})
                     except Exception:
                         pass
-            else:
-                log("Upload failed after 15 retries.", "error")
-                return None
-            elapsed = max(0.001, time.time() - start)
-            frac = pos / total if total else 1.0
-            if progress_cb:
-                progress_cb(frac)
-            if telemetry_cb:
-                bps = pos / elapsed
-                try:
-                    telemetry_cb({"file_name": name, "bytes_done": pos, "total_bytes": total,
-                                  "percent": frac * 100, "fraction": frac, "speed_bps": bps,
-                                  "speed_str": f"{bps / 1048576:.1f} MB/s",
-                                  "eta_str": f"{int((total - pos) / bps)}s" if bps else "--",
-                                  "elapsed": elapsed})
-                except Exception:
-                    pass
-    return final
+        return final
+    finally:
+        session.close()
 
 
 def secure_upload(file_path, db_name, config, base_dir, log_cb=None, progress_cb=None,
