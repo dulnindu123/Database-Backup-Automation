@@ -680,3 +680,129 @@ def report_backup_telemetry(
     except Exception as e:
         return False, f"Backup telemetry error: {e}"
 
+
+
+# =============================================================================
+# v5.0 ENTERPRISE TELEMETRY, STORAGE QUOTA & SECURITY ALERT EXTENSIONS
+# =============================================================================
+
+def protect_dpapi_string(text: str) -> bytes:
+    """Protects plaintext string with Windows DPAPI (LocalMachine scope)."""
+    return _protect_dpapi_native(text.encode("utf-8") if isinstance(text, str) else text)
+
+
+def unprotect_dpapi_string(cipher_bytes: bytes) -> str:
+    """Unprotects DPAPI cipher bytes using Windows crypt32/win32crypt."""
+    return _unprotect_dpapi_native(cipher_bytes)
+
+
+def report_security_alert(
+    broker_url,
+    token,
+    alert_type="ENCRYPTION_DISABLED",
+    db_name="UNKNOWN",
+    file_name="UNKNOWN",
+    details=""
+):
+    """
+    Dispatches a high-priority security alert event to the Upload Broker.
+    Triggers administrative audit logging and automated email alerts.
+    """
+    if not broker_url or not token:
+        return False, "Broker URL or token missing"
+
+    try:
+        valid_url = validate_broker_url(broker_url)
+    except ValueError as e:
+        return False, f"Broker URL rejected: {e}"
+
+    payload = {
+        "action": "security_alert",
+        "token": token,
+        "alert_type": alert_type,
+        "db_name": db_name,
+        "file_name": file_name,
+        "details": details,
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    }
+
+    try:
+        r = post_broker(valid_url, payload, timeout=20)
+        status_code, data, err = parse_broker_response(r)
+        if not err and status_code < 400:
+            return True, "Security alert recorded and notified successfully"
+        return False, f"Broker rejected alert: HTTP {status_code} - {err or r.text[:100]}"
+    except Exception as e:
+        return False, f"Security alert dispatch error: {e}"
+
+
+def get_broker_storage_quota(broker_url):
+    """
+    Queries the upload broker for Google Drive fleet storage quota and limits.
+    Returns (success_bool, dict_with_metrics_or_error_str).
+    """
+    if not broker_url:
+        return False, "Broker URL missing"
+
+    try:
+        valid_url = validate_broker_url(broker_url)
+    except ValueError as e:
+        return False, f"Broker URL rejected: {e}"
+
+    try:
+        s = get_persistent_session()
+        r = s.get(valid_url, timeout=15)
+        if r.status_code == 200:
+            data = r.json()
+            return True, {
+                "storage_used_bytes": data.get("storage_used_bytes", 0),
+                "storage_limit_bytes": data.get("storage_limit_bytes", 0),
+                "quota_percent": data.get("quota_percent", 0.0),
+                "version": data.get("version", "5.0.0")
+            }
+        return False, f"HTTP {r.status_code}"
+    except Exception as e:
+        return False, str(e)
+
+
+def fetch_bundle_from_drive(drive_url_or_id, target_path=None):
+    """
+    Dynamically downloads and validates a cryptographically signed bundle.json
+    from a Google Drive share link or direct URL during installation.
+    Prevents leaving static enroll tokens unsealed on distribution media.
+    """
+    import re
+    cleaned = drive_url_or_id.strip()
+    # Extract Google Drive file ID if URL passed
+    m = re.search(r"drive\.google\.com/file/d/([a-zA-Z0-9_-]+)", cleaned)
+    if m:
+        file_id = m.group(1)
+        download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
+    elif re.search(r"^[a-zA-Z0-9_-]{25,}$", cleaned):
+        # Raw file ID
+        download_url = f"https://drive.google.com/uc?export=download&id={cleaned}"
+    elif cleaned.startswith("http://") or cleaned.startswith("https://"):
+        download_url = cleaned
+    else:
+        return False, "Invalid Google Drive link or File ID format"
+
+    try:
+        s = get_persistent_session()
+        r = s.get(download_url, timeout=30)
+        if r.status_code != 200:
+            return False, f"Download failed with HTTP {r.status_code}"
+
+        # Validate JSON structure
+        parsed = json.loads(r.text)
+        if "customer_slug" not in parsed and "broker_url" not in parsed and "manifest" not in parsed:
+            return False, "Downloaded file is not a valid signed bundle.json"
+
+        if target_path:
+            os.makedirs(os.path.dirname(os.path.abspath(target_path)), exist_ok=True)
+            with open(target_path, "w", encoding="utf-8") as f:
+                f.write(r.text)
+            secure_token_file_acl(target_path)
+
+        return True, parsed
+    except Exception as e:
+        return False, f"Remote bundle fetch error: {e}"

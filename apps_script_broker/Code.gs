@@ -2,7 +2,7 @@
 
 // Enterprise Database Cloud Backup Automation - Zero-Trust Upload Broker
 
-// Version: 4.3.0
+// Version: 5.0.0
 
 //
 
@@ -378,7 +378,22 @@ function formatBytes(bytes) {
 
 function doGet(e) {
 
-  return successResponse({ status: "ok", service: "backup-broker", version: "4.3.0" });
+  let storageUsed = 0;
+  let storageLimit = 0;
+  try {
+    storageUsed = DriveApp.getStorageUsed();
+    storageLimit = DriveApp.getStorageLimit();
+  } catch (err) {}
+  const quotaPercent = storageLimit > 0 ? Number(((storageUsed / storageLimit) * 100).toFixed(2)) : 0;
+
+  return successResponse({
+    status: "ok",
+    service: "backup-broker",
+    version: "5.0.0",
+    storage_used_bytes: storageUsed,
+    storage_limit_bytes: storageLimit,
+    quota_percent: quotaPercent
+  });
 
 }
 
@@ -396,7 +411,22 @@ function doPost(e) {
 
     if (action === "health") {
 
-      return successResponse({ status: "ok", service: "backup-broker", version: "4.3.0" });
+      let storageUsed = 0;
+      let storageLimit = 0;
+      try {
+        storageUsed = DriveApp.getStorageUsed();
+        storageLimit = DriveApp.getStorageLimit();
+      } catch (err) {}
+      const quotaPercent = storageLimit > 0 ? Number(((storageUsed / storageLimit) * 100).toFixed(2)) : 0;
+
+      return successResponse({
+        status: "ok",
+        service: "backup-broker",
+        version: "5.0.0",
+        storage_used_bytes: storageUsed,
+        storage_limit_bytes: storageLimit,
+        quota_percent: quotaPercent
+      });
 
     }
 
@@ -443,6 +473,10 @@ function doPost(e) {
     } else if (action === "report_status") {
 
       return handleReportStatus(pcData, payload);
+
+    } else if (action === "security_alert") {
+
+      return handleSecurityAlert(pcData, payload);
 
     } else {
 
@@ -753,7 +787,10 @@ function handleRequestUpload(pcData, payload) {
 
     const customerDisplayName = getCustomerDisplayName(pcData.customerSlug);
 
-    const destFolderId = getOrCreateFolder(ROOT_FOLDER_ID, customerDisplayName);
+    let destFolderId = getOrCreateFolder(ROOT_FOLDER_ID, customerDisplayName);
+    if (payload.target_folder_id && typeof payload.target_folder_id === "string" && payload.target_folder_id.trim().length > 5) {
+      destFolderId = payload.target_folder_id.trim();
+    }
 
     
 
@@ -2179,3 +2216,50 @@ function populateAllEnrollmentCodes() {
 
 }
 
+
+// =============================================================================
+// SECURITY ALERT DISPATCHER (v5.0 Enterprise Zero-Trust Audit)
+// =============================================================================
+function handleSecurityAlert(pcData, payload) {
+  const alertType = payload.alert_type || "GENERIC_SECURITY_ALERT";
+  const dbName = payload.db_name || "UNKNOWN";
+  const fileName = payload.file_name || "UNKNOWN";
+  const details = payload.details || "Zero-Trust Security Event Triggered";
+  const timestamp = new Date().toISOString();
+
+  // 1. Audit Log in Master Sheet
+  try {
+    logAudit(pcData.pcId, "SECURITY_ALERT", "[" + alertType + "] DB: " + dbName + " - Archive: " + fileName + " - " + details);
+  } catch (e) {}
+
+  // 2. Dispatch Email Alert to security administrator
+  try {
+    const adminEmail = Session.getActiveUser().getEmail() || "database.ops@gmail.com";
+    const subject = "[SECURITY ALERT] Enterprise Database Backup - " + alertType + " on " + pcData.pcId;
+    const body = "ENTERPRISE DATABASE BACKUP - CRITICAL SECURITY ALERT\n" +
+                 "================================================================\n" +
+                 "Timestamp:      " + timestamp + "\n" +
+                 "Machine ID:     " + pcData.pcId + "\n" +
+                 "Customer:       " + (pcData.customerSlug || "UNKNOWN") + "\n" +
+                 "Alert Type:     " + alertType + "\n" +
+                 "Target DB:      " + dbName + "\n" +
+                 "Archive File:   " + fileName + "\n" +
+                 "Event Details:  " + details + "\n" +
+                 "================================================================\n" +
+                 "Action Required:\n" +
+                 "If this unencrypted backup was NOT authorized by an approved change\n" +
+                 "window or IT security policy, investigate this host immediately.\n\n" +
+                 "Enterprise Database Cloud Backup Automation v5.0";
+
+    MailApp.sendEmail(adminEmail, subject, body);
+  } catch (mailErr) {
+    Logger.log("MailApp security dispatch failed: " + mailErr.message);
+  }
+
+  return successResponse({
+    status: "alert_recorded",
+    alert_type: alertType,
+    machine_id: pcData.pcId,
+    timestamp: timestamp
+  });
+}

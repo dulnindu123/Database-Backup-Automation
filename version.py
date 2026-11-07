@@ -5,8 +5,8 @@ Centralizes version constants, executable names, and default paths across
 the entire system (Core Engine, GUI, Installer, Build Pipeline, and Audit).
 """
 
-APP_VERSION = "4.3.0"
-INSTALLER_VERSION = "4.3.0"
+APP_VERSION = "5.0.0"
+INSTALLER_VERSION = "5.0.0"
 APP_NAME = "Enterprise Database Cloud Backup"
 EXE_NAME = "DatabaseBackupApp.exe"
 INSTALLER_EXE_NAME = "Setup_DatabaseBackup.exe"
@@ -17,9 +17,9 @@ PROGRAM_DATA_DIR = r"C:\ProgramData\DatabaseBackupApp"
 DEFAULT_TASK_NAME = "Database Cloud Backup"
 
 # Single Source of Truth for Build ID
-BUILD_ID = "4.3.0-20261102"
-BUILD_TIME = "2026-11-02T02:00:00Z"
-BUILD_COMMIT = "20261102"
+BUILD_ID = "5.0.0-20261104"
+BUILD_TIME = "2026-11-04T10:30:00Z"
+BUILD_COMMIT = "v5.0-rel"
 DEV_MODE = False
 
 def get_build_info():
@@ -46,9 +46,14 @@ def get_build_info():
     }
 
 def get_build_id() -> str:
-    """Returns formatted build ID string."""
+    """Returns raw build ID string."""
     info = get_build_info()
-    return info.get("build_id", f"{APP_VERSION}-dev")
+    return info.get("build_id", BUILD_ID)
+
+def get_display_version() -> str:
+    """Returns detailed display string with version, build ID, and timestamp."""
+    info = get_build_info()
+    return f"v{info.get('version', APP_VERSION)} [{info.get('build_id', BUILD_ID)} - {info.get('build_time', BUILD_TIME)}]"
 
 # Embedded Admin Ed25519 Public Key for Zero-Trust Manifest Verification
 EMBEDDED_ADMIN_PUBLIC_KEY_PEM = (
@@ -56,4 +61,3 @@ EMBEDDED_ADMIN_PUBLIC_KEY_PEM = (
     "MCowBQYDK2VwAyEAUwmpkX+0AVBJiRNUfd7tm65krqq30q7ngVYVgFzmGYk=\n"
     "-----END PUBLIC KEY-----"
 )
-

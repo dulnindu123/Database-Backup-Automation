@@ -104,9 +104,14 @@ class InstallerApp(ctk.CTk):
             try:
                 with open(app_build_info_p, "r", encoding="utf-8") as f:
                     app_binfo = json.load(f)
-                app_bid = app_binfo.get("build_id", "")
-                if app_bid and self.installer_build_id != "4.1.0-dev" and app_bid != "4.1.0-dev":
-                    if self.installer_build_id != app_bid:
+                app_bid = app_binfo.get("build_id", "").strip()
+                inst_bid = self.installer_build_id.strip()
+                if "[" in inst_bid and " - " in inst_bid:
+                    import re
+                    m = re.search(r'\[(.*?) - ', inst_bid)
+                    if m: inst_bid = m.group(1).strip()
+                if app_bid and inst_bid != "4.1.0-dev" and app_bid != "4.1.0-dev":
+                    if inst_bid != app_bid and app_bid not in self.installer_build_id:
                         messagebox.showerror(
                             "Mismatched Build Detected",
                             f"FATAL: Refusing to mix builds!\n\n"
@@ -321,6 +326,50 @@ class InstallerApp(ctk.CTk):
             fg_color="#2563eb",
             hover_color="#1d4ed8",
             command=self._refresh_and_test_broker
+        ).pack(side="right")
+
+        # v5.0 Remote Bundle Ingestion from Google Drive (Senior Requirement 3)
+        remote_bundle_row = ctk.CTkFrame(broker_card, fg_color="transparent")
+        remote_bundle_row.pack(fill="x", padx=12, pady=(0, 6))
+
+        self.entry_drive_bundle = ctk.CTkEntry(
+            remote_bundle_row,
+            placeholder_text="Optional: Paste Google Drive Share Link or ID to fetch bundle.json dynamically...",
+            font=ctk.CTkFont(size=11),
+            height=28
+        )
+        self.entry_drive_bundle.pack(side="left", fill="x", expand=True, padx=(0, 6))
+
+        def _fetch_drive_bundle_action():
+            url_or_id = self.entry_drive_bundle.get().strip()
+            if not url_or_id:
+                messagebox.showwarning("Drive Bundle Fetch", "Please paste a Google Drive file link or File ID.")
+                return
+            try:
+                from broker_client import fetch_bundle_from_drive
+                prog_data = os.environ.get("ALLUSERSPROFILE", r"C:\ProgramData")
+                target_bundle_path = os.path.join(prog_data, "DatabaseBackupApp", "bundle.json")
+                ok, res = fetch_bundle_from_drive(url_or_id, target_bundle_path)
+                if ok:
+                    messagebox.showinfo("Success", "Signed bundle.json fetched and validated from Google Drive!")
+                    self.broker_url_var.set(res.get("broker_url", ""))
+                    if res.get("enroll_code"):
+                        self.token_var.set(f"{socket.gethostname().upper()}:{res.get('enroll_code')}")
+                    self.lbl_broker_status.configure(text="✓ Bundle successfully retrieved from Google Drive", text_color="#10b981")
+                else:
+                    messagebox.showerror("Error", f"Failed to retrieve bundle: {res}")
+            except Exception as fe:
+                messagebox.showerror("Error", f"Fetch exception: {fe}")
+
+        ctk.CTkButton(
+            remote_bundle_row,
+            text="📥 Fetch from Drive",
+            width=135,
+            height=28,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color="#059669",
+            hover_color="#047857",
+            command=_fetch_drive_bundle_action
         ).pack(side="right")
 
         # Broker URL Entry Field (clean, editable or locked)

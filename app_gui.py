@@ -714,6 +714,16 @@ class BackupAutomationApp(ctk.CTk):
         self.entry_sql_pass = ctk.CTkEntry(auth_row, width=240, placeholder_text="SQL Password", show="*")
         self.entry_sql_pass.pack(side="left")
 
+        # v5.0 External SQL Parameters & SQLPara Status Indicator (Senior Requirement 6)
+        self.lbl_sqlpara_status = ctk.CTkLabel(
+            scroll,
+            text="",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#10b981",
+            anchor="w"
+        )
+        self.lbl_sqlpara_status.pack(fill="x", padx=16, pady=(4, 6))
+
         # Warning banner for 'sa' administrative account (Round 9 Requirement 7)
         self.lbl_sql_sa_warning = ctk.CTkLabel(
             scroll,
@@ -2072,13 +2082,57 @@ class BackupAutomationApp(ctk.CTk):
         save_config(self.config_data)
 
     def _on_dash_encrypt_toggled(self):
-        """Called when user toggles encryption checkbox on Dashboard."""
+        """Called when user toggles encryption checkbox on Dashboard (Senior Requirement 5)."""
         val = bool(self.chk_dash_encrypt.get()) if hasattr(self, "chk_dash_encrypt") else True
+        if not val:
+            if self.config_data.get("ENFORCE_ENCRYPTION_POLICY", False):
+                messagebox.showerror(
+                    "Security Policy Violation",
+                    "Enterprise policy enforces mandatory Zero-Trust DBK2 encryption.\nUnencrypted backups are prohibited."
+                )
+                self.chk_dash_encrypt.select()
+                self._sync_encryption_ui(True)
+                return
+
+            confirm = messagebox.askyesno(
+                "SECURITY WARNING: Unencrypted Backup",
+                "CRITICAL SECURITY WARNING:\n\n"
+                "Disabling Zero-Trust DBK2 encryption will upload your database in standard compressed ZIP format without cryptographic sealing.\n\n"
+                "An automated security alert will be dispatched to your IT security administrator via email and cloud telemetry.\n\n"
+                "Are you sure you wish to disable Zero-Trust encryption?",
+                icon="warning"
+            )
+            if not confirm:
+                self.chk_dash_encrypt.select()
+                self._sync_encryption_ui(True)
+                return
         self._sync_encryption_ui(val)
 
     def _on_sched_encrypt_toggled(self):
-        """Called when user toggles encryption checkbox on Auto Schedule tab."""
+        """Called when user toggles encryption checkbox on Auto Schedule tab (Senior Requirement 5)."""
         val = bool(self.chk_sched_encryption.get()) if hasattr(self, "chk_sched_encryption") else True
+        if not val:
+            if self.config_data.get("ENFORCE_ENCRYPTION_POLICY", False):
+                messagebox.showerror(
+                    "Security Policy Violation",
+                    "Enterprise policy enforces mandatory Zero-Trust DBK2 encryption.\nUnencrypted backups are prohibited."
+                )
+                self.chk_sched_encryption.select()
+                self._sync_encryption_ui(True)
+                return
+
+            confirm = messagebox.askyesno(
+                "SECURITY WARNING: Unencrypted Schedule",
+                "CRITICAL SECURITY WARNING:\n\n"
+                "Disabling Zero-Trust DBK2 encryption will upload scheduled backups in standard unencrypted format.\n\n"
+                "An automated security alert will be dispatched to your IT security administrator via email and cloud telemetry on every run.\n\n"
+                "Are you sure you wish to disable Zero-Trust encryption for automated schedules?",
+                icon="warning"
+            )
+            if not confirm:
+                self.chk_sched_encryption.select()
+                self._sync_encryption_ui(True)
+                return
         self._sync_encryption_ui(val)
 
     def _stop_backup(self):
@@ -3360,9 +3414,9 @@ class BackupAutomationApp(ctk.CTk):
 
         ctk.CTkLabel(
             self.restore_crypto_card,
-            text="For zero-trust .dbk2 backups downloaded from Google Drive, provide your private key (.pem) and recovery passphrase. Unencrypted .zip/.bak files bypass decryption automatically.",
-            font=ctk.CTkFont(size=11),
-            text_color="#9ca3af"
+            text="AIR-GAPPED ZERO-TRUST NOTICE: For disaster recovery security, private keys should NEVER be permanently saved on customer servers. Private keys browsed here are held in volatile RAM only for this restore operation and cleared immediately afterwards.",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#f59e0b"
         ).pack(anchor="w", padx=15, pady=(0, 10))
 
         # Row A: Private Key (.pem)
