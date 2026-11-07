@@ -270,11 +270,104 @@ The [`Client_Installation_Package_v5.0`](file:///c:/Users/dulni/OneDrive/Documen
 | **`Setup_DatabaseBackup.exe`** | Executable | ~45.2 MB | Elevated graphical setup wizard with dynamic Drive bundle retrieval. |
 | **`AppFiles/`** | Directory | ~120 MB | Production binaries (`DatabaseBackupApp.exe`), `_internal/` runtime, and engine scripts. |
 | **`shell_client/`** | Directory | ~50 KB | Pure Windows PowerShell agent (`install_agent.ps1`, `backup_agent.ps1`). |
-| **`INSTALLATION_GUIDE_v5.0.md`** | Manual | ~16 KB | Complete administrator and customer deployment manual. |
+| **`INSTALLATION_GUIDE_v5.0.md`** | Manual | ~18 KB | Complete administrator and customer deployment manual. |
 | **`config.json`** | Configuration | ~1.5 KB | Enterprise v5.0 settings template with `SQLPARA_PATH` and security toggles. |
 | **`build_info.json`** | Metadata | 124 B | Authoritative build signature (`5.0.0-20261104`). |
 | **`Uninstall.bat`** | Utility | ~7.5 KB | Clean uninstallation script (removes tasks, directories, and shortcuts). |
-| **`Update_App.bat`** | Utility | ~12.3 KB | In-place hotfix updater for customer machines. |
+| **`Update_App.bat`** | Utility | ~12.8 KB | In-place hotfix updater for customer machines with legacy migration. |
+
+---
+
+## 9. Comprehensive Backward Compatibility & Legacy Migration Runbook
+
+The Enterprise Database Cloud Backup system v5.0 is engineered with **strict generational backward compatibility**. Upgrading existing customer servers running any historical release (v1.x, v2.x, v3.x, v4.0–v4.3) requires zero reconfiguration, zero key re-generation, and zero downtime.
+
+### 9.1 Multi-Generational Compatibility Matrix
+
+```mermaid
+flowchart TD
+    subgraph Legacy [Historical Versions]
+        V1["v1.x / v2.x\n(OAuth / Plain .bak / .zip)"]
+        V3["v3.x\n(Deflate L9 / OAuth v3)"]
+        V4["v4.0 - v4.3\n(Zero-Trust Broker / DBK2 v1)"]
+    end
+
+    subgraph V5Core [Version 5.0 Universal Engine]
+        Migrator["Automated Configuration & Task Migrator\n(Update_App.bat / Setup_DatabaseBackup.exe)"]
+        RestoreEngine["Multi-Format Universal Restore Sniffer\n(Magic Bytes: DBK2 | ZIP | BAK)"]
+        CLIFallback["SQL CLI Auto-Detection Matrix\n(ODBC 18 / 17 / 13 / 11 / osql.exe)"]
+    end
+
+    V1 --> Migrator
+    V3 --> Migrator
+    V4 --> Migrator
+    
+    Migrator --> V5Core
+```
+
+| Component | Historical Behavior (v1.x - v4.3) | Version 5.0 Handling & Backward Compatibility |
+| :--- | :--- | :--- |
+| **Authentication Vault** | Stored plaintext in `broker_token.dat` (v4.0) or OAuth `token.json` (v1-v3). | `Update_App.bat` automatically migrates `broker_token.dat` into machine-scoped Windows DPAPI `token.dpapi`, then securely deletes legacy tokens. |
+| **Google Cloud Credentials** | Required `credentials.json` and interactive browser consent (v1-v3). | Obsolete Google OAuth credentials are safely purged. Uploads stream through the Zero-Trust Cloud Broker with zero OAuth refresh tokens. |
+| **Escrow Encryption Keys** | Global shared `escrow_public.pem` across all tenants (v4.0-v4.3). | The engine inspects `escrow_public_{slug}.pem` first; if absent, it **seamlessly falls back to `escrow_public.pem`**, preserving full escrow compatibility. |
+| **Windows Task Scheduler** | Varied names: `DatabaseBackup_AutomatedTask`, `DatabaseBackup_Daily`, `DatabaseBackupApp`. | `Update_App.bat` actively unregisters all historical task names to prevent conflicts, then registers the unified `Database Cloud Backup` task. |
+| **Configuration Schema** | Omitted `SQLPARA_PATH`, maintenance time windows, and security toggles. | The updater safely merges new fields with production defaults without modifying existing database lists, schedules, or server names. |
+| **Archive Formats** | Raw `.bak`, standard `.zip`, or DBK2 single-envelope archives. | The v5.0 Restore Engine sniffs magic bytes: restores `.bak`, extracts `.zip`, and decrypts both single-key and dual-envelope `.dbk2` files. |
+
+### 9.2 Operating System & SQL Server Compatibility
+
+- **Supported Microsoft Windows Platforms:**
+  - Windows Server 2025, 2022, 2019, 2016, 2012 R2, and 2012 (64-bit and 32-bit).
+  - Windows 11, Windows 10, and Windows 8.1 / 7 SP1 (with PowerShell 5.1+).
+- **Supported Microsoft SQL Server Versions:**
+  - SQL Server 2022 (ODBC Driver 18 with automated `-C` TrustServerCertificate negotiation).
+  - SQL Server 2019, 2017, 2016 (ODBC Driver 17 and 13).
+  - SQL Server 2014, 2012 (ODBC Driver 11 / SQL Native Client).
+  - SQL Server 2008 R2, 2008, 2005, 2000 (automated fallback to `osql.exe` and legacy path scanning).
+  - Express, Standard, Enterprise, Developer, and Web editions supported out-of-the-box.
+
+### 9.3 In-Place Upgrade Execution Steps
+
+To upgrade an existing customer installation in under 60 seconds:
+1. Extract [`Client_Installation_Package_v5.0.zip`](file:///c:/Users/dulni/OneDrive/Documents/Desktop/idea/Client_Installation_Package_v5.0) on the target machine.
+2. Right-click **`Update_App.bat`** and select **Run as administrator**.
+3. The script automatically:
+   - Detects the current installation path from the Windows Registry or Program Files.
+   - Halts running background processes safely.
+   - Backs up existing `config.json`, keys, and tokens to a secure temporary sandbox.
+   - Purges obsolete OAuth tokens and legacy scheduled tasks.
+   - Overwrites runtime binaries with v5.0.0.
+   - Upgrades `config.json` schema while preserving all customer databases and schedules.
+   - Synchronizes the Windows Task Scheduler under `NT AUTHORITY\SYSTEM`.
+   - Tightens Windows File ACLs on `token.dpapi` and application directories.
+
+### 9.4 Legacy Operating System Runbook (Windows Server 2008 R2 / 2012 / 2012 R2 & Windows 7 / 8.1)
+
+Customers frequently maintain older mission-critical database hosts running legacy Windows releases. The architecture provides dedicated pathways for these environments:
+
+| Customer Operating System | Recommended Deployment Method | Technical Prerequisites | Key Considerations |
+| :--- | :--- | :--- | :--- |
+| **Windows Server 2016 - 2025**<br>Windows 10 / 11 | **Option A: Graphical Setup** (`Setup_DatabaseBackup.exe`) | None (Native support) | Modern dark-mode UI with full feature parity. |
+| **Windows Server 2012 / 2012 R2**<br>Windows 8.1 | **Option A: Graphical Setup**<br>*or* **Option B: Shell Agent** | KB2999226 (Universal C Runtime) or Visual C++ 2015-2022 | If C++ runtime is missing, fallback to `shell_client` requires zero extra software. |
+| **Windows Server 2008 R2 SP1**<br>Windows 7 SP1 | **Option B: Pure PowerShell Shell Agent** (`shell_client/`) | Windows Management Framework 5.1 & .NET 4.5+ | **Zero Python / Zero EXE footprint.** Operates 100% on native Windows assemblies. |
+| **32-Bit (x86) Windows** | **Option B: Pure PowerShell Shell Agent** (`shell_client/`) | .NET Framework 4.5+ | Runs natively in 32-bit PowerShell engine with full DPAPI and AES-256 encryption. |
+
+#### Legacy OS Quick-Start Procedure (Using `shell_client`):
+1. Navigate to the [`shell_client/`](file:///c:/Users/dulni/OneDrive/Documents/Desktop/idea/Client_Installation_Package_v5.0/shell_client) folder within the customer package.
+2. Open an elevated PowerShell prompt (**Run as Administrator**).
+3. If running on Windows Server 2008 R2 / 2012, ensure TLS 1.2 is enabled in PowerShell:
+   ```powershell
+   [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls11 -bor [System.Net.SecurityProtocolType]::Tls
+   ```
+4. Run the automated headless installer:
+   ```powershell
+   powershell.exe -ExecutionPolicy Bypass -File .\install_agent.ps1
+   ```
+   *(The script reads `bundle.json`, enrolls the machine with the broker, seals `token.dpapi`, and registers the scheduled task in `taskschd.msc`).*
+5. Execute a test backup:
+   ```powershell
+   powershell.exe -ExecutionPolicy Bypass -File "C:\Program Files\DatabaseBackupApp\backup_agent.ps1"
+   ```
 
 ---
 *Enterprise Database Cloud Backup Automation v5.0 · Google DeepMind Advanced Agentic Coding*
