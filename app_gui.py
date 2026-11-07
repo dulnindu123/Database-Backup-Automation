@@ -3762,7 +3762,7 @@ class BackupAutomationApp(ctk.CTk):
             text="Overwrite existing database (WITH REPLACE)",
             font=ctk.CTkFont(size=12)
         )
-        self.restore_replace_chk.select()
+        self.restore_replace_chk.deselect()
         self.restore_replace_chk.pack(side="left", padx=(0, 20))
 
         self.restore_single_user_chk = ctk.CTkCheckBox(
@@ -3770,7 +3770,7 @@ class BackupAutomationApp(ctk.CTk):
             text="Close active connections (SINGLE_USER mode)",
             font=ctk.CTkFont(size=12)
         )
-        self.restore_single_user_chk.select()
+        self.restore_single_user_chk.deselect()
         self.restore_single_user_chk.pack(side="left", padx=(0, 20))
 
         self.restore_relocate_chk = ctk.CTkCheckBox(
@@ -3918,7 +3918,9 @@ class BackupAutomationApp(ctk.CTk):
         detected_db = m.group(1) if m else os.path.splitext(basename)[0]
         self.restore_detected_db_badge.configure(text=f"Detected DB: {detected_db}", text_color="#10b981")
         if not self.restore_target_db_var.get():
-            self.restore_target_db_var.set(detected_db)
+            import datetime
+            date_stamp = datetime.datetime.now().strftime("%Y%m%d")
+            self.restore_target_db_var.set(f"{detected_db}_restored_{date_stamp}")
 
         # Sniff actual file header magic bytes
         actual_format = detect_backup_archive_type(fpath)
@@ -4082,13 +4084,32 @@ class BackupAutomationApp(ctk.CTk):
                 )
                 return
 
+        # Finding F-08 Hardening (Safe Restore Defaults):
+        # If WITH REPLACE is checked to overwrite an existing database, require typed confirmation!
+        with_replace = bool(self.restore_replace_chk.get())
+        if with_replace:
+            from tkinter import simpledialog
+            typed_val = simpledialog.askstring(
+                "CRITICAL: Destructive Overwrite Confirmation",
+                f"DANGER: You have enabled 'WITH REPLACE' for target database:\n\n"
+                f"   [{target_db}]\n\n"
+                f"All existing tables, data, and schema in this database will be permanently wiped.\n\n"
+                f"To confirm this destructive action, please TYPE the exact database name below:",
+                parent=self
+            )
+            if not typed_val or typed_val.strip() != target_db:
+                messagebox.showinfo(
+                    "Restore Aborted",
+                    "Database restore aborted. Typed confirmation did not match target database name."
+                )
+                return
+
         # Explicit Safety Confirmation Dialog
         warn_msg = (
             f"Are you sure you want to restore to database:\n\n"
             f"  Target Database: [{target_db}]\n"
             f"  SQL Server Instance: {sql_server}\n"
             f"  Source File: {os.path.basename(source_file)}\n\n"
-            f"WARNING: If the database already exists, all existing data will be overwritten with the contents of this backup!\n\n"
             f"Proceed with database restoration?"
         )
         if not messagebox.askyesno("Confirm Database Restoration", warn_msg, icon="warning"):

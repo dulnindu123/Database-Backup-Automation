@@ -784,12 +784,39 @@ function handleRequestUpload(pcData, payload) {
     
 
     // Destination C: Customer's dedicated folder in Google Drive
-
+    // Hardened for F-01 (Confused Deputy Prevention): Validates tenant folder ownership!
     const customerDisplayName = getCustomerDisplayName(pcData.customerSlug);
+    const canonicalFolderId = getOrCreateFolder(ROOT_FOLDER_ID, customerDisplayName);
+    let destFolderId = canonicalFolderId;
 
-    let destFolderId = getOrCreateFolder(ROOT_FOLDER_ID, customerDisplayName);
     if (payload.target_folder_id && typeof payload.target_folder_id === "string" && payload.target_folder_id.trim().length > 5) {
-      destFolderId = payload.target_folder_id.trim();
+      const requestedFolderId = payload.target_folder_id.trim();
+      if (requestedFolderId === canonicalFolderId) {
+        destFolderId = canonicalFolderId;
+      } else {
+        // Verify folder parentage or explicit allowlist to prevent cross-tenant writes
+        try {
+          const reqFolder = DriveApp.getFolderById(requestedFolderId);
+          let isChild = false;
+          let parents = reqFolder.getParents();
+          while (parents.hasNext()) {
+            if (parents.next().getId() === canonicalFolderId) {
+              isChild = true;
+              break;
+            }
+          }
+          if (isChild) {
+            destFolderId = requestedFolderId;
+          } else {
+            logAudit(pcData.pcId, "SECURITY_BLOCKED_FOLDER", "Rejected cross-tenant folder: " + requestedFolderId);
+            Logger.log(`[SECURITY] Blocked unverified target_folder_id ${requestedFolderId} for tenant ${pcData.customerSlug}`);
+            destFolderId = canonicalFolderId;
+          }
+        } catch (e) {
+          logAudit(pcData.pcId, "SECURITY_BLOCKED_FOLDER", "Inaccessible folder: " + requestedFolderId);
+          destFolderId = canonicalFolderId;
+        }
+      }
     }
 
     
@@ -2262,4 +2289,66 @@ function handleSecurityAlert(pcData, payload) {
     machine_id: pcData.pcId,
     timestamp: timestamp
   });
+}
+
+// =============================================================================
+// F-06 SERVER-SIDE MISSED-BACKUP HOURLY SENTINEL (Finding F-06)
+// =============================================================================
+function checkMissedBackups() {
+  try {
+    const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const tokenSheet = ss.getSheetByName("Tokens") || ss.getSheetByName("PCs");
+    if (!tokenSheet) return;
+
+    const data = tokenSheet.getDataRange().getValues();
+    if (data.length <= 1) return;
+
+    const headers = data[0];
+    const lastSuccessIdx = headers.indexOf("Last Backup Date");
+    const slugIdx = headers.indexOf("Customer Slug");
+    const pcIdIdx = headers.indexOf("PC ID");
+    const now = Date.now();
+    const lateTenants = [];
+
+    // Default expected interval: 26 hours (daily schedule + 2h grace window)
+    const maxAllowedIntervalMs = 26 * 3600 * 1000;
+
+    for (let r = 1; r < data.length; r++) {
+      const row = data[r];
+      const lastDateVal = row[lastSuccessIdx];
+      const slug = row[slugIdx] || "unknown";
+      const pcId = row[pcIdIdx] || "unknown";
+
+      if (!lastDateVal) {
+        lateTenants.push({ slug: slug, pcId: pcId, hoursAgo: "NEVER", lastBackup: "No backup recorded" });
+        continue;
+      }
+
+      const lastTime = new Date(lastDateVal).getTime();
+      if (!isNaN(lastTime)) {
+        const elapsed = now - lastTime;
+        if (elapsed > maxAllowedIntervalMs) {
+          const hoursAgo = Math.round(elapsed / (3600 * 1000));
+          lateTenants.push({ slug: slug, pcId: pcId, hoursAgo: hoursAgo, lastBackup: new Date(lastDateVal).toISOString() });
+        }
+      }
+    }
+
+    if (lateTenants.length > 0) {
+      let body = `ATTENTION: The following ${lateTenants.length} client servers have missed their backup SLA window:\n\n`;
+      lateTenants.forEach(t => {
+        body += `• [${t.slug}] Host: ${t.pcId} | Last Success: ${t.lastBackup} (${t.hoursAgo} hours overdue)\n`;
+      });
+      body += `\nPlease inspect host connectivity and Windows Task Scheduler status immediately.`;
+
+      MailApp.sendEmail({
+        to: "dulnindu@spillabs.com",
+        subject: `[CRITICAL SLA ALERT] ${lateTenants.length} Client Servers Have Missed Backups`,
+        body: body
+      });
+      Logger.log(`[SLA ALERT] Sent missed-backup digest for ${lateTenants.length} servers.`);
+    }
+  } catch(e) {
+    Logger.log("checkMissedBackups error: " + e.message);
+  }
 }

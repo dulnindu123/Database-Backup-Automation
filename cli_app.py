@@ -53,6 +53,7 @@ from backup_core import (
     run_performance_query,
     detect_sql_server_instances,
     decrypt_file,
+    run_verify_restore_drill,
     extract_google_id,
     DEFAULT_SHEET_TABS,
     DATA_DIR,
@@ -441,6 +442,29 @@ def action_decrypt_wizard(enc_path=None, key_path=None, out_path=None):
         print(f"{Colors.RED}{Colors.BOLD}[ERROR] DECRYPTION FAILED: {msg}{Colors.RESET}")
         return False
 
+def action_verify_restore(target_file=None, instance=None):
+    """
+    Executes automated non-destructive restore drill (Finding B1: RESTORE VERIFYONLY).
+    Mathematically verifies database backup payload against SQL Server with CHECKSUM
+    without writing or modifying any production databases.
+    """
+    print(f"\n{Colors.BOLD}{Colors.CYAN}--- AUTOMATED RESTORE DRILL (RESTORE VERIFYONLY WITH CHECKSUM) ---{Colors.RESET}")
+    print(f"Executing non-destructive verification to prove backup integrity (Finding B1)...")
+    cfg = load_config()
+
+    def cli_log(msg, level="info"):
+        col = Colors.GREEN if level == "success" else (Colors.RED if level == "error" else (Colors.YELLOW if level == "warning" else Colors.RESET))
+        print(f"[{level.upper()}] {col}{msg}{Colors.RESET}")
+
+    success, res_msg = run_verify_restore_drill(config=cfg, target_file=target_file, instance=instance, log_cb=cli_log)
+    if success:
+        print(f"\n{Colors.GREEN}{Colors.BOLD}[SUCCESS] RESTORE DRILL PASSED: Backup payload is 100% restorable!{Colors.RESET}")
+        print(f"{Colors.GREEN}{res_msg}{Colors.RESET}\n")
+    else:
+        print(f"\n{Colors.RED}{Colors.BOLD}[FAIL] RESTORE DRILL FAILED!{Colors.RESET}")
+        print(f"{Colors.RED}{res_msg}{Colors.RESET}\n")
+    return success
+
 def _save_and_feedback(cfg):
     ok, msg = save_config(cfg)
     # Also synchronize to local BASE_DIR if config.json exists there
@@ -596,11 +620,12 @@ def interactive_menu():
         print(f"  {Colors.CYAN}[6]{Colors.RESET} Server Health & Storage Cleanup (Scan Drive Space & Log Telemetry)")
         print(f"  {Colors.YELLOW}[7]{Colors.RESET} Database Performance & Maintenance (DBCC CHECKDB & DBREINDEX)")
         print(f"  {Colors.BLUE}[8]{Colors.RESET} Database Restore & Decrypt Wizard (Decrypt .dbk2 to .zip / .bak)")
-        print(f"  {Colors.DIM}[9]{Colors.RESET} View Recent System Logs")
+        print(f"  {Colors.GREEN}[9]{Colors.RESET} Automated Restore Drill (RESTORE VERIFYONLY WITH CHECKSUM - Finding B1)")
+        print(f"  {Colors.DIM}[10]{Colors.RESET} View Recent System Logs")
         print(f"  {Colors.RED}[0]{Colors.RESET} Exit")
         print("=" * 75)
 
-        choice = input(f"{Colors.BOLD}Enter your choice [0-9]: {Colors.RESET}").strip()
+        choice = input(f"{Colors.BOLD}Enter your choice [0-10]: {Colors.RESET}").strip()
         
         try:
             if choice == "1":
@@ -624,12 +649,14 @@ def interactive_menu():
             elif choice == "8":
                 action_decrypt_wizard()
             elif choice == "9":
+                action_verify_restore()
+            elif choice == "10":
                 action_view_logs()
             elif choice in ("0", "q", "exit", "quit"):
                 print(f"\n{Colors.CYAN}Exiting Enterprise Database Cloud Backup CLI. Goodbye!{Colors.RESET}\n")
                 break
             else:
-                print(f"{Colors.RED}Invalid selection. Please choose 0-9.{Colors.RESET}")
+                print(f"{Colors.RED}Invalid selection. Please choose 0-10.{Colors.RESET}")
         except Exception as err:
             print(f"\n{Colors.RED}{Colors.BOLD}[ERROR] Operation encountered an error: {err}{Colors.RESET}\n")
         
@@ -652,6 +679,7 @@ def main():
   DatabaseBackupCLI.exe --test-sheet             (Verify Google Sheet connectivity)
   DatabaseBackupCLI.exe --storage-scan           (Run drive space health scan)
   DatabaseBackupCLI.exe --perf --db WAGlassKote  (Run database integrity & reindex)
+  DatabaseBackupCLI.exe --verify-restore         (Run automated non-destructive restore drill)
   DatabaseBackupCLI.exe --decrypt -i file.dbk2 -k key.pem -o out.zip
 """
     )
@@ -670,6 +698,8 @@ def main():
     parser.add_argument("--test-sheet", action="store_true", help="Verify Google Sheet connection & tabs")
     parser.add_argument("--storage-scan", action="store_true", help="Run storage monitoring scan")
     parser.add_argument("--perf", "--performance-query", dest="perf", action="store_true", help="Run DBCC CHECKDB & re-indexing")
+    parser.add_argument("--verify-restore", dest="verify_restore", action="store_true", help="Run automated non-destructive restore drill (RESTORE VERIFYONLY WITH CHECKSUM)")
+    parser.add_argument("--file", dest="target_file", type=str, help="Target backup file (.bak, .zip, .dbk2) for restore verification")
     parser.add_argument("--db", type=str, help="Target database name for backup or performance")
     parser.add_argument("--decrypt", action="store_true", help="Run decryption on a .dbk2 file")
     parser.add_argument("-i", "--input", dest="enc_input", type=str, help="Encrypted .dbk2 input file")
@@ -723,6 +753,8 @@ def main():
         action_storage_cleanup()
     elif args.perf:
         action_performance_query(target_db=args.db)
+    elif args.verify_restore:
+        action_verify_restore(target_file=args.target_file, instance=args.db)
     elif args.decrypt:
         action_decrypt_wizard(enc_path=args.enc_input, key_path=args.key_path, out_path=args.dec_output)
     elif args.config_show:

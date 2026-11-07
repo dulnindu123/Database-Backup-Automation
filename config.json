@@ -11,13 +11,19 @@
     "TELEMETRY_BROKER_URL": "",
     "GOOGLE_DRIVE_FOLDER_ID": "",
     "GOOGLE_SHEET_ID": "",
-    "STRICTLY_MONDAYS_ONLY": true,
+    "STRICTLY_MONDAYS_ONLY": false,
     "SCHEDULE_DAYS": [
-        "MON"
+        "MON",
+        "TUE",
+        "WED",
+        "THU",
+        "FRI",
+        "SAT",
+        "SUN"
     ],
-    "SCHEDULE_TIME": "02:00",
+    "SCHEDULE_TIME": "02:15",
     "DELETE_LOCAL_AFTER_UPLOAD": true,
-    "ENFORCE_ENCRYPTION_POLICY": false,
+    "ENFORCE_ENCRYPTION_POLICY": true,
     "ALERT_ON_ENCRYPTION_DISABLED": true,
     "SECURITY_ALERT_EMAIL_RECIPIENT": "",
     "CUSTOMER_ESCROW_KEY_PATH": "",
