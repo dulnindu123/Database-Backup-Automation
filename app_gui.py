@@ -699,9 +699,35 @@ class BackupAutomationApp(ctk.CTk):
         self._create_field_label(scroll, "SQL Server Instance Name:")
         sql_row = ctk.CTkFrame(scroll, fg_color="transparent")
         sql_row.pack(fill="x", padx=20, pady=(0, 10))
-        self.entry_sql_server = ctk.CTkEntry(sql_row, width=370)
+        self.sql_instance_var = tk.StringVar(value="")
+        self.entry_sql_server = ctk.CTkComboBox(
+            sql_row,
+            width=370,
+            variable=self.sql_instance_var,
+            values=["localhost"],
+            command=self._on_sql_instance_selected
+        )
         self.entry_sql_server.pack(side="left", padx=(0, 10))
-        ctk.CTkButton(sql_row, text="Auto-Detect", width=120, fg_color="#374151", hover_color="#4b5563", command=self._auto_detect_sql).pack(side="left")
+
+        # Compatibility wrappers so .delete() and .insert() work identically to CTkEntry
+        def _compat_delete(first=0, last="end"):
+            self.sql_instance_var.set("")
+            self.entry_sql_server.set("")
+        def _compat_insert(idx=0, text=""):
+            self.sql_instance_var.set(str(text))
+            self.entry_sql_server.set(str(text))
+        self.entry_sql_server.delete = _compat_delete
+        self.entry_sql_server.insert = _compat_insert
+
+        self.btn_auto_detect_sql = ctk.CTkButton(
+            sql_row,
+            text="Auto-Detect",
+            width=120,
+            fg_color="#374151",
+            hover_color="#4b5563",
+            command=self._auto_detect_sql
+        )
+        self.btn_auto_detect_sql.pack(side="left")
 
         # SQL Authentication fields (optional)
         auth_row = ctk.CTkFrame(scroll, fg_color="transparent")
@@ -1145,8 +1171,13 @@ class BackupAutomationApp(ctk.CTk):
     def _load_config_into_ui(self):
         """Populates UI input fields from self.config_data."""
         c = self.config_data
+        current_sql = c.get("SQL_SERVER_NAME", "")
         self.entry_sql_server.delete(0, "end")
-        self.entry_sql_server.insert(0, c.get("SQL_SERVER_NAME", ""))
+        self.entry_sql_server.insert(0, current_sql)
+        current_vals = list(self.entry_sql_server.cget("values") or [])
+        if current_sql and current_sql not in current_vals:
+            current_vals.insert(0, current_sql)
+            self.entry_sql_server.configure(values=current_vals)
 
         self.entry_sql_user.delete(0, "end")
         self.entry_sql_user.insert(0, c.get("SQL_USERNAME", ""))
@@ -1277,25 +1308,160 @@ class BackupAutomationApp(ctk.CTk):
         if hasattr(self, "sched_mode_var") and c.get("AUTOMATION_MODE"):
             self.sched_mode_var.set(c.get("AUTOMATION_MODE"))
 
-    def _auto_detect_sql(self):
-        """Queries Windows Registry for local SQL Server instances and databases."""
-        instances = detect_sql_server_instances()
-        if instances:
-            instance_str = f"localhost\\{instances[0]}"
-            self.entry_sql_server.delete(0, "end")
-            self.entry_sql_server.insert(0, instance_str)
-            self.append_log(f"Auto-detected SQL Server instance: {instance_str}")
+    def _on_sql_instance_selected(self, selected_instance=None):
+        """Callback when an instance is chosen from the dropdown."""
+        instance = (selected_instance or self.entry_sql_server.get() or "").strip()
+        if not instance:
+            return
+        self.append_log(f"SQL Server instance selected: {instance}")
+        
+        # Sync other tabs
+        if hasattr(self, 'perf_inst_var'):
+            self.perf_inst_var.set(instance)
+        if hasattr(self, 'restore_sql_inst_var'):
+            self.restore_sql_inst_var.set(instance)
             
-            dbs = detect_user_databases(instance_str, self.entry_sql_user.get().strip(), self.entry_sql_pass.get().strip())
-            if dbs:
+        # Discover databases for this instance
+        user = self.entry_sql_user.get().strip() if hasattr(self, "entry_sql_user") else ""
+        pwd = self.entry_sql_pass.get().strip() if hasattr(self, "entry_sql_pass") else ""
+        dbs = detect_user_databases(instance, user, pwd)
+        if dbs:
+            self.entry_databases.delete(0, "end")
+            self.entry_databases.insert(0, ", ".join(dbs))
+            self.append_log(f"Databases discovered on {instance}: {', '.join(dbs)}")
+            if hasattr(self, 'perf_db_entry'):
+                self.perf_db_entry.configure(values=dbs)
+                if hasattr(self, 'perf_db_var'):
+                    self.perf_db_var.set(dbs[0])
+
+    def _auto_detect_sql(self):
+        """
+        Auto-detects ALL local SQL Server instances (Windows Authentication
+        and SQL Server Authentication instances), populates dropdown, and discovers databases.
+        """
+        if hasattr(self, 'btn_auto_detect_sql'):
+            self.btn_auto_detect_sql.configure(text="Detecting...", state="disabled")
+        self.update_idletasks()
+        try:
+            raw_instances = detect_sql_server_instances()
+            formatted_instances = []
+            
+            # Format instance names: 'MSSQLSERVER' -> 'localhost', others -> 'localhost\INSTANCE'
+            for inst in raw_instances:
+                if inst.upper() == "MSSQLSERVER":
+                    formatted_instances.append("localhost")
+                else:
+                    formatted_instances.append(f"localhost\\{inst}")
+                    
+            # Check default instance localhost if not already included
+            if "localhost" not in formatted_instances:
+                rc, _, _ = execute_sql_query_adaptive("localhost", "SELECT 1;", timeout=3)
+                if rc == 0:
+                    formatted_instances.insert(0, "localhost")
+
+            # Remove duplicates preserving order
+            seen = set()
+            unique_instances = []
+            for inst in formatted_instances:
+                if inst.lower() not in seen:
+                    seen.add(inst.lower())
+                    unique_instances.append(inst)
+
+            if not unique_instances:
+                messagebox.showwarning("Notice", "No local Microsoft SQL Server instances could be detected on this machine.")
+                return
+
+            # Test connection & discover databases for all instances
+            user = self.entry_sql_user.get().strip() if hasattr(self, "entry_sql_user") else ""
+            pwd = self.entry_sql_pass.get().strip() if hasattr(self, "entry_sql_pass") else ""
+            
+            results = {}
+            best_instance = None
+            max_dbs = -1
+
+            for inst in unique_instances:
+                # 1. Test Windows Auth
+                win_dbs = detect_user_databases(inst, "", "")
+                win_ok = False
+                rc_win, _, _ = execute_sql_query_adaptive(inst, "SELECT 1;", "", "", timeout=5)
+                if rc_win == 0:
+                    win_ok = True
+
+                # 2. Test SQL Auth if credentials provided
+                sql_ok = False
+                sql_dbs = []
+                if user:
+                    rc_sql, _, _ = execute_sql_query_adaptive(inst, "SELECT 1;", user, pwd, timeout=5)
+                    if rc_sql == 0:
+                        sql_ok = True
+                        sql_dbs = detect_user_databases(inst, user, pwd)
+
+                active_dbs = sql_dbs if (user and sql_ok) else win_dbs
+                auth_desc = []
+                if win_ok:
+                    auth_desc.append("Windows Auth: OK")
+                if sql_ok:
+                    auth_desc.append(f"SQL Auth ({user}): OK")
+                if not win_ok and not sql_ok:
+                    auth_desc.append("Auth: Credentials Required")
+
+                results[inst] = {
+                    "dbs": active_dbs,
+                    "auth": ", ".join(auth_desc) if auth_desc else "Unverified",
+                    "win_ok": win_ok,
+                    "sql_ok": sql_ok
+                }
+                
+                # Auto-select the instance that has user databases (or highest count)
+                if len(active_dbs) > max_dbs:
+                    max_dbs = len(active_dbs)
+                    best_instance = inst
+
+            if not best_instance:
+                best_instance = unique_instances[0]
+
+            # Populate dropdown values & set active selection
+            self.entry_sql_server.configure(values=unique_instances)
+            self.entry_sql_server.set(best_instance)
+            self.sql_instance_var.set(best_instance)
+            
+            # Sync across tabs
+            if hasattr(self, 'perf_inst_var'):
+                self.perf_inst_var.set(best_instance)
+            if hasattr(self, 'restore_sql_inst_var'):
+                self.restore_sql_inst_var.set(best_instance)
+
+            # Populate target databases
+            selected_dbs = results[best_instance]["dbs"]
+            if selected_dbs:
                 self.entry_databases.delete(0, "end")
-                self.entry_databases.insert(0, ", ".join(dbs))
-                self.append_log(f"Auto-detected databases: {', '.join(dbs)}")
-                messagebox.showinfo("SQL Server Detected", f"Found SQL Server instance:\n{instance_str}\n\nDatabases discovered:\n{', '.join(dbs)}")
-            else:
-                messagebox.showinfo("SQL Server Detected", f"Found SQL Server instance:\n{instance_str}")
-        else:
-            messagebox.showwarning("Notice", "No local named SQL Server instances found in Windows Registry.")
+                self.entry_databases.insert(0, ", ".join(selected_dbs))
+                if hasattr(self, 'perf_db_entry'):
+                    self.perf_db_entry.configure(values=selected_dbs)
+                    if hasattr(self, 'perf_db_var'):
+                        self.perf_db_var.set(selected_dbs[0])
+
+            self.append_log(f"Auto-detected {len(unique_instances)} SQL Server instance(s): {', '.join(unique_instances)}")
+            self.append_log(f"Active selection: {best_instance} ({results[best_instance]['auth']}) — Databases: {', '.join(selected_dbs) if selected_dbs else 'None'}")
+
+            # Construct informative message dialog
+            msg_lines = [f"Discovered {len(unique_instances)} SQL Server Instance(s):\n"]
+            for inst in unique_instances:
+                info = results[inst]
+                dbs_summary = f"{len(info['dbs'])} database(s) found" if info['dbs'] else "No user databases"
+                prefix = "★ " if inst == best_instance else "• "
+                msg_lines.append(f"{prefix}{inst}\n   [{info['auth']}] — {dbs_summary}")
+                if info['dbs']:
+                    msg_lines.append(f"   Databases: {', '.join(info['dbs'])}")
+
+            msg_lines.append(f"\nAuto-selected '{best_instance}' in the dropdown.")
+            msg_lines.append("You can select any other instance anytime from the dropdown menu.")
+            
+            messagebox.showinfo("SQL Server Instances Detected", "\n".join(msg_lines))
+
+        finally:
+            if hasattr(self, 'btn_auto_detect_sql'):
+                self.btn_auto_detect_sql.configure(text="Auto-Detect", state="normal")
 
     def _open_drive_folder(self):
         """Opens customer Google Drive folder in default web browser."""

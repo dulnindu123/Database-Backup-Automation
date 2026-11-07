@@ -2479,33 +2479,63 @@ def disable_performance_scheduler():
 def detect_sql_server_instances():
     """
     Auto-discovers locally installed Microsoft SQL Server instances.
+    Enumerates:
+    - 64-bit and 32-bit Registry Instance Names
+    - InstalledInstances Multi-String
+    - Active Windows Services (MSSQLSERVER and MSSQL$*)
     """
     instances = []
-    try:
-        import winreg
-        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Microsoft SQL Server\Instance Names\SQL") as key:
-            i = 0
-            while True:
-                try:
-                    name, _, _ = winreg.EnumValue(key, i)
-                    instances.append(name)
-                    i += 1
-                except OSError:
-                    break
-    except Exception:
-        pass
-        
-    if not instances:
+    
+    # 1. 64-bit and 32-bit Registry Instance Names
+    for subkey in [
+        r"SOFTWARE\Microsoft\Microsoft SQL Server\Instance Names\SQL",
+        r"SOFTWARE\WOW6432Node\Microsoft\Microsoft SQL Server\Instance Names\SQL"
+    ]:
         try:
-            res = subprocess.run(["sc", "query", "state=", "all"], capture_output=True, text=True)
-            for line in res.stdout.splitlines():
-                if "SERVICE_NAME: MSSQL$" in line:
-                    inst = line.split("MSSQL$")[-1].strip()
-                    if inst and inst not in instances:
-                        instances.append(inst)
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, subkey) as key:
+                i = 0
+                while True:
+                    try:
+                        name, _, _ = winreg.EnumValue(key, i)
+                        if name and name not in instances:
+                            instances.append(name)
+                        i += 1
+                    except OSError:
+                        break
         except Exception:
             pass
-            
+
+    # 2. InstalledInstances Multi-String
+    for subkey in [
+        r"SOFTWARE\Microsoft\Microsoft SQL Server",
+        r"SOFTWARE\WOW6432Node\Microsoft\Microsoft SQL Server"
+    ]:
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, subkey) as key:
+                val, _ = winreg.QueryValueEx(key, "InstalledInstances")
+                if isinstance(val, list):
+                    for item in val:
+                        if item and item not in instances:
+                            instances.append(item)
+        except Exception:
+            pass
+
+    # 3. Active Windows Services
+    try:
+        res = subprocess.run(["sc", "query", "state=", "all"], capture_output=True, text=True)
+        for line in res.stdout.splitlines():
+            if "SERVICE_NAME: MSSQL$" in line:
+                inst = line.split("MSSQL$")[-1].strip()
+                if inst and inst not in instances:
+                    instances.append(inst)
+            elif "SERVICE_NAME: MSSQLSERVER" in line:
+                if "MSSQLSERVER" not in instances:
+                    instances.append("MSSQLSERVER")
+    except Exception:
+        pass
+
     return instances
 
 
