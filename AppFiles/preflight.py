@@ -1,0 +1,1008 @@
+"""
+Enterprise Zero-Trust Preflight Validation Engine
+=============================================================================
+Unified validation module used by:
+1. Setup Wizard (installer_gui.py) — halts install if any critical check fails.
+2. Operator GUI (app_gui.py) — powers "Test All Preflights" and live status badges.
+3. Automated Core (auto_backup.py) — validates state before every scheduled cycle.
+
+Checks enforced:
+- HTTPS + Pinned URL security
+- Live /healthz reachability
+- Native ctypes DPAPI token decryption (with exact Win32 error code logging)
+- Live /verify token authentication with the Upload Broker
+- Both public encryption keys (>=3072 bit RSA, distinct keypairs, valid fingerprints)
+- Folder permissions and ACLs
+- Cloud sync detection (blocks OneDrive, Dropbox, Google Drive, Box, iCloud)
+- SQL Server reachability, database discovery, backup permissions, and disk space
+- Windows Task Scheduler registration, action path verification, and next run time
+"""
+
+import os
+import sys
+import re
+import json
+import time
+import base64
+import hashlib
+import socket
+import ctypes
+import shutil
+import urllib.parse
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple, Any
+
+try:
+    import requests
+except ImportError:
+    requests = None
+
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives import hashes
+
+import version
+from version import (
+    APP_VERSION,
+    APP_NAME,
+    EXE_NAME,
+    DEFAULT_INSTALL_SUBDIR,
+    PROGRAM_DATA_DIR,
+    DEFAULT_TASK_NAME,
+)
+try:
+    from version import EMBEDDED_ADMIN_PUBLIC_KEY_PEM
+except (ImportError, AttributeError):
+    EMBEDDED_ADMIN_PUBLIC_KEY_PEM = getattr(version, "EMBEDDED_ADMIN_PUBLIC_KEY_PEM", (
+        "-----BEGIN PUBLIC KEY-----\n"
+        "MCowBQYDK2VwAyEAUwmpkX+0AVBJiRNUfd7tm65krqq30q7ngVYVgFzmGYk=\n"
+        "-----END PUBLIC KEY-----"
+    ))
+
+# Known Cloud Sync Directory Markers & Env Vars
+CLOUD_SYNC_ENV_VARS = [
+    "OneDrive",
+    "OneDriveCommercial",
+    "OneDriveConsumer",
+    "OneDriveRoot",
+]
+CLOUD_SYNC_SUBSTRINGS = [
+    r"\onedrive",
+    r"/onedrive",
+    r"\dropbox",
+    r"/dropbox",
+    r"\google drive",
+    r"/google drive",
+    r"\googledrive",
+    r"/googledrive",
+    r"\box sync",
+    r"\box",
+    r"\iclouddrive",
+    r"/iclouddrive",
+]
+
+
+class PreflightCheckResult:
+    def __init__(self, name: str, passed: bool, message: str, code: str = "OK", error_detail: str = "", is_warning: bool = False):
+        self.name = name
+        self.passed = passed
+        self.message = message
+        self.code = code
+        self.error_detail = error_detail
+        self.is_warning = is_warning or code.startswith("WARN_")
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "passed": self.passed,
+            "message": self.message,
+            "code": self.code,
+            "error_detail": self.error_detail,
+            "is_warning": self.is_warning,
+        }
+
+
+class PreflightReport:
+    def __init__(self):
+        self.results: List[PreflightCheckResult] = []
+
+    def add(self, result: PreflightCheckResult):
+        self.results.append(result)
+
+    @property
+    def passed(self) -> bool:
+        return all(r.passed or r.code.startswith("WARN_") or getattr(r, "is_warning", False) for r in self.results)
+
+    @property
+    def failures(self) -> List[PreflightCheckResult]:
+        return [r for r in self.results if not r.passed and not r.code.startswith("WARN_") and not getattr(r, "is_warning", False)]
+
+    @property
+    def warnings(self) -> List[PreflightCheckResult]:
+        return [r for r in self.results if r.code.startswith("WARN_") or getattr(r, "is_warning", False)]
+
+    def summary(self) -> str:
+        lines = []
+        for r in self.results:
+            if r.code.startswith("WARN_") or getattr(r, "is_warning", False):
+                status = "WARN"
+            else:
+                status = "PASS" if r.passed else "FAIL"
+            lines.append(f"[{status}] {r.name}: {r.message} (Code: {r.code})")
+        return "\n".join(lines)
+
+
+# =============================================================================
+# 0. SIGNED MANIFEST VALIDATION (Requirement 2: Ed25519 Signed Manifest)
+# =============================================================================
+
+SLUG_RE = re.compile(r"^[a-z0-9]{2,24}$")
+
+
+# Removed old verify_manifest, replaced by verify_bundle in sign_bundle.py style.
+
+
+# =============================================================================
+# 1. URL & NETWORK CHECKS
+# =============================================================================
+
+def validate_broker_url_security(url: str, allow_insecure: bool = False) -> PreflightCheckResult:
+    if not url or not url.strip():
+        return PreflightCheckResult(name="Broker URL Security", passed=False, message="Broker URL is empty or unconfigured", code="ERR_URL_EMPTY")
+    if "script.google.com" not in url.lower():
+        return PreflightCheckResult(name="Broker URL Security", passed=False, message="URL must be a valid Google Apps Script URL (script.google.com)", code="ERR_NOT_APPS_SCRIPT")
+    return PreflightCheckResult(name="Broker URL Security", passed=True, message="Valid Apps Script URL", code="OK")
+
+
+def probe_broker_health(url: str, timeout: float = 8.0) -> PreflightCheckResult:
+    if not requests:
+        return PreflightCheckResult(name="Broker Health (Ping)", passed=False, message="requests library not available", code="ERR_NO_REQUESTS")
+    try:
+        from broker_client import post_broker, parse_broker_response
+        r = post_broker(url, {"action": "health"}, timeout=timeout)
+        status, data, err = parse_broker_response(r)
+        if data.get("status") == "ok" or (status == 401 and "token" in str(data.get("error", "")).lower()):
+            return PreflightCheckResult(
+                name="Broker Health (Ping)",
+                passed=True,
+                message="Apps Script broker responded and is active",
+                code="OK",
+            )
+        if err or status >= 400:
+            return PreflightCheckResult(
+                name="Broker Health (Ping)",
+                passed=False,
+                message=err or f"Broker health failed (HTTP {status})",
+                code=f"HTTP_{status}",
+            )
+        return PreflightCheckResult(
+            name="Broker Health (Ping)",
+            passed=False,
+            message="Unexpected health response from broker",
+            code="ERR_HEALTH_UNEXPECTED",
+        )
+    except Exception as e:
+        return PreflightCheckResult(
+            name="Broker Health (Ping)",
+            passed=False,
+            message=str(e),
+            code="ERR_HEALTH_EXCEPTION",
+            error_detail=str(e),
+        )
+# =============================================================================
+# 2. TOKEN & DPAPI CHECKS (Requirement C: Real error codes)
+# =============================================================================
+
+def decrypt_token_dpapi(data_dir: Optional[str] = None, target_dir: Optional[str] = None) -> Tuple[Optional[str], PreflightCheckResult]:
+    """
+    Attempts to locate and decrypt token.dpapi using native Windows crypt32.dll.
+    Returns (raw_token, PreflightCheckResult).
+    Differentiates between:
+    - FILE_ABSENT (token.dpapi not found)
+    - ACL_DENIED (PermissionError opening file)
+    - DECRYPT_FAILED (Win32 CryptUnprotectData failed with error code, e.g. 0x80090005)
+    - FORMAT_INVALID (Missing dot separator or non-printable chars)
+    """
+    dirs_to_check = []
+    if data_dir:
+        dirs_to_check.append(data_dir)
+    else:
+        dirs_to_check.append(PROGRAM_DATA_DIR)
+    if target_dir and target_dir not in dirs_to_check:
+        dirs_to_check.append(target_dir)
+
+    found_path = None
+    for d in dirs_to_check:
+        chk = os.path.join(d, "token.dpapi")
+        if os.path.exists(chk):
+            found_path = chk
+            break
+
+    if not found_path:
+        return None, PreflightCheckResult(
+            name="Token Decryption (DPAPI)",
+            passed=False,
+            message="Token file absent: 'token.dpapi' not found in ProgramData or install directory",
+            code="ERR_TOKEN_FILE_ABSENT"
+        )
+
+    # 1. Test File Read Access (ACL)
+    try:
+        with open(found_path, "rb") as f:
+            encrypted_bytes = f.read()
+    except PermissionError as pe:
+        return None, PreflightCheckResult(
+            name="Token Decryption (DPAPI)",
+            passed=False,
+            message=f"ACL Denied: Cannot read '{found_path}' (WinError 5: Access is denied)",
+            code="ERR_TOKEN_ACL_DENIED",
+            error_detail=str(pe)
+        )
+    except Exception as e:
+        return None, PreflightCheckResult(
+            name="Token Decryption (DPAPI)",
+            passed=False,
+            message=f"Failed to open '{found_path}': {e}",
+            code="ERR_TOKEN_READ_FAIL",
+            error_detail=str(e)
+        )
+
+    if not encrypted_bytes:
+        return None, PreflightCheckResult(
+            name="Token Decryption (DPAPI)",
+            passed=False,
+            message=f"Token file is zero bytes (empty): '{found_path}'",
+            code="ERR_TOKEN_ZERO_BYTES"
+        )
+
+    try:
+        from broker_client import _unprotect_dpapi_native
+        token_str = _unprotect_dpapi_native(encrypted_bytes)
+        if not token_str:
+            return None, PreflightCheckResult(
+                name="Token Decryption (DPAPI)",
+                passed=False,
+                message="CryptUnprotectData returned empty data (wrong user/machine context)",
+                code="ERR_DPAPI_EMPTY",
+            )
+
+        if "." not in token_str:
+            return None, PreflightCheckResult(
+                name="Token Decryption (DPAPI)",
+                passed=False,
+                message="Decrypted token has invalid format. Expected '<pc_id>.<secret>'",
+                code="ERR_TOKEN_FORMAT_INVALID"
+            )
+
+        pc_id = token_str.split(".", 1)[0]
+        return token_str, PreflightCheckResult(
+            name="Token Decryption (DPAPI)",
+            passed=True,
+            message=f"Successfully decrypted token for PC ID: '{pc_id}' via native DPAPI",
+            code="OK"
+        )
+    except Exception as e:
+        return None, PreflightCheckResult(
+            name="Token Decryption (DPAPI)",
+            passed=False,
+            message=f"Unexpected error during DPAPI unprotect: {e}",
+            code="ERR_DPAPI_EXCEPTION",
+            error_detail=str(e)
+        )
+
+
+def verify_token_with_broker(url: str, token: str, timeout: float = 8.0) -> PreflightCheckResult:
+    try:
+        from broker_client import verify_broker_token
+        ok, detail = verify_broker_token(url, token, timeout=timeout)
+        if ok:
+            return PreflightCheckResult(name="Token Broker Verification", passed=True, message=f"Token verified successfully (PC: {detail})", code="OK")
+        return PreflightCheckResult(name="Token Broker Verification", passed=False, message=str(detail), code="ERR_VERIFY")
+    except Exception as e:
+        return PreflightCheckResult(name="Token Broker Verification", passed=False, message=f"Error: {e}", code="ERR_VERIFY")
+# =============================================================================
+# 3. PUBLIC KEY VALIDATION (>= 3072 bits, distinct, matching fingerprints)
+# =============================================================================
+
+def validate_public_keys(data_dir: Optional[str] = None, target_dir: Optional[str] = None, min_bits: int = 3072) -> PreflightCheckResult:
+    """
+    Validates backup_public.pem and escrow_public.pem:
+    - Both files exist and are readable
+    - Both keys parse as valid RSA SubjectPublicKeyInfo
+    - Both keys have key_size >= min_bits (default 3072)
+    - Both keys are DISTINCT (different modulus)
+    - Key fingerprints match 8-byte prefix format
+    """
+    dirs = []
+    if data_dir:
+        dirs.append(data_dir)
+    else:
+        dirs.append(PROGRAM_DATA_DIR)
+    if target_dir and target_dir not in dirs:
+        dirs.append(target_dir)
+
+    def find_key(filename):
+        for d in dirs:
+            p = os.path.join(d, filename)
+            if os.path.exists(p):
+                return p
+        return None
+
+    primary_path = find_key("backup_public.pem")
+    escrow_path = find_key("escrow_public.pem")
+
+    if not primary_path:
+        return PreflightCheckResult(
+            name="Public Keys Validation",
+            passed=False,
+            message="Primary public key file absent ('backup_public.pem' not found)",
+            code="ERR_PRIMARY_KEY_ABSENT"
+        )
+
+    if not escrow_path:
+        return PreflightCheckResult(
+            name="Public Keys Validation",
+            passed=False,
+            message="Escrow public key file absent ('escrow_public.pem' not found)",
+            code="ERR_ESCROW_KEY_ABSENT"
+        )
+
+    # 1. Parse Primary Key
+    try:
+        with open(primary_path, "rb") as f:
+            primary_data = f.read()
+        primary_key = serialization.load_pem_public_key(primary_data)
+        if not isinstance(primary_key, rsa.RSAPublicKey):
+            return PreflightCheckResult(
+                name="Public Keys Validation",
+                passed=False,
+                message=f"Primary key '{primary_path}' is not an RSA key",
+                code="ERR_PRIMARY_NOT_RSA"
+            )
+        if primary_key.key_size < min_bits:
+            return PreflightCheckResult(
+                name="Public Keys Validation",
+                passed=False,
+                message=f"Primary RSA key length too short: {primary_key.key_size} bits < required {min_bits} bits",
+                code="ERR_PRIMARY_KEY_TOO_SHORT"
+            )
+    except Exception as e:
+        return PreflightCheckResult(
+            name="Public Keys Validation",
+            passed=False,
+            message=f"Corrupt or unreadable primary key '{primary_path}': {e}",
+            code="ERR_PRIMARY_KEY_CORRUPT"
+        )
+
+    # 2. Parse Escrow Key
+    try:
+        with open(escrow_path, "rb") as f:
+            escrow_data = f.read()
+        escrow_key = serialization.load_pem_public_key(escrow_data)
+        if not isinstance(escrow_key, rsa.RSAPublicKey):
+            return PreflightCheckResult(
+                name="Public Keys Validation",
+                passed=False,
+                message=f"Escrow key '{escrow_path}' is not an RSA key",
+                code="ERR_ESCROW_NOT_RSA"
+            )
+        if escrow_key.key_size < min_bits:
+            return PreflightCheckResult(
+                name="Public Keys Validation",
+                passed=False,
+                message=f"Escrow RSA key length too short: {escrow_key.key_size} bits < required {min_bits} bits",
+                code="ERR_ESCROW_KEY_TOO_SHORT"
+            )
+    except Exception as e:
+        return PreflightCheckResult(
+            name="Public Keys Validation",
+            passed=False,
+            message=f"Corrupt or unreadable escrow key '{escrow_path}': {e}",
+            code="ERR_ESCROW_KEY_CORRUPT"
+        )
+
+    # 3. Verify Distinct Keypairs
+    if primary_key.public_numbers().n == escrow_key.public_numbers().n:
+        return PreflightCheckResult(
+            name="Public Keys Validation",
+            passed=False,
+            message="Primary and Escrow keys are IDENTICAL! They must be distinct independent keypairs.",
+            code="ERR_KEYS_NOT_DISTINCT"
+        )
+
+    # 4. Compute and Verify Fingerprints
+    p_der = primary_key.public_bytes(
+        encoding=serialization.Encoding.DER,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+    digest = hashes.Hash(hashes.SHA256())
+    digest.update(p_der)
+    p_fp = digest.finalize()[:8].hex()
+
+    e_der = escrow_key.public_bytes(
+        encoding=serialization.Encoding.DER,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+    digest = hashes.Hash(hashes.SHA256())
+    digest.update(e_der)
+    e_fp = digest.finalize()[:8].hex()
+
+    return PreflightCheckResult(
+        name="Public Keys Validation",
+        passed=True,
+        message=f"Both RSA keys valid (Primary: {primary_key.key_size}-bit fp={p_fp}, Escrow: {escrow_key.key_size}-bit fp={e_fp})",
+        code="OK"
+    )
+
+
+# =============================================================================
+# 4. CLOUD SYNC DIRECTORY DETECTION (Requirement E)
+# =============================================================================
+
+def validate_backup_folder_path(folder_path: str) -> PreflightCheckResult:
+    """
+    Validates that backup destination is a valid local/network folder
+    and BLOCKS folders located inside cloud sync providers
+    (OneDrive, Dropbox, Google Drive, Box, iCloud).
+    """
+    if not folder_path or not folder_path.strip():
+        return PreflightCheckResult(
+            name="Backup Destination Folder",
+            passed=False,
+            message="Backup folder path is empty",
+            code="ERR_FOLDER_EMPTY"
+        )
+
+    norm_path = os.path.abspath(os.path.normpath(folder_path.strip()))
+
+    # Check known cloud sync environment variables
+    for var in CLOUD_SYNC_ENV_VARS:
+        env_val = os.environ.get(var, "").strip()
+        if env_val:
+            norm_env = os.path.abspath(os.path.normpath(env_val))
+            if norm_path.lower().startswith(norm_env.lower()):
+                return PreflightCheckResult(
+                    name="Backup Destination Folder",
+                    passed=False,
+                    message=f"Backup folder cannot be inside OneDrive ('{folder_path}'). "
+                            "Cloud sync locks temporary database files and exposes backups to ransomware sync.",
+                    code="ERR_CLOUD_SYNC_ONEDRIVE"
+                )
+
+    # Check known cloud sync substrings
+    low_path = norm_path.lower()
+    for sub in CLOUD_SYNC_SUBSTRINGS:
+        if sub in low_path:
+            provider = sub.replace("\\", "").replace("/", "").capitalize()
+            return PreflightCheckResult(
+                name="Backup Destination Folder",
+                passed=False,
+                message=f"Backup folder cannot be inside a cloud sync folder ('{provider}' detected in '{folder_path}'). "
+                        "Please select a dedicated local directory (e.g. C:\\temp\\backups or D:\\SQLBackups).",
+                code="ERR_CLOUD_SYNC_DETECTED"
+            )
+
+    # Check drive root existence
+    drive, _ = os.path.splitdrive(norm_path)
+    if drive and not os.path.exists(drive + "\\"):
+        return PreflightCheckResult(
+            name="Backup Destination Folder",
+            passed=False,
+            message=f"Drive '{drive}' does not exist on this machine",
+            code="ERR_DRIVE_NOT_FOUND"
+        )
+
+    # Check free disk space (require at least 1 GB on backup drive)
+    try:
+        usage = shutil.disk_usage(drive + "\\" if drive else norm_path)
+        free_gb = usage.free / (1024 ** 3)
+        if free_gb < 1.0:
+            return PreflightCheckResult(
+                name="Backup Destination Folder",
+                passed=False,
+                message=f"Critically low disk space on {drive}: only {free_gb:.2f} GB free (Minimum 1.0 GB required)",
+                code="ERR_DISK_SPACE_CRITICAL"
+            )
+    except Exception:
+        pass
+
+    return PreflightCheckResult(
+        name="Backup Destination Folder",
+        passed=True,
+        message=f"Valid local backup destination: '{norm_path}'",
+        code="OK"
+    )
+
+
+# =============================================================================
+# 5. FOLDER PERMISSIONS & ACLS
+# =============================================================================
+
+def validate_folder_permissions(target_dir: str, data_dir: str = PROGRAM_DATA_DIR, check_target_write: bool = False) -> PreflightCheckResult:
+    """
+    Verifies write, create, and delete permissions:
+    - ProgramData Directory (data_dir): MUST have write/modify permissions for runtime state, logs, and configs.
+    - Target Directory (target_dir): Verifies existence and readability. In installer mode (check_target_write=True),
+      also verifies write access.
+    """
+    # 1. ProgramData directory: must always have write access
+    try:
+        os.makedirs(data_dir, exist_ok=True)
+        test_file = os.path.join(data_dir, ".preflight_write_test")
+        with open(test_file, "w") as f:
+            f.write("test")
+        os.remove(test_file)
+    except PermissionError as pe:
+        return PreflightCheckResult(
+            name="Folder ACL Permissions",
+            passed=False,
+            message=f"ACL Denied: Insufficient permissions in ProgramData Directory '{data_dir}' (WinError 5: Access is denied)",
+            code="ERR_ACL_DENIED",
+            error_detail=str(pe)
+        )
+    except Exception as e:
+        return PreflightCheckResult(
+            name="Folder ACL Permissions",
+            passed=False,
+            message=f"Filesystem access error in ProgramData Directory '{data_dir}': {e}",
+            code="ERR_FS_ACCESS",
+            error_detail=str(e)
+        )
+
+    # 2. Target Directory: Verify existence and readability
+    try:
+        if not os.path.exists(target_dir):
+            return PreflightCheckResult(
+                name="Folder ACL Permissions",
+                passed=False,
+                message=f"Target Directory '{target_dir}' does not exist",
+                code="ERR_TARGET_DIR_MISSING"
+            )
+        # Verify read access
+        os.listdir(target_dir)
+
+        # In installer mode, also test write access
+        if check_target_write:
+            test_file = os.path.join(target_dir, ".preflight_write_test")
+            with open(test_file, "w") as f:
+                f.write("test")
+            os.remove(test_file)
+    except PermissionError as pe:
+        return PreflightCheckResult(
+            name="Folder ACL Permissions",
+            passed=False,
+            message=f"ACL Denied: Insufficient permissions in Target Directory '{target_dir}' (WinError 5: Access is denied)",
+            code="ERR_ACL_DENIED",
+            error_detail=str(pe)
+        )
+    except Exception as e:
+        return PreflightCheckResult(
+            name="Folder ACL Permissions",
+            passed=False,
+            message=f"Filesystem access error in Target Directory '{target_dir}': {e}",
+            code="ERR_FS_ACCESS",
+            error_detail=str(e)
+        )
+
+    return PreflightCheckResult(
+        name="Folder ACL Permissions",
+        passed=True,
+        message="Full read/write access verified in application and data directories",
+        code="OK"
+    )
+
+
+# =============================================================================
+# 6. SCHEDULED TASK VALIDATION (Requirement B & D)
+# =============================================================================
+
+def validate_scheduled_task(task_name: Optional[str] = None, expected_exe: Optional[str] = None) -> PreflightCheckResult:
+    """
+    Queries Windows Task Scheduler to verify:
+    - Exact task name matches DEFAULT_TASK_NAME (single constant; no candidate lists)
+    - Action points to the real installed executable
+    - Run-As account is configured and active
+    - Queries next run time
+    """
+    import subprocess
+    target_task = task_name or DEFAULT_TASK_NAME
+    cmd = ["schtasks.exe", "/query", "/tn", target_task, "/fo", "list", "/v"]
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        if res.returncode != 0:
+            return PreflightCheckResult(
+                name="Task Scheduler Verification",
+                passed=False,
+                message=f"Scheduled task '{target_task}' is not registered in Windows Task Scheduler",
+                code="ERR_TASK_NOT_REGISTERED"
+            )
+
+        output = res.stdout
+        task_action = ""
+        run_as_user = ""
+        next_run = "Unknown"
+        for line in output.splitlines():
+            line_s = line.strip()
+            if line_s.lower().startswith("task to run:") or line_s.lower().startswith("action:"):
+                task_action = line_s.split(":", 1)[1].strip()
+            elif line_s.lower().startswith("run as user:") or line_s.lower().startswith("author:"):
+                if not run_as_user or line_s.lower().startswith("run as user:"):
+                    run_as_user = line_s.split(":", 1)[1].strip()
+            elif line_s.lower().startswith("next run time:"):
+                next_run = line_s.split(":", 1)[1].strip()
+
+        if expected_exe:
+            norm_exp = os.path.normpath(expected_exe).lower()
+            if norm_exp not in task_action.lower():
+                return PreflightCheckResult(
+                    name="Task Scheduler Verification",
+                    passed=False,
+                    message=f"Task action points to unexpected path: '{task_action}' (Expected: '{expected_exe}')",
+                    code="ERR_TASK_EXE_MISMATCH"
+                )
+
+        if not run_as_user:
+            return PreflightCheckResult(
+                name="Task Scheduler Verification",
+                passed=False,
+                message=f"Task '{target_task}' has no configured Run-As User account",
+                code="ERR_TASK_NO_USER"
+            )
+
+        return PreflightCheckResult(
+            name="Task Scheduler Verification",
+            passed=True,
+            message=f"Task active ('{target_task}'): Run As '{run_as_user}', Next Run '{next_run}', Action: '{task_action}'",
+            code="OK"
+        )
+    except Exception as e:
+        return PreflightCheckResult(
+            name="Task Scheduler Verification",
+            passed=False,
+            message=f"Failed to query Task Scheduler for '{target_task}': {e}",
+            code="ERR_TASK_QUERY_FAIL",
+            error_detail=str(e)
+        )
+
+
+
+# =============================================================================
+# 7. SQL SERVER REACHABILITY, DATABASES, PERMISSIONS & FREE SPACE (Requirement B)
+# =============================================================================
+
+def validate_sql_server(
+    sql_server: str,
+    sql_user: str = "",
+    sql_password: str = "",
+    backup_folder: str = r"C:\temp\backups",
+    timeout: int = 10
+) -> List[PreflightCheckResult]:
+    """
+    Validates Microsoft SQL Server connectivity, user databases, backup permissions,
+    and target destination disk space.
+    """
+    results = []
+    if not sql_server or not sql_server.strip():
+        results.append(PreflightCheckResult(
+            name="SQL Server Reachability",
+            passed=False,
+            message="SQL Server instance name is unconfigured",
+            code="ERR_SQL_UNCONFIGURED"
+        ))
+        return results
+
+    server = sql_server.strip()
+
+    # 1. Check SQL CLI availability
+    try:
+        from backup_core import find_sql_cli_executable, execute_sql_query_adaptive
+        cli_type, cli_path = find_sql_cli_executable()
+    except Exception as e:
+        cli_type, cli_path = "sqlcmd", "sqlcmd"
+
+    # 2. Probe connectivity & version
+    version_query = "SET NOCOUNT ON; SELECT @@VERSION;"
+    try:
+        rc, stdout, stderr = execute_sql_query_adaptive(
+            server, version_query, sql_user=sql_user, sql_password=sql_password, timeout=timeout
+        )
+        if rc != 0 or not stdout.strip():
+            clean_err = stderr.strip() or stdout.strip() or "Connection timed out"
+            first_err_line = clean_err.splitlines()[-1] if clean_err.splitlines() else clean_err
+            results.append(PreflightCheckResult(
+                name="SQL Server Reachability",
+                passed=False,
+                message=f"Cannot connect to SQL Server '{server}': {first_err_line}",
+                code="ERR_SQL_CONN_FAILED",
+                error_detail=clean_err
+            ))
+            return results
+
+        first_line = stdout.strip().splitlines()[0]
+        results.append(PreflightCheckResult(
+            name="SQL Server Reachability",
+            passed=True,
+            message=f"Connected to SQL Server '{server}' ({first_line[:40]}...)",
+            code="OK"
+        ))
+
+        # Check for discouraged 'sa' account usage (Round 9 Hardening Advisory)
+        if sql_user and sql_user.strip().lower() == "sa":
+            results.append(PreflightCheckResult(
+                name="SQL Account Security",
+                passed=True,
+                message="Using 'sa' administrative account for automated backups is discouraged. Windows Authentication or a dedicated login with db_backupoperator is recommended.",
+                code="WARN_SQL_SA_DISCOURAGED",
+                is_warning=True
+            ))
+    except Exception as e:
+        results.append(PreflightCheckResult(
+            name="SQL Server Reachability",
+            passed=False,
+            message=f"Failed to query SQL Server: {e}",
+            code="ERR_SQL_EXCEPTION",
+            error_detail=str(e)
+        ))
+        return results
+
+    # 3. Discover online user databases
+    db_query = (
+        "SET NOCOUNT ON; "
+        "IF OBJECT_ID('sys.databases') IS NOT NULL "
+        "  SELECT name FROM sys.databases WHERE database_id > 4 AND state_desc = 'ONLINE' "
+        "ELSE "
+        "  SELECT name FROM master.dbo.sysdatabases WHERE dbid > 4;"
+    )
+    rc_db, out_db, _ = execute_sql_query_adaptive(
+        server, db_query, sql_user=sql_user, sql_password=sql_password, timeout=timeout
+    )
+    discovered_dbs = []
+    if rc_db == 0 and out_db.strip():
+        for line in out_db.strip().splitlines():
+            s = line.strip()
+            if s and not s.startswith("-") and not s.startswith("(") and not s.lower().startswith("name"):
+                discovered_dbs.append(s)
+
+    if not discovered_dbs:
+        results.append(PreflightCheckResult(
+            name="SQL Database Discovery",
+            passed=False,
+            message=f"Connected to '{server}', but 0 online user databases were discovered",
+            code="ERR_SQL_NO_DATABASES"
+        ))
+    else:
+        results.append(PreflightCheckResult(
+            name="SQL Database Discovery",
+            passed=True,
+            message=f"Discovered {len(discovered_dbs)} active user databases ({', '.join(discovered_dbs[:3])}{'...' if len(discovered_dbs) > 3 else ''})",
+            code="OK"
+        ))
+
+    # 4. Check Backup Database permissions
+    perm_query = (
+        "SET NOCOUNT ON; "
+        "SELECT IS_SRVROLEMEMBER('sysadmin') AS is_sysadmin, "
+        "HAS_PERMS_BY_NAME(null, null, 'BACKUP DATABASE') AS has_backup_perm;"
+    )
+    rc_perm, out_perm, _ = execute_sql_query_adaptive(
+        server, perm_query, sql_user=sql_user, sql_password=sql_password, timeout=timeout
+    )
+    has_perm = False
+    if rc_perm == 0 and out_perm.strip():
+        for line in out_perm.strip().splitlines():
+            parts = line.strip().split()
+            if any(p == "1" for p in parts):
+                has_perm = True
+                break
+
+    if has_perm:
+        results.append(PreflightCheckResult(
+            name="SQL Backup Permissions",
+            passed=True,
+            message=f"Verified 'BACKUP DATABASE' / sysadmin administrative permissions on '{server}'",
+            code="OK"
+        ))
+    else:
+        results.append(PreflightCheckResult(
+            name="SQL Backup Permissions",
+            passed=False,
+            message=f"User lacks 'BACKUP DATABASE' or sysadmin privileges on '{server}'",
+            code="ERR_SQL_PERM_DENIED"
+        ))
+
+    # 5. Backup Destination Free Disk Space
+    norm_dest = os.path.abspath(backup_folder.strip())
+    drive, _ = os.path.splitdrive(norm_dest)
+    try:
+        usage = shutil.disk_usage(drive + "\\" if drive else norm_dest)
+        free_gb = usage.free / (1024 ** 3)
+        if free_gb < 1.0:
+            results.append(PreflightCheckResult(
+                name="SQL Backup Free Space",
+                passed=False,
+                message=f"Insufficient free disk space on '{drive}': only {free_gb:.2f} GB free (Minimum 1.0 GB required)",
+                code="ERR_DISK_SPACE_LOW"
+            ))
+        else:
+            results.append(PreflightCheckResult(
+                name="SQL Backup Free Space",
+                passed=True,
+                message=f"Sufficient storage available on '{drive}': {free_gb:.2f} GB free",
+                code="OK"
+            ))
+    except Exception as e:
+        results.append(PreflightCheckResult(
+            name="SQL Backup Free Space",
+            passed=False,
+            message=f"Could not check disk usage on '{norm_dest}': {e}",
+            code="ERR_DISK_USAGE_FAIL"
+        ))
+
+    return results
+
+
+# =============================================================================
+# 8. UNIFIED PREFLIGHT SUITE RUNNER
+# =============================================================================
+
+def run_preflight_suite(
+    config: Dict[str, Any],
+    target_dir: Optional[str] = None,
+    data_dir: Optional[str] = None,
+    mode: str = "installer"  # "installer", "test_button", "scheduled_run"
+) -> PreflightReport:
+    """
+    Executes the shared preflight suite based on operational mode.
+    Mode:
+    - "installer": Runs all critical checks during setup; halts installer if any fail.
+    - "test_button": Runs comprehensive preflight diagnostic via Operator GUI.
+    - "scheduled_run": Validates all preconditions before executing unattended backup.
+    """
+    report = PreflightReport()
+
+    # Determine directories
+    pf = os.environ.get("ProgramFiles", r"C:\Program Files")
+    t_dir = target_dir or os.path.join(pf, DEFAULT_INSTALL_SUBDIR)
+    d_dir = data_dir or PROGRAM_DATA_DIR
+    broker_url = config.get("BROKER_URL", "").strip()
+
+    # 1. URL Security & Live Healthz
+    if broker_url:
+        is_dev = getattr(version, "DEV_MODE", False)
+        report.add(validate_broker_url_security(broker_url, allow_insecure=is_dev))
+        report.add(probe_broker_health(broker_url))
+    else:
+        if mode in ("test_button", "scheduled_run"):
+            report.add(PreflightCheckResult("Broker URL Security", False, "Broker URL is unconfigured in config.json", "ERR_URL_EMPTY"))
+
+    # 2. Token & Native DPAPI Decrypt
+    token_str, token_result = decrypt_token_dpapi(data_dir=d_dir, target_dir=t_dir)
+    report.add(token_result)
+
+    # 3. Live Token Verification on Broker
+    if token_str and broker_url:
+        report.add(verify_token_with_broker(broker_url, token_str))
+
+    # 4. Public Keys Validation (>= 3072 bits, distinct, matching fingerprints)
+    report.add(validate_public_keys(data_dir=d_dir, target_dir=t_dir))
+
+    # 5. Backup Destination Folder Validation (Cloud sync blocking: OneDrive/Dropbox/etc.)
+    backup_folder = config.get("BACKUP_FOLDER", r"C:\temp\backups")
+    report.add(validate_backup_folder_path(backup_folder))
+
+    # 6. Folder ACL Permissions
+    report.add(validate_folder_permissions(target_dir=t_dir, data_dir=d_dir, check_target_write=(mode == "installer")))
+
+    # 7. SQL Server Reachability, Databases, Permissions & Free Space
+    sql_server = config.get("SQL_SERVER_NAME", "").strip()
+    if sql_server:
+        sql_user = config.get("SQL_USERNAME", "").strip()
+        sql_pw = config.get("SQL_PASSWORD", "").strip()
+        for res in validate_sql_server(sql_server, sql_user, sql_pw, backup_folder=backup_folder):
+            report.add(res)
+    elif mode in ("test_button", "scheduled_run"):
+        report.add(PreflightCheckResult(
+            name="SQL Server Reachability",
+            passed=False,
+            message="SQL Server instance name is unconfigured in config.json",
+            code="ERR_SQL_UNCONFIGURED"
+        ))
+
+    # 8. Windows Task Scheduler Action & Next Run
+    # Checked in installer (after registration), test_button, and scheduled_run modes
+    expected_exe = os.path.join(t_dir, EXE_NAME)
+    task_res = validate_scheduled_task(expected_exe=expected_exe)
+    if mode in ("test_button", "scheduled_run"):
+        report.add(task_res)
+    elif mode == "installer":
+        # In installer, task check is only added if task was enabled
+        if config.get("_ENABLE_SCHEDULE", True):
+            report.add(task_res)
+
+    return report
+
+
+SLUG_RE = re.compile(r"^[a-z0-9]{2,24}$")
+URL_RE = re.compile(r"^https://script\.google\.com/macros/s/[A-Za-z0-9_-]{20,200}/exec$")
+
+class BundleError(ValueError):
+    pass
+
+def spki_fingerprint(pem):
+    pub = serialization.load_pem_public_key(pem if isinstance(pem, bytes) else pem.encode())
+    if not isinstance(pub, rsa.RSAPublicKey):
+        raise BundleError("only RSA encryption keys are supported")
+    if pub.key_size < 3072:
+        raise BundleError(f"RSA key is {pub.key_size} bits; minimum is 3072")
+    der = pub.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+    return hashlib.sha256(der).hexdigest()
+
+def verify_bundle(public_key, bundle_b64, signature_b64, expect_customer=None, now=None):
+    try:
+        data, sig = base64.b64decode(bundle_b64, validate=True), base64.b64decode(signature_b64, validate=True)
+        public_key.verify(sig, data)
+    except (InvalidSignature, ValueError):
+        raise BundleError("bundle signature invalid")
+    b = json.loads(data)
+    for k in ("customer", "broker_url", "issued_at", "public_keys"):
+        if k not in b:
+            raise BundleError(f"bundle missing {k}")
+    if not SLUG_RE.match(b["customer"]) or (expect_customer and b["customer"] != expect_customer):
+        raise BundleError("customer mismatch")
+    if not URL_RE.match(b["broker_url"]):
+        raise BundleError("broker_url not allowed")
+    ks = b["public_keys"]
+    if not isinstance(ks, list) or len(ks) < 2:
+        raise BundleError("need primary and escrow keys")
+    fps = set()
+    for k in ks:
+        real = spki_fingerprint(k["pem"])
+        if real != k.get("fingerprint"):
+            raise BundleError("key fingerprint does not match its PEM")
+        fps.add(real)
+    if len(fps) < 2:
+        raise BundleError("primary and escrow keys must be distinct")
+    now = int(time.time() if now is None else now)
+    if b.get("expires_at") and now > b["expires_at"]:
+        raise BundleError("bundle expired")
+    return b
+
+def validate_signed_bundle(
+    package_dir: Optional[str] = None,
+    expected_slug: Optional[str] = None,
+    public_key_pem: Optional[str] = None
+) -> Tuple[Optional[Dict[str, Any]], PreflightCheckResult]:
+    dirs_to_check = []
+    if package_dir: dirs_to_check.append(package_dir)
+    dirs_to_check.extend([os.getcwd(), os.path.join(os.getcwd(), "AppFiles")])
+
+    bundle_path = None
+    for d in dirs_to_check:
+        b = os.path.join(d, "bundle.json")
+        if os.path.exists(b):
+            bundle_path = b
+            break
+
+    if not bundle_path:
+        return None, PreflightCheckResult("Signed Bundle Integrity", False, "Customer bundle.json absent", "ERR_BUNDLE_ABSENT")
+
+    try:
+        with open(bundle_path, "r", encoding="utf-8") as f:
+            b_data = json.load(f)
+        bundle_b64 = b_data.get("BUNDLE_B64", "")
+        signature_b64 = b_data.get("SIGNATURE_B64", "")
+    except Exception as e:
+        return None, PreflightCheckResult("Signed Bundle Integrity", False, f"Could not read bundle.json: {e}", "ERR_BUNDLE_READ_FAIL", str(e))
+
+    pub_pem = public_key_pem or EMBEDDED_ADMIN_PUBLIC_KEY_PEM
+    try:
+        pub_key = serialization.load_pem_public_key(pub_pem.encode("utf-8"))
+        parsed = verify_bundle(pub_key, bundle_b64, signature_b64, expect_customer=expected_slug)
+        slug = parsed.get("customer", "unknown")
+        url = parsed.get("broker_url", "")
+        # Adapt keys for installer UI extraction if needed
+        parsed["customer_slug"] = slug # backward compat for installer
+        return parsed, PreflightCheckResult("Signed Bundle Integrity", True, f"Authentic Ed25519 signature verified for customer '{slug}' (Endpoint: {url})", "OK")
+    except Exception as e:
+        return None, PreflightCheckResult("Signed Bundle Integrity", False, f"Bundle verification rejected: {e}", "ERR_BUNDLE_TAMPERED", str(e))

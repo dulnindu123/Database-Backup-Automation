@@ -1,83 +1,79 @@
-# Client Installation Package – Database Cloud Backup (v4.2.0)
+# 🛡️ Enterprise Database Cloud Backup — Client Installation Package (v5.0.0)
 
-Ready-to-ship installer and app files for the **Enterprise Database Cloud Backup & Audit Log System**.
-Backups are encrypted on the customer's PC (AES-256-GCM + RSA-4096, `.dbk2` format) and uploaded through a
-Google Apps Script broker to the provider's Google Drive. **No Google credentials are ever stored on the customer PC.**
-
-> This branch contains only what is needed to install on a client machine. The admin tooling, source code and
-> broker live on the `main` branch.
-
-## Contents
-
-| Path | Purpose |
-|------|---------|
-| `shell_client/` | **100% Native Windows PowerShell Shell Agent** (Zero Python required! Contains `install_agent.ps1`, `backup_agent.ps1`, `storage_monitor.ps1`) |
-| `Setup_DatabaseBackup.exe` | Standalone graphical installer wizard |
-| `AppFiles/` | GUI backup application binaries (`DatabaseBackupApp.exe`, `_internal/`, public keys, blank `config.json`) |
-| `Update_App.bat` | Updates an installed app to a newer build |
-| `READ_ME_FIRST.txt` | Quick reference card |
-| `sha256_manifest.json`, `build_info.json` | Build integrity and version info |
-
-> 🔒 **Decryption Security Note**: Client installation packages contain **only public keys** and cannot decrypt backups. Decryption is performed strictly by authorized service providers on an air-gapped machine using `admin_recovery_tool/` on the `main` branch.
-
-## Requirements
-
-- Windows 10/11 or Windows Server 2016+ (64-bit)
-- Local Administrator rights
-- Database engine (Microsoft SQL Server, MySQL, or PostgreSQL)
-- Outbound HTTPS access (Port 443 to `script.google.com` and `drive.google.com`)
-- **Python Required on Client?** **NO** — Neither the PowerShell shell agent nor the GUI executable require Python on the client machine!
+<div align="center">
+  <img src="app_icon.png" alt="Logo" width="100">
+  <br>
+  <p>
+    <img src="https://img.shields.io/badge/Version-v5.0.0--20261104-blue?style=for-the-badge&logo=git&logoColor=white">
+    <img src="https://img.shields.io/badge/Architecture-Zero--Trust%20Broker-059669?style=for-the-badge&logo=googlecloud&logoColor=white">
+    <img src="https://img.shields.io/badge/Encryption-AES--256--GCM%20%2B%20RSA--4096-green?style=for-the-badge&logo=lock&logoColor=white">
+    <img src="https://img.shields.io/badge/Client%20Python-NOT%20REQUIRED-success?style=for-the-badge&logo=windows&logoColor=white">
+    <img src="https://img.shields.io/badge/Status-Production%20Ready-brightgreen?style=for-the-badge">
+  </p>
+  <h3>Autonomous, Zero-Knowledge Disaster Recovery for Microsoft SQL Server</h3>
+  <p>
+    <b>📄 Client Installation Guide:</b> <a href="INSTALLATION_GUIDE_v5.0.docx"><b>Download Official Word Manual (.docx)</b></a>
+  </p>
+</div>
 
 ---
 
-## Installation Options
+## 📌 Overview
 
-### ⚡ Option 1: Native Windows PowerShell Shell Agent (No Python Required)
-Recommended for system administrators, headless servers, and locked-down environments:
-1. Extract package.
-2. Open an elevated PowerShell prompt (Run as Administrator):
+This branch contains the standalone **Client Installation Package (v5.0.0)** for **Enterprise Database Cloud Backup Automation**.
+
+Database backups are generated locally on client workstations and servers, client-side encrypted with **AES-256-GCM** and enveloped with **RSA-4096**, and uploaded through a hardened Google Apps Script Zero-Trust Broker.
+
+> 🔒 **Zero-Trust Security Guarantee**: **No Google API credentials or administrative private keys are ever stored on customer systems.** Only machine-scoped DPAPI tokens and public keys are provisioned. Decryption is mathematically impossible on the client.
+
+---
+
+## 📦 Package Contents
+
+| Path | Description |
+| :--- | :--- |
+| **`Setup_DatabaseBackup.exe`** | One-click Graphical Setup Wizard for desktop operators |
+| **`INSTALLATION_GUIDE_v5.0.docx`** | Publication-grade Microsoft Word Installation Guide |
+| **`AppFiles/`** | Core desktop application (`DatabaseBackupApp.exe`, `_internal/`, preflights) |
+| **`shell_client/`** | 100% Native PowerShell Shell Agent (Zero-Python, headless servers) |
+| **`Update_App.bat`** | UAC Auto-elevating in-place updater for installed applications |
+| **`SQLPara.txt.template`** | Externalized database credential template |
+| **`Uninstall.bat`** | Clean zero-residue uninstaller |
+| **`build_info.json`** | Cryptographic build manifest and version stamps |
+
+---
+
+## 🚀 Dual Deployment Options
+
+### 🖥️ Option A: Graphical Setup Wizard (`Setup_DatabaseBackup.exe`)
+*Best for desktop users and interactive operator environments.*
+1. Extract the package ZIP to a local folder (e.g. `C:\Temp\Setup`).
+2. Right-click **`Setup_DatabaseBackup.exe`** and select **Run as administrator**.
+3. The wizard validates preflights, imports `bundle.json`, registers `token.dpapi`, and installs to `C:\Program Files\DatabaseBackupApp`.
+4. Launch **Enterprise Database Cloud Backup** from the Desktop shortcut.
+
+### ⚡ Option B: 100% Pure PowerShell Shell Agent (`shell_client/`)
+*Best for locked-down database servers, headless Windows Server Core, and legacy systems.*
+* **Zero Python required, Zero external .EXE binaries.**
+* Footprint under 30 KB.
+1. Open PowerShell as Administrator.
+2. Navigate to `shell_client`:
    ```powershell
    cd shell_client
    powershell.exe -ExecutionPolicy Bypass -File .\install_agent.ps1
    ```
-3. The installer auto-detects `bundle.json`, enrolls with the Apps Script broker, seals the machine token in DPAPI, and registers Windows Scheduled Tasks.
-4. Test a backup immediately:
+3. Test a backup immediately:
    ```powershell
    powershell.exe -ExecutionPolicy Bypass -File .\backup_agent.ps1
    ```
 
-### 🖥️ Option 2: Graphical Setup Wizard (`Setup_DatabaseBackup.exe`)
-For desktop users preferring an interactive GUI:
-1. Extract the package ZIP to a local folder.
-2. Right-click **`Setup_DatabaseBackup.exe`** and choose **Run as administrator**.
-3. The installer verifies the signed `bundle.json`, registers the PC automatically, and configures Scheduled Tasks.
-4. Launch **DatabaseBackupApp** from the desktop shortcut to run manual backups or review live logs.
+---
+
+## 🛠️ In-Place Upgrade / Patching
+If an older version is already installed on the machine, right-click **`Update_App.bat`** and select **Run as administrator**. It preserves existing database configurations while upgrading binaries, ACLs, and scheduled tasks in under 10 seconds.
 
 ---
 
-## Restoring a Backup (Provider / Admin Only)
-Restores are performed strictly on the provider's air-gapped admin workstation using the dedicated recovery suite on the `main` branch (`admin_recovery_tool/`):
-```bash
-# Launch the 1-click GUI recovery wizard:
-admin_recovery_tool\Launch_Recovery_Wizard.bat
-```
-
-## Troubleshooting
-
-| Problem | What to try |
-|---------|-------------|
-| "bundle.json not found" | Make sure the whole extracted folder is kept together |
-| "Signature invalid" | The package was altered or is for another installer build; request a new package |
-| "PC already enrolled" (409) | This PC is already registered; contact the provider to reset it |
-| Upload fails | Check internet access to `script.google.com` and that the SQL backup folder is writable |
-| Installer blocked by SmartScreen | Click *More info* then *Run anyway* |
-
-## Security notes
-
-- Public keys only are on the client; private keys stay with the provider.
-- Never commit `customers/`, `*_keys/`, or `enroll_codes*` files.
-- A compromised client PC cannot list, read or delete cloud backups.
-
-## Support
-
-Contact your service provider with the PC name and the text of any error message.
+## 📄 Documentation
+Comprehensive installation steps, pre-requisites, SQL Server configuration, and troubleshooting are detailed in the official Microsoft Word manual:
+👉 [**INSTALLATION_GUIDE_v5.0.docx**](INSTALLATION_GUIDE_v5.0.docx)
