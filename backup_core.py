@@ -679,10 +679,17 @@ def dispatch_security_alert_email(config, alert_type, db_name, file_name, machin
     from email.mime.multipart import MIMEMultipart
 
     recipient = config.get("SECURITY_ALERT_EMAIL_RECIPIENT") or config.get("STORAGE_ALERT_EMAIL_RECIPIENT", "")
+    if recipient:
+        recipient = recipient.strip().replace(".com.com", ".com")
     smtp_server = config.get("STORAGE_ALERT_SMTP_SERVER", "")
-    smtp_port = config.get("STORAGE_ALERT_SMTP_PORT", 587)
-    sender_email = config.get("STORAGE_ALERT_SENDER_EMAIL", "")
-    sender_password = config.get("STORAGE_ALERT_SENDER_PASSWORD", "") or (load_smtp_password() if "load_smtp_password" in globals() else "")
+    if smtp_server.strip().lower() == "smtp.google.com":
+        smtp_server = "smtp.gmail.com"
+    try:
+        smtp_port = int(config.get("STORAGE_ALERT_SMTP_PORT", 587))
+    except (ValueError, TypeError):
+        smtp_port = 587
+    sender_email = config.get("STORAGE_ALERT_SENDER_EMAIL", "").strip()
+    sender_password = config.get("STORAGE_ALERT_SENDER_PASSWORD", "").strip() or (load_smtp_password() if "load_smtp_password" in globals() else "")
 
     if not recipient or not smtp_server or not sender_email or not sender_password:
         return False, "SMTP configuration incomplete for security alert dispatch"

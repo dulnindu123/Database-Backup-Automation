@@ -2272,6 +2272,7 @@ class BackupAutomationApp(ctk.CTk):
                 self.chk_dash_encrypt.select()
                 self._sync_encryption_ui(True)
                 return
+            self._dispatch_encryption_disabled_alert(source="Dashboard")
         self._sync_encryption_ui(val)
 
     def _on_sched_encrypt_toggled(self):
@@ -2299,7 +2300,67 @@ class BackupAutomationApp(ctk.CTk):
                 self.chk_sched_encryption.select()
                 self._sync_encryption_ui(True)
                 return
+            self._dispatch_encryption_disabled_alert(source="Auto Schedule")
         self._sync_encryption_ui(val)
+
+    def _dispatch_encryption_disabled_alert(self, source="Dashboard"):
+        """Dispatches high-priority security email and telemetry alert when Zero-Trust encryption is disabled."""
+        import socket
+        try:
+            from backup_core import dispatch_security_alert_email
+            from broker_client import load_token, report_security_alert
+        except ImportError:
+            return
+
+        target_db = self.combo_target_db.get().strip() if hasattr(self, "combo_target_db") else ""
+        if not target_db:
+            target_db = ", ".join(self.config_data.get("TARGET_DATABASES", [])) or "Target Databases"
+
+        machine_id = socket.gethostname()
+        details = f"Operator confirmed unencrypted backup mode from {source}. Zero-Trust DBK2 cryptographic sealing is DISABLED."
+
+        self.append_log(f"SECURITY POLICY ALERT: Zero-Trust DBK2 encryption was DISABLED from {source}.", "warning")
+        self.append_log("Dispatching automated security alert to IT security administrator via email & cloud telemetry...", "info")
+
+        def _async_alert():
+            try:
+                # 1. Telemetry alert to broker
+                b_url = self.config_data.get("BROKER_URL") or self.config_data.get("TELEMETRY_BROKER_URL")
+                prog_data = os.environ.get("ALLUSERSPROFILE", r"C:\ProgramData")
+                t_path = os.path.join(prog_data, "DatabaseBackupApp", "token.dpapi")
+                if not os.path.exists(t_path):
+                    t_path = os.path.join(BASE_DIR, "token.dpapi")
+                tok = load_token(t_path)
+                if b_url and tok:
+                    report_security_alert(
+                        broker_url=b_url,
+                        token=tok,
+                        alert_type="POLICY_WARNING: ENCRYPTION_DISABLED_BY_OPERATOR",
+                        db_name=target_db,
+                        file_name=f"{source} Toggle",
+                        details=details
+                    )
+            except Exception as b_err:
+                self.after(0, lambda: self.append_log(f"Security telemetry alert warning: {b_err}", "warning"))
+
+            try:
+                # 2. Direct SMTP alert email
+                ok, msg = dispatch_security_alert_email(
+                    config=self.config_data,
+                    alert_type=f"ZERO_TRUST_ENCRYPTION_DISABLED ({source})",
+                    db_name=target_db,
+                    file_name="Operator Override (.zip mode)",
+                    machine_id=machine_id,
+                    details=details
+                )
+                if ok:
+                    self.after(0, lambda: self.append_log(f"✓ Security alert email dispatched: {msg}", "info"))
+                else:
+                    self.after(0, lambda: self.append_log(f"Security email dispatch warning: {msg}", "warning"))
+            except Exception as e_err:
+                self.after(0, lambda: self.append_log(f"Security email alert failed: {e_err}", "warning"))
+
+        threading.Thread(target=_async_alert, daemon=True).start()
 
     def _stop_backup(self):
         """Emergency stop handler invoked from Header or Dashboard."""
