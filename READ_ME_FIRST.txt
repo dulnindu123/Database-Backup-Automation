@@ -75,6 +75,6 @@ be stored in config.json:
 
 --------------------------------------------------------------------------------
 DOCUMENTATION:
-For detailed technical documentation, see: INSTALLATION_GUIDE_v5.0.md
+For detailed technical documentation, open: INSTALLATION_GUIDE_v5.0.docx
 ================================================================================
 
