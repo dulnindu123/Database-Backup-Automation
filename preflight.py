@@ -50,8 +50,15 @@ from version import (
     DEFAULT_INSTALL_SUBDIR,
     PROGRAM_DATA_DIR,
     DEFAULT_TASK_NAME,
-    EMBEDDED_ADMIN_PUBLIC_KEY_PEM,
 )
+try:
+    from version import EMBEDDED_ADMIN_PUBLIC_KEY_PEM
+except (ImportError, AttributeError):
+    EMBEDDED_ADMIN_PUBLIC_KEY_PEM = getattr(version, "EMBEDDED_ADMIN_PUBLIC_KEY_PEM", (
+        "-----BEGIN PUBLIC KEY-----\n"
+        "MCowBQYDK2VwAyEAUwmpkX+0AVBJiRNUfd7tm65krqq30q7ngVYVgFzmGYk=\n"
+        "-----END PUBLIC KEY-----"
+    ))
 
 # Known Cloud Sync Directory Markers & Env Vars
 CLOUD_SYNC_ENV_VARS = [
