@@ -2643,6 +2643,16 @@ class BackupAutomationApp(ctk.CTk):
         except ValueError:
             smtp_port = 587
 
+        smtp_srv = self.sh_smtp.get().strip()
+        if smtp_srv.lower() in ("smtp.google.com", "google.com", "gmail.com"):
+            smtp_srv = "smtp.gmail.com"
+            self.sh_smtp.delete(0, "end")
+            self.sh_smtp.insert(0, "smtp.gmail.com")
+        elif not smtp_srv and "@gmail.com" in self.sh_sender.get().strip().lower():
+            smtp_srv = "smtp.gmail.com"
+            self.sh_smtp.delete(0, "end")
+            self.sh_smtp.insert(0, "smtp.gmail.com")
+
         self.config_data["STORAGE_MONITOR_ENABLED"] = True
         self.config_data["STORAGE_C_DRIVE_ALERT_GB"] = max(1, min(c_gb, 500))
         self.config_data["STORAGE_OTHER_DRIVES_ALERT_PERCENT"] = max(50, min(o_pct, 99))
@@ -2650,7 +2660,7 @@ class BackupAutomationApp(ctk.CTk):
         self.config_data["STORAGE_ALERT_EMAIL_RECIPIENT"] = self.sh_recipient.get().strip()
         self.config_data["STORAGE_ALERT_SENDER_EMAIL"] = self.sh_sender.get().strip()
         self.config_data["STORAGE_ALERT_SENDER_PASSWORD"] = self.sh_password.get().strip()
-        self.config_data["STORAGE_ALERT_SMTP_SERVER"] = self.sh_smtp.get().strip()
+        self.config_data["STORAGE_ALERT_SMTP_SERVER"] = smtp_srv
         self.config_data["STORAGE_ALERT_SMTP_PORT"] = smtp_port
         self.config_data["STORAGE_SCAN_FREQUENCY"] = self.sh_freq_var.get()
 

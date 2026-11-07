@@ -2913,11 +2913,19 @@ def send_storage_alert_email(critical_drives, config, log_cb=None):
     if not critical_drives:
         return False
 
-    smtp_server = config.get("STORAGE_ALERT_SMTP_SERVER", "")
+    smtp_server = config.get("STORAGE_ALERT_SMTP_SERVER", "").strip()
     smtp_port = config.get("STORAGE_ALERT_SMTP_PORT", 587)
-    sender_email = config.get("STORAGE_ALERT_SENDER_EMAIL", "")
+    sender_email = config.get("STORAGE_ALERT_SENDER_EMAIL", "").strip()
     sender_password = config.get("STORAGE_ALERT_SENDER_PASSWORD", "") or load_smtp_password()
-    recipient = config.get("STORAGE_ALERT_EMAIL_RECIPIENT", "")
+    recipient = config.get("STORAGE_ALERT_EMAIL_RECIPIENT", "").strip()
+
+    # Intelligent auto-correction for common host typos
+    if smtp_server.lower() in ("smtp.google.com", "google.com", "gmail.com"):
+        smtp_server = "smtp.gmail.com"
+        config["STORAGE_ALERT_SMTP_SERVER"] = "smtp.gmail.com"
+    elif not smtp_server and "@gmail.com" in sender_email.lower():
+        smtp_server = "smtp.gmail.com"
+        config["STORAGE_ALERT_SMTP_SERVER"] = "smtp.gmail.com"
 
     if not sender_email or not sender_password:
         emit_log("Storage alert email skipped: Sender email or password not configured.", "warning", log_cb)
@@ -3063,11 +3071,19 @@ def send_test_storage_email(config, log_cb=None):
     Sends a test email to verify SMTP connectivity and credentials.
     Uses the same High Importance headers as real alerts.
     """
-    smtp_server = config.get("STORAGE_ALERT_SMTP_SERVER", "")
+    smtp_server = config.get("STORAGE_ALERT_SMTP_SERVER", "").strip()
     smtp_port = config.get("STORAGE_ALERT_SMTP_PORT", 587)
-    sender_email = config.get("STORAGE_ALERT_SENDER_EMAIL", "")
-    sender_password = config.get("STORAGE_ALERT_SENDER_PASSWORD", "")
-    recipient = config.get("STORAGE_ALERT_EMAIL_RECIPIENT", "")
+    sender_email = config.get("STORAGE_ALERT_SENDER_EMAIL", "").strip()
+    sender_password = config.get("STORAGE_ALERT_SENDER_PASSWORD", "").strip()
+    recipient = config.get("STORAGE_ALERT_EMAIL_RECIPIENT", "").strip()
+
+    # Intelligent auto-correction for common host typos
+    if smtp_server.lower() in ("smtp.google.com", "google.com", "gmail.com"):
+        smtp_server = "smtp.gmail.com"
+        config["STORAGE_ALERT_SMTP_SERVER"] = "smtp.gmail.com"
+    elif not smtp_server and "@gmail.com" in sender_email.lower():
+        smtp_server = "smtp.gmail.com"
+        config["STORAGE_ALERT_SMTP_SERVER"] = "smtp.gmail.com"
 
     if not sender_email or not sender_password:
         emit_log("Test email failed: Sender email or password not configured.", "error", log_cb)
@@ -3094,14 +3110,36 @@ def send_test_storage_email(config, log_cb=None):
     msg.attach(MIMEText(body, "plain"))
 
     try:
-        with smtplib.SMTP(smtp_server, smtp_port, timeout=30) as server:
+        with smtplib.SMTP(smtp_server, smtp_port, timeout=25) as server:
             server.starttls()
             server.login(sender_email, sender_password)
             server.send_message(msg)
         emit_log(f"Test email sent successfully to {recipient}.", "info", log_cb)
-        return True, f"Test email sent to {recipient}."
+        return True, f"Test email sent successfully to {recipient}."
     except smtplib.SMTPAuthenticationError as e:
-        err = f"SMTP authentication failed: {e}"
+        if "@gmail.com" in sender_email.lower():
+            err = (
+                f"Gmail SMTP Authentication Failed: {e}\n\n"
+                "Google requires a dedicated 16-character 'App Password' for SMTP.\n"
+                "Your standard Google account password will be rejected.\n\n"
+                "To generate a 16-character App Password:\n"
+                "1. Go to: https://myaccount.google.com/apppasswords\n"
+                "2. Create an App Password for 'Mail'\n"
+                "3. Paste the 16-character code into 'Sender Password'."
+            )
+        else:
+            err = f"SMTP authentication failed: {e}\nPlease verify your sender email and password."
+        emit_log(err, "error", log_cb)
+        return False, err
+    except (socket.timeout, TimeoutError, OSError) as e:
+        if "10060" in str(e) or "timed out" in str(e).lower():
+            err = (
+                f"Connection Timed Out to {smtp_server}:{smtp_port} ([WinError 10060]).\n\n"
+                f"• If using Gmail, make sure SMTP Server is set to 'smtp.gmail.com' and Port is 587.\n"
+                f"• Check your firewall or network connection."
+            )
+        else:
+            err = f"Failed to connect to SMTP server ({smtp_server}:{smtp_port}): {e}"
         emit_log(err, "error", log_cb)
         return False, err
     except Exception as e:
