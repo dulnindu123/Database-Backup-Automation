@@ -54,6 +54,8 @@ from backup_core import (
     detect_sql_server_instances,
     decrypt_file,
     run_verify_restore_drill,
+    get_system_json_status,
+    export_system_diagnostics_bundle,
     extract_google_id,
     DEFAULT_SHEET_TABS,
     DATA_DIR,
@@ -709,6 +711,8 @@ def main():
     parser.add_argument("--config-set", nargs=2, metavar=("KEY", "VALUE"), help="Set configuration value (e.g. --config-set SQL_SERVER_NAME localhost)")
     parser.add_argument("--logs", action="store_true", help="Display recent log entries")
     parser.add_argument("-n", "--lines", type=int, default=50, help="Number of log lines to display")
+    parser.add_argument("--json-status", action="store_true", help="Machine-parseable JSON status for RMM tools (NinjaRMM, Datto, ConnectWise, PRTG)")
+    parser.add_argument("--export-diagnostics", action="store_true", help="Export sanitized diagnostics bundle ZIP for support")
 
     args = parser.parse_args()
 
@@ -761,6 +765,14 @@ def main():
         action_view_settings()
     elif args.logs:
         action_view_logs(lines=args.lines)
+    elif args.json_status:
+        stat = get_system_json_status()
+        print(json.dumps(stat, indent=2))
+        sys.exit(stat.get("exit_code", 0))
+    elif args.export_diagnostics:
+        bundle_path = export_system_diagnostics_bundle()
+        print(f"\n{Colors.GREEN}{Colors.BOLD}[SUCCESS] Sanitized diagnostics bundle exported:{Colors.RESET}")
+        print(f"Path: {bundle_path}\n")
     else:
         parser.print_help()
 

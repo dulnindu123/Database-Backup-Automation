@@ -2529,7 +2529,7 @@ class BackupAutomationApp(ctk.CTk):
 
         ctk.CTkButton(
             btn_frame,
-            text="📧  Test Email",
+            text="🛡️  Test Cloud Alert",
             font=ctk.CTkFont(size=12),
             fg_color="#374151",
             hover_color="#4b5563",
@@ -2628,32 +2628,43 @@ class BackupAutomationApp(ctk.CTk):
         self.sh_freq_var.pack(side="left", padx=(10, 0))
         self.sh_freq_var.set(self.config_data.get("STORAGE_SCAN_FREQUENCY", "Daily"))
 
-        # ── Email Settings Card ────────────────────────────────────────
+        # ── Sentinel Alerting Settings Card (Playbook A4: Zero Client Secrets) ──
         email_card = ctk.CTkFrame(scroll, corner_radius=8, fg_color=("#1e293b", "#111827"), border_width=1, border_color="#374151")
         email_card.pack(fill="x", padx=20, pady=(0, 15))
 
         ctk.CTkLabel(
             email_card,
-            text="EMAIL ALERT CONFIGURATION",
+            text="CLOUD BROKER SENTINEL ALERTING (ZERO CLIENT SECRETS)",
             font=ctk.CTkFont(size=11, weight="bold"),
             text_color="#60a5fa"
-        ).pack(anchor="w", padx=15, pady=(12, 10))
+        ).pack(anchor="w", padx=15, pady=(12, 6))
 
-        # Recipient
-        self._sh_email_row(email_card, "Recipient Email:", "sh_recipient",
-                          self.config_data.get("STORAGE_ALERT_EMAIL_RECIPIENT", ""))
-        # Sender
-        self._sh_email_row(email_card, "Sender Email:", "sh_sender",
-                          self.config_data.get("STORAGE_ALERT_SENDER_EMAIL", ""))
-        # Password
-        self._sh_email_row(email_card, "Sender Password:", "sh_password",
-                          self.config_data.get("STORAGE_ALERT_SENDER_PASSWORD", ""), show="●")
-        # SMTP Server
-        self._sh_email_row(email_card, "SMTP Server:", "sh_smtp",
-                          self.config_data.get("STORAGE_ALERT_SMTP_SERVER", ""))
-        # SMTP Port
-        self._sh_email_row(email_card, "SMTP Port:", "sh_smtp_port",
-                          str(self.config_data.get("STORAGE_ALERT_SMTP_PORT", 587)), width=80)
+        desc_lbl = ctk.CTkLabel(
+            email_card,
+            text="Alerts are relayed via outbound HTTPS (Port 443) directly through the Cloud Broker Sentinel.\nClient servers store ZERO email credentials, passwords, or SMTP tokens.",
+            font=ctk.CTkFont(size=11),
+            text_color="#9ca3af",
+            justify="left"
+        )
+        desc_lbl.pack(anchor="w", padx=15, pady=(0, 10))
+
+        # Recipient Email
+        self._sh_email_row(email_card, "Alert Recipient:", "sh_recipient",
+                          self.config_data.get("STORAGE_ALERT_EMAIL_RECIPIENT", "dulnindu@spillabs.com"))
+
+        # Relay Provider badge
+        relay_row = ctk.CTkFrame(email_card, fg_color="transparent")
+        relay_row.pack(fill="x", padx=15, pady=(0, 8))
+        ctk.CTkLabel(
+            relay_row, text="Relay Channel:",
+            font=ctk.CTkFont(size=12), text_color="#d1d5db",
+            width=130, anchor="w"
+        ).pack(side="left")
+        ctk.CTkLabel(
+            relay_row, text="🛡️ Google Cloud Broker Sentinel (Managed Relay · Port 443)",
+            font=ctk.CTkFont(size=11, weight="bold"), text_color="#34d399",
+            anchor="w"
+        ).pack(side="left", padx=(5, 0))
 
         # Spacer at bottom
         ctk.CTkFrame(email_card, fg_color="transparent", height=10).pack()
@@ -2690,7 +2701,7 @@ class BackupAutomationApp(ctk.CTk):
         setattr(self, attr_name, entry)
 
     def _save_storage_settings(self):
-        """Saves all Server Health tab settings to config.json."""
+        """Saves all Server Health tab settings to config.json (Playbook A4: Zero Client Secrets)."""
         try:
             c_gb = int(self.sh_c_drive_entry.get().strip())
         except ValueError:
@@ -2699,31 +2710,18 @@ class BackupAutomationApp(ctk.CTk):
             o_pct = int(self.sh_other_pct_entry.get().strip())
         except ValueError:
             o_pct = 90
-        try:
-            smtp_port = int(self.sh_smtp_port.get().strip())
-        except ValueError:
-            smtp_port = 587
-
-        smtp_srv = self.sh_smtp.get().strip()
-        if smtp_srv.lower() in ("smtp.google.com", "google.com", "gmail.com"):
-            smtp_srv = "smtp.gmail.com"
-            self.sh_smtp.delete(0, "end")
-            self.sh_smtp.insert(0, "smtp.gmail.com")
-        elif not smtp_srv and "@gmail.com" in self.sh_sender.get().strip().lower():
-            smtp_srv = "smtp.gmail.com"
-            self.sh_smtp.delete(0, "end")
-            self.sh_smtp.insert(0, "smtp.gmail.com")
 
         self.config_data["STORAGE_MONITOR_ENABLED"] = True
         self.config_data["STORAGE_C_DRIVE_ALERT_GB"] = max(1, min(c_gb, 500))
         self.config_data["STORAGE_OTHER_DRIVES_ALERT_PERCENT"] = max(50, min(o_pct, 99))
         self.config_data["STORAGE_INCLUDE_NETWORK_DRIVES"] = bool(self.sh_include_network.get())
-        self.config_data["STORAGE_ALERT_EMAIL_RECIPIENT"] = self.sh_recipient.get().strip()
-        self.config_data["STORAGE_ALERT_SENDER_EMAIL"] = self.sh_sender.get().strip()
-        self.config_data["STORAGE_ALERT_SENDER_PASSWORD"] = self.sh_password.get().strip()
-        self.config_data["STORAGE_ALERT_SMTP_SERVER"] = smtp_srv
-        self.config_data["STORAGE_ALERT_SMTP_PORT"] = smtp_port
+        recipient = self.sh_recipient.get().strip().replace(".com.com", ".com") if hasattr(self, "sh_recipient") else "dulnindu@spillabs.com"
+        self.config_data["STORAGE_ALERT_EMAIL_RECIPIENT"] = recipient
         self.config_data["STORAGE_SCAN_FREQUENCY"] = self.sh_freq_var.get()
+
+        for k in ["STORAGE_ALERT_SENDER_EMAIL", "STORAGE_ALERT_SENDER_PASSWORD", "STORAGE_ALERT_SMTP_SERVER"]:
+            if k in self.config_data:
+                self.config_data[k] = ""
 
         ok, msg = save_config(self.config_data)
         if ok:
@@ -2887,14 +2885,16 @@ class BackupAutomationApp(ctk.CTk):
             messagebox.showwarning("No Sheet ID", "Google Sheet ID is not configured in Settings.")
 
     def _test_storage_email(self):
-        """Sends a test email to verify SMTP configuration."""
-        # Save current settings first
+        """Dispatches a test alert via Cloud Broker Sentinel to verify connectivity without client SMTP credentials."""
         self._save_storage_settings()
+        self.append_log("Dispatching Sentinel Alert test via Cloud Broker (Zero Client Secrets)...")
         ok, msg = send_test_storage_email(self.config_data, log_cb=self.append_log)
         if ok:
-            messagebox.showinfo("Test Email", msg)
+            recipient = self.config_data.get("STORAGE_ALERT_EMAIL_RECIPIENT", "dulnindu@spillabs.com")
+            messagebox.showinfo("Cloud Sentinel Test", f"✅ Sentinel Alert Successfully Dispatched!\n\nTarget: {recipient}\nRelay: Cloud Broker Sentinel (Port 443)\n\nCheck your inbox for the test verification email.")
         else:
-            messagebox.showerror("Test Email Failed", msg)
+            messagebox.showerror("Sentinel Alert Test Failed", f"Failed to dispatch alert via cloud broker:\n\n{msg}")
+
 
     # =========================================================================
     # TAB 6: PERFORMANCE QUERY & DATABASE RE-INDEXING MAINTENANCE

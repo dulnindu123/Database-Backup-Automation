@@ -329,6 +329,25 @@ def main():
             print(f"[ERROR] Failed to import token: {e}", file=sys.stderr)
             sys.exit(1)
         
+    elif "--json-status" in sys.argv:
+        import json
+        from backup_core import get_system_json_status
+        stat = get_system_json_status()
+        print(json.dumps(stat, indent=2))
+        sys.exit(stat.get("exit_code", 0))
+
+    elif "--export-diagnostics" in sys.argv:
+        from backup_core import export_system_diagnostics_bundle
+        bundle_path = export_system_diagnostics_bundle()
+        print(f"[OK] Diagnostics bundle exported: {bundle_path}")
+        sys.exit(0)
+
+    elif "--verify-restore" in sys.argv:
+        from backup_core import run_verify_restore_drill
+        ok, res = run_verify_restore_drill()
+        print(f"[{'PASS' if ok else 'FAIL'}] {res}")
+        sys.exit(0 if ok else 1)
+
     # Route 6: Standard user desktop execution (default)
     else:
         try:
