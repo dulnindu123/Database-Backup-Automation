@@ -842,40 +842,15 @@ function handleRequestUpload(pcData, payload) {
 
     
 
-    // Destination C: Customer's dedicated folder in Google Drive
-    // Hardened for F-01 (Confused Deputy Prevention): Validates tenant folder ownership!
+    // Destination C: Customer's dedicated folder in Google Drive (Roadmap Task 1.1 / A2)
+    // The broker strictly resolves the folder from the authenticated tenant slug and ignores any client override.
     const customerDisplayName = getCustomerDisplayName(pcData.customerSlug);
     const canonicalFolderId = getOrCreateFolder(ROOT_FOLDER_ID, customerDisplayName);
-    let destFolderId = canonicalFolderId;
+    const destFolderId = canonicalFolderId;
 
-    if (payload.target_folder_id && typeof payload.target_folder_id === "string" && payload.target_folder_id.trim().length > 5) {
-      const requestedFolderId = payload.target_folder_id.trim();
-      if (requestedFolderId === canonicalFolderId) {
-        destFolderId = canonicalFolderId;
-      } else {
-        // Verify folder parentage or explicit allowlist to prevent cross-tenant writes
-        try {
-          const reqFolder = DriveApp.getFolderById(requestedFolderId);
-          let isChild = false;
-          let parents = reqFolder.getParents();
-          while (parents.hasNext()) {
-            if (parents.next().getId() === canonicalFolderId) {
-              isChild = true;
-              break;
-            }
-          }
-          if (isChild) {
-            destFolderId = requestedFolderId;
-          } else {
-            logAudit(pcData.pcId, "SECURITY_BLOCKED_FOLDER", "Rejected cross-tenant folder: " + requestedFolderId);
-            Logger.log(`[SECURITY] Blocked unverified target_folder_id ${requestedFolderId} for tenant ${pcData.customerSlug}`);
-            destFolderId = canonicalFolderId;
-          }
-        } catch (e) {
-          logAudit(pcData.pcId, "SECURITY_BLOCKED_FOLDER", "Inaccessible folder: " + requestedFolderId);
-          destFolderId = canonicalFolderId;
-        }
-      }
+    if (payload.target_folder_id && typeof payload.target_folder_id === "string" && payload.target_folder_id.trim() !== canonicalFolderId) {
+      logAudit(pcData.pcId, "SECURITY_FOLDER_OVERRIDE_IGNORED", "Client passed non-canonical folder " + payload.target_folder_id + "; enforced canonical: " + canonicalFolderId);
+      Logger.log(`[SECURITY] Ignored client-supplied target_folder_id ${payload.target_folder_id} for tenant ${pcData.customerSlug}. Writing strictly to canonical ${canonicalFolderId}`);
     }
 
     

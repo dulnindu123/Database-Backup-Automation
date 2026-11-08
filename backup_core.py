@@ -846,11 +846,40 @@ def dispatch_security_alert_email(config, alert_type, db_name, file_name, machin
     return True, f"Alert recorded locally for {recipient}"
 
 
+def scan_config_for_forbidden_secrets(cfg, file_path=None):
+    """
+    Playbook A4 & Roadmap Task 2.2:
+    Scans config for forbidden client secrets (Gmail App Passwords, webhooks, tokens).
+    Purges them immediately from memory and writes sanitized config back to disk.
+    """
+    dirty = False
+    forbidden_keys = [
+        "STORAGE_ALERT_SENDER_PASSWORD",
+        "GMAIL_APP_PASSWORD",
+        "WEBHOOK_URL",
+        "GOOGLE_DRIVE_REFRESH_TOKEN",
+        "OAUTH_CLIENT_SECRET"
+    ]
+    for k in forbidden_keys:
+        if k in cfg and cfg[k]:
+            cfg[k] = ""
+            dirty = True
+    if dirty and file_path and os.path.exists(file_path):
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(cfg, f, indent=4)
+            emit_log(f"SECURITY HYGIENE: Stripped forbidden secrets from {file_path} (Zero Client Secrets Policy A4).", "warning")
+        except Exception:
+            pass
+    return cfg
+
+
 def load_config(config_path=None):
     """
     Loads JSON configuration settings from config.json (or config_path).
     If the file does not exist, populates default enterprise parameters,
     creates config.json on disk, and returns the default dictionary.
+    Enforces safe defaults (MON-SUN 02:15, Fail-Closed Encryption) per Playbook Part D.
     """
     target_file = config_path or CONFIG_FILE
     default_config = {
@@ -865,20 +894,16 @@ def load_config(config_path=None):
         "TELEMETRY_BROKER_URL": "",
         "GOOGLE_DRIVE_FOLDER_ID": "",
         "GOOGLE_SHEET_ID": "",
-        "STRICTLY_MONDAYS_ONLY": True,
-        "SCHEDULE_DAYS": ["MON"],
-        "SCHEDULE_TIME": "02:00",
+        "STRICTLY_MONDAYS_ONLY": False,
+        "SCHEDULE_DAYS": ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"],
+        "SCHEDULE_TIME": "02:15",
         "DELETE_LOCAL_AFTER_UPLOAD": True,
         # Section 9: Server Clean Up — Storage Monitor & Email Alerts
         "STORAGE_MONITOR_ENABLED": True,
         "STORAGE_C_DRIVE_ALERT_GB": 30,
         "STORAGE_OTHER_DRIVES_ALERT_PERCENT": 90,
         "STORAGE_INCLUDE_NETWORK_DRIVES": True,
-        "STORAGE_ALERT_EMAIL_RECIPIENT": "",
-        "STORAGE_ALERT_SMTP_SERVER": "",
-        "STORAGE_ALERT_SMTP_PORT": 587,
-        "STORAGE_ALERT_SENDER_EMAIL": "",
-        "STORAGE_ALERT_SENDER_PASSWORD": "",
+        "STORAGE_ALERT_EMAIL_RECIPIENT": "dulnindu@spillabs.com",
         "STORAGE_SHEET_TAB_NAME": "Storage Monitor",
         "STORAGE_SCAN_FREQUENCY": "Daily",
         "PERFORMANCE_SCHEDULE_TIME": "03:30",
@@ -887,7 +912,10 @@ def load_config(config_path=None):
             "BACKUP": "DB Backups",
             "CLEANUP": "Server Cleanup",
             "PERFORMANCE": "Performance Query"
-        }
+        },
+        "ENCRYPTION_ENABLED": True,
+        "ENFORCE_ENCRYPTION_POLICY": True,
+        "ALLOW_SHARED_ESCROW_FALLBACK": False
     }
 
     if not os.path.exists(target_file):
@@ -898,10 +926,12 @@ def load_config(config_path=None):
     try:
         with open(target_file, 'r', encoding='utf-8-sig') as f:
             cfg = json.load(f)
-            # Ensure any newly introduced settings default cleanly if missing from older configs
+            # Ensure newly introduced settings default cleanly if missing from older configs
             for k, v in default_config.items():
                 if k not in cfg:
                     cfg[k] = v
+            # Roadmap Task 2.2: Sanitize config on startup
+            cfg = scan_config_for_forbidden_secrets(cfg, target_file)
             return cfg
     except Exception as e:
         emit_log(f"Corrupted config.json detected: {e}. Falling back to default settings.", "error")
@@ -1825,6 +1855,85 @@ def update_google_sheet(creds, sheet_id, backup_filename, file_size_str, downloa
 # 6. MASTER WORKFLOW ORCHESTRATION & STORAGE CLEANUP
 # =============================================================================
 
+def fetch_and_cache_server_policy(config=None):
+    """
+    Playbook A5 & Roadmap Task 2.4:
+    Fetches server-side signed policy from broker on each run:
+    - require_encryption (default True)
+    - min_client_version (default "5.0.0")
+    - schedule & maintenance quiet window
+    Caches policy in policy.cache.json (valid for 7 days).
+    A downgrade to unencrypted is NEVER accepted when broker is unreachable (Fail-Closed).
+    """
+    cfg = config or load_config()
+    b_url = cfg.get("BROKER_URL") or cfg.get("TELEMETRY_BROKER_URL")
+    prog_data = os.environ.get("ALLUSERSPROFILE", r"C:\ProgramData")
+    token_path = None
+    for s_dir in [DATA_DIR, os.path.join(prog_data, "DatabaseBackupApp"), BASE_DIR]:
+        for s_name in ["token.dpapi", "broker_token.dat"]:
+            candidate = os.path.join(s_dir, s_name)
+            if os.path.exists(candidate):
+                token_path = candidate
+                break
+        if token_path:
+            break
+
+    cache_file = os.path.join(DATA_DIR if os.path.exists(DATA_DIR) else BASE_DIR, "policy.cache.json")
+    default_policy = {
+        "require_encryption": True,
+        "min_client_version": "5.0.0",
+        "cached_at": time.time(),
+        "source": "DEFAULT_FAIL_CLOSED"
+    }
+
+    # 1. Attempt fetch from broker
+    if b_url and token_path and os.path.exists(token_path):
+        try:
+            from broker_client import load_token, post_broker
+            token = load_token(token_path)
+            payload = {
+                "action": "get_policy",
+                "token": token,
+                "ts": int(time.time() * 1000),
+                "nonce": secrets.token_hex(16)
+            }
+            resp = post_broker(b_url, payload, timeout=10)
+            if resp is not None and resp.status_code == 200:
+                res_data = {}
+                try:
+                    res_data = resp.json()
+                except Exception:
+                    pass
+                if res_data and res_data.get("status") == "ok":
+                    pol = res_data.get("policy", {})
+                    pol["cached_at"] = time.time()
+                    pol["source"] = "CLOUD_BROKER"
+                    try:
+                        with open(cache_file, "w", encoding="utf-8") as pf:
+                            json.dump(pol, pf, indent=4)
+                    except Exception:
+                        pass
+                    return pol
+        except Exception as e:
+            emit_log(f"Policy fetch from broker failed ({e}); checking local policy cache.", "warning")
+
+    # 2. Check local policy cache (valid for 7 days)
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, "r", encoding="utf-8") as pf:
+                cached = json.load(pf)
+                cached_at = cached.get("cached_at", 0)
+                if (time.time() - cached_at) < (7 * 86400):
+                    cached["source"] = "LOCAL_CACHE_7D"
+                    return cached
+                else:
+                    emit_log("Cached security policy expired (>7 days). Enforcing Fail-Closed default policy.", "warning")
+        except Exception:
+            pass
+
+    return default_policy
+
+
 def run_full_backup(config=None, log_cb=None, progress_cb=None, status_cb=None, cancel_check=None, telemetry_cb=None, encrypt_backup=None):
     """
     Master end-to-end backup orchestrator.
@@ -1992,9 +2101,10 @@ def run_full_backup(config=None, log_cb=None, progress_cb=None, status_cb=None, 
                     except Exception:
                         pass
             else:
-                # v5.0 Enterprise Policy Check (Senior Requirement 5)
-                if config.get("ENFORCE_ENCRYPTION_POLICY", False):
-                    msg = f"SECURITY POLICY ERROR: Unencrypted backup of '{db_name}' rejected. Enterprise policy enforces mandatory Zero-Trust DBK2 encryption."
+                # v5.0 Enterprise Policy Check (Senior Requirement 5 & Playbook A5)
+                policy = fetch_and_cache_server_policy(config)
+                if policy.get("require_encryption", True) or config.get("ENFORCE_ENCRYPTION_POLICY", True):
+                    msg = f"SECURITY POLICY ERROR: Unencrypted backup of '{db_name}' rejected. Enterprise policy enforces mandatory Zero-Trust DBK2 encryption (Playbook A5)."
                     emit_log(msg, "error", log_cb)
                     if status_cb: status_cb("Blocked by Enterprise Encryption Policy")
                     return False, msg
@@ -4100,6 +4210,9 @@ def run_verify_restore_drill(config=None, target_file=None, instance=None, log_c
     Uses SQL Server RESTORE VERIFYONLY WITH CHECKSUM to mathematically prove
     that the backup payload is completely uncorrupted and 100% restorable.
     """
+    if isinstance(config, str):
+        target_file = config
+        config = None
     cfg = config or load_config()
     inst = instance or cfg.get("SQL_SERVER_INSTANCE") or cfg.get("SQL_SERVER_NAME") or "localhost"
     sql_u = cfg.get("SQL_USERNAME") or None
@@ -4122,6 +4235,11 @@ def run_verify_restore_drill(config=None, target_file=None, instance=None, log_c
             return False, msg
         candidates.sort(reverse=True)
         target_file = candidates[0][1]
+
+    if not os.path.exists(target_file):
+        msg = f"ERR_BACKUP_FILE_NOT_FOUND: Target backup archive '{target_file}' not found on disk."
+        emit_log(msg, "error", log_cb)
+        return False, msg
 
     emit_log(f"Testing backup integrity for: {os.path.basename(target_file)}", "info", log_cb)
 

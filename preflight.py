@@ -305,10 +305,10 @@ def verify_token_with_broker(url: str, token: str, timeout: float = 8.0) -> Pref
 # 3. PUBLIC KEY VALIDATION (>= 3072 bits, distinct, matching fingerprints)
 # =============================================================================
 
-def validate_public_keys(data_dir: Optional[str] = None, target_dir: Optional[str] = None, min_bits: int = 3072) -> PreflightCheckResult:
+def validate_public_keys(data_dir: Optional[str] = None, target_dir: Optional[str] = None, min_bits: int = 3072, customer_slug: Optional[str] = None, allow_shared_fallback: Optional[bool] = None) -> PreflightCheckResult:
     """
-    Validates backup_public.pem and escrow_public.pem:
-    - Both files exist and are readable
+    Validates backup_public.pem and customer-specific escrow_public_{slug}.pem (Fail-Closed Policy A6):
+    - Both files exist and are readable (preflight checks the exact same file backup_core uses)
     - Both keys parse as valid RSA SubjectPublicKeyInfo
     - Both keys have key_size >= min_bits (default 3072)
     - Both keys are DISTINCT (different modulus)
@@ -322,6 +322,22 @@ def validate_public_keys(data_dir: Optional[str] = None, target_dir: Optional[st
     if target_dir and target_dir not in dirs:
         dirs.append(target_dir)
 
+    # Resolve customer slug and policy from config if not passed
+    if customer_slug is None or allow_shared_fallback is None:
+        try:
+            for d in dirs:
+                cfg_p = os.path.join(d, "config.json")
+                if os.path.exists(cfg_p):
+                    with open(cfg_p, "r", encoding="utf-8") as f:
+                        cfg_data = json.load(f)
+                        if customer_slug is None:
+                            customer_slug = cfg_data.get("CUSTOMER_SLUG", "").strip()
+                        if allow_shared_fallback is None:
+                            allow_shared_fallback = cfg_data.get("ALLOW_SHARED_ESCROW_FALLBACK", False)
+                    break
+        except Exception:
+            pass
+
     def find_key(filename):
         for d in dirs:
             p = os.path.join(d, filename)
@@ -330,7 +346,18 @@ def validate_public_keys(data_dir: Optional[str] = None, target_dir: Optional[st
         return None
 
     primary_path = find_key("backup_public.pem")
-    escrow_path = find_key("escrow_public.pem")
+    
+    # Check exact customer escrow key first (Fail-Closed Escrow Policy A6)
+    escrow_path = None
+    expected_escrow_name = "escrow_public.pem"
+    if customer_slug:
+        expected_escrow_name = f"escrow_public_{customer_slug}.pem"
+        escrow_path = find_key(expected_escrow_name)
+
+    # Fallback to generic escrow key ONLY if explicitly allowed by policy
+    if not escrow_path:
+        if allow_shared_fallback or not customer_slug:
+            escrow_path = find_key("escrow_public.pem")
 
     if not primary_path:
         return PreflightCheckResult(
@@ -344,7 +371,7 @@ def validate_public_keys(data_dir: Optional[str] = None, target_dir: Optional[st
         return PreflightCheckResult(
             name="Public Keys Validation",
             passed=False,
-            message="Escrow public key file absent ('escrow_public.pem' not found)",
+            message=f"Escrow public key file absent ('{expected_escrow_name}' not found - Fail-Closed Policy A6)",
             code="ERR_ESCROW_KEY_ABSENT"
         )
 
