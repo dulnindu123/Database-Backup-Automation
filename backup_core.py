@@ -703,64 +703,10 @@ def get_key_fingerprint(pem_path):
 
 def _send_smtp_email_fallback(recipient, subject, html_content, config=None):
     """
-    Resilient fallback email transport using direct SMTP (TLS/SSL).
-    Used when Cloud Broker Sentinel is unavailable or awaiting cloud redeployment.
+    Permanently disabled & eliminated per Zero Client Secrets mandate (Playbook A4).
+    No direct SMTP credentials or connections exist on client servers.
     """
-    import smtplib
-    from email.mime.text import MIMEText
-    from email.mime.multipart import MIMEMultipart
-
-    cfg = config or load_config()
-    sender_email = (cfg.get("STORAGE_ALERT_SENDER_EMAIL") or "").strip()
-    sender_password = (cfg.get("STORAGE_ALERT_SENDER_PASSWORD") or "").strip()
-    smtp_server = (cfg.get("STORAGE_ALERT_SMTP_SERVER") or "smtp.gmail.com").strip()
-    if smtp_server.lower() == "smtp.google.com":
-        smtp_server = "smtp.gmail.com"
-    try:
-        smtp_port = int(cfg.get("STORAGE_ALERT_SMTP_PORT", 587))
-    except (ValueError, TypeError):
-        smtp_port = 587
-
-    # If sender password is empty in local config, check ProgramData config
-    if not sender_password:
-        prog_cfg_path = os.path.join(os.environ.get("ALLUSERSPROFILE", r"C:\ProgramData"), "DatabaseBackupApp", "config.json")
-        if os.path.exists(prog_cfg_path):
-            try:
-                with open(prog_cfg_path, "r", encoding="utf-8") as pf:
-                    pcfg = json.load(pf)
-                    sender_email = sender_email or pcfg.get("STORAGE_ALERT_SENDER_EMAIL", "")
-                    sender_password = pcfg.get("STORAGE_ALERT_SENDER_PASSWORD", "")
-            except Exception:
-                pass
-
-    if not sender_email or not sender_password:
-        return False, "Direct SMTP fallback credentials not configured on host"
-
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = sender_email
-    msg["To"] = recipient
-    msg["X-Priority"] = "1"
-    msg["Priority"] = "Urgent"
-    msg.attach(MIMEText(html_content, "html"))
-
-    # Try STARTTLS on 587, then SSL on 465
-    for s_port, use_ssl in [(smtp_port, False), (465, True), (587, False)]:
-        try:
-            if use_ssl:
-                server = smtplib.SMTP_SSL(smtp_server, s_port, timeout=10)
-            else:
-                server = smtplib.SMTP(smtp_server, s_port, timeout=10)
-                server.starttls()
-            server.login(sender_email, sender_password)
-            server.sendmail(sender_email, [recipient], msg.as_string())
-            server.quit()
-            return True, f"Delivered via direct SMTP ({smtp_server}:{s_port}) to {recipient}"
-        except Exception:
-            continue
-
-    return False, "Direct SMTP connection timed out across all ports"
-
+    return False, "Direct SMTP fallback permanently eliminated per Zero Client Secrets mandate"
 
 def dispatch_security_alert_email(config, alert_type, db_name, file_name, machine_id, details=""):
     """
@@ -837,11 +783,6 @@ def dispatch_security_alert_email(config, alert_type, db_name, file_name, machin
     </body>
     </html>
     """
-    ok, smtp_msg = _send_smtp_email_fallback(recipient, subject, html, cfg)
-    if ok:
-        emit_log(f"Security Alert delivered to {recipient} via fallback SMTP.", "warning")
-        return True, f"Security alert delivered to {recipient} ({smtp_msg})"
-
     emit_log(f"Local Security Event Recorded: [{alert_type}] DB: {db_name} - {details}", "warning")
     return True, f"Alert recorded locally for {recipient}"
 
@@ -1860,7 +1801,7 @@ def fetch_and_cache_server_policy(config=None):
     Playbook A5 & Roadmap Task 2.4:
     Fetches server-side signed policy from broker on each run:
     - require_encryption (default True)
-    - min_client_version (default "5.0.0")
+    - min_client_version (default "5.0.1")
     - schedule & maintenance quiet window
     Caches policy in policy.cache.json (valid for 7 days).
     A downgrade to unencrypted is NEVER accepted when broker is unreachable (Fail-Closed).
@@ -1881,7 +1822,7 @@ def fetch_and_cache_server_policy(config=None):
     cache_file = os.path.join(DATA_DIR if os.path.exists(DATA_DIR) else BASE_DIR, "policy.cache.json")
     default_policy = {
         "require_encryption": True,
-        "min_client_version": "5.0.0",
+        "min_client_version": "5.0.1",
         "cached_at": time.time(),
         "source": "DEFAULT_FAIL_CLOSED"
     }
@@ -3207,10 +3148,8 @@ def send_storage_alert_email(critical_drives, config, log_cb=None):
     </body>
     </html>
     """
-    ok, smtp_msg = _send_smtp_email_fallback(recipient, subject, html, config)
-    if ok:
-        emit_log(f"Storage alert email delivered to {recipient} via fallback SMTP.", "info", log_cb)
-        return True
+    emit_log(f"Storage alert recorded locally for {recipient}: {drive_summary}", "warning", log_cb)
+    return True
 
     emit_log(f"Storage alert recorded locally for {recipient}: {drive_summary}", "warning", log_cb)
     return True
@@ -3265,32 +3204,7 @@ def send_test_storage_email(config, log_cb=None):
         except Exception as e:
             emit_log(f"Broker test alert attempt failed: {e}", "warning", log_cb)
 
-    # 2. Resilient Fallback to direct SMTP
-    subject = f"[SENTINEL VERIFICATION TEST] Storage & Security Alert Test from {server_name}"
-    timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    html = f"""
-    <html>
-    <body style="font-family: Arial, sans-serif; color: #1f2937; line-height: 1.6;">
-        <div style="background-color: #0284c7; color: white; padding: 16px; border-radius: 6px;">
-            <h2 style="margin: 0;">Enterprise Database Backup — Sentinel Alert Verification</h2>
-            <p style="margin: 4px 0 0 0; font-size: 14px;">Connectivity & Delivery Test Successful</p>
-        </div>
-        <div style="padding: 16px; background-color: #f0f9ff; border: 1px solid #bae6fd; margin-top: 12px; border-radius: 6px;">
-            <p><strong>Host Server:</strong> {server_name}</p>
-            <p><strong>Recipient Verified:</strong> {recipient}</p>
-            <p><strong>Timestamp:</strong> {timestamp_str}</p>
-            <p><strong>Status:</strong> Cloud & Local Alerting Pipeline is fully operational.</p>
-        </div>
-    </body>
-    </html>
-    """
-    ok, smtp_msg = _send_smtp_email_fallback(recipient, subject, html, config)
-    if ok:
-        msg = f"Test alert delivered successfully to {recipient} ({smtp_msg})"
-        emit_log(msg, "info", log_cb)
-        return True, msg
-
-    return False, f"Failed to deliver test alert: Broker awaiting upgrade and fallback SMTP failed ({smtp_msg})"
+    return False, "Failed to dispatch test alert: Cloud Broker Sentinel was unreachable (Direct SMTP fallback permanently eliminated)"
 
 
 def run_storage_monitor(config=None, log_cb=None, status_cb=None):
@@ -3514,7 +3428,7 @@ def run_performance_query(
     1. SQL Server Version & Database Size measurement
     2. Query 1: Index Fragmentation analysis
     3. Pre-maintenance safety backup
-    4. Query 2: DBCC CHECKDB, DBCC DBREINDEX (FillFactor 80), sp_updatestats
+    4. Query 2: DBCC CHECKDB (WITH PHYSICAL_ONLY), Tiered Index Maintenance (Reorganize/Rebuild >=1000 pages), sp_updatestats
     5. Post-maintenance verification
     6. Streams telemetry to Upload Broker -> Customer Sheet [Performance Query] tab
     """
@@ -3623,11 +3537,11 @@ SELECT 'SIZE_VAL:' + CAST(ISNULL((SELECT SUM(CAST(size AS BIGINT))*8/1024 FROM s
         emit_log("Safety backup skipped by switch.", "warning", log_cb)
         pre_backup_status = "Skipped by Flag"
 
-    # Step 4: DBCC CHECKDB
+    # Step 4: DBCC CHECKDB WITH PHYSICAL_ONLY
     if progress_cb: progress_cb(0.6)
-    if status_cb: status_cb("Running DBCC CHECKDB integrity validation...")
-    emit_log(f"Running DBCC CHECKDB(N'{target_db}') WITH NO_INFOMSGS...", "info", log_cb)
-    checkdb_sql = f"USE [{target_db}]; DBCC CHECKDB(N'{target_db}') WITH NO_INFOMSGS;"
+    if status_cb: status_cb("Running DBCC CHECKDB integrity validation (PHYSICAL_ONLY)...")
+    emit_log(f"Running DBCC CHECKDB(N'{target_db}') WITH NO_INFOMSGS, PHYSICAL_ONLY...", "info", log_cb)
+    checkdb_sql = f"USE [{target_db}]; DBCC CHECKDB(N'{target_db}') WITH NO_INFOMSGS, PHYSICAL_ONLY;"
     c_code, c_out = execute_sql_query(checkdb_sql, instance=instance, sql_user=sql_user, sql_password=sql_password, timeout=600)
     checkdb_status = "Clean (0 consistency errors)" if c_code == 0 else f"Errors: {c_out}"
     emit_log(f"CHECKDB Result: {checkdb_status}", "info" if c_code == 0 else "warning", log_cb)
@@ -4375,7 +4289,7 @@ def get_system_json_status(config=None):
         "status": status,
         "exit_code": exit_code,
         "server_name": server_name,
-        "version": "5.0.0",
+        "version": "5.0.1",
         "customer_slug": cfg.get("CUSTOMER_SLUG", "unassigned"),
         "hours_since_last_backup": round(hours_since_backup, 1),
         "scheduler_enabled": is_active,

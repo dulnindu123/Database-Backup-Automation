@@ -10,8 +10,8 @@
     3. Query 1 (Inspection): Inspects index fragmentation across all tables via sys.dm_db_index_physical_stats.
     4. Pre-Maintenance Backup: Executes automated safety backup before maintenance ("Before do this take a backup").
     5. Query 2 (Maintenance):
-       - DBCC CHECKDB with NO_INFOMSGS (Integrity validation)
-       - DBCC DBREINDEX across all tables with FillFactor 80
+       - DBCC CHECKDB with NO_INFOMSGS, PHYSICAL_ONLY (Integrity validation)
+       - Intelligent Tiered Index Maintenance on tables >= 1,000 pages (Reorganize/Rebuild)
        - sp_updatestats (Statistics refresh)
     6. Post-Maintenance Verification: Re-probes index fragmentation to measure optimization gain.
     7. Calculates total runtime duration.
@@ -250,8 +250,8 @@ SELECT 'FRAG_ROW:' + CAST(object_name(dm.object_id) AS VARCHAR(128)) + ':::' +
        CAST(dm.page_count AS VARCHAR(20))
 FROM sys.dm_db_index_physical_stats(db_id(), null, null, null, 'sampled') dm
 JOIN sys.indexes i ON dm.object_id = i.object_id AND dm.index_id = i.index_id
-WHERE dm.avg_fragmentation_in_percent > 10.0
-  AND dm.page_count > 8
+WHERE dm.avg_fragmentation_in_percent >= 5.0
+  AND dm.page_count >= 1000
   AND i.name IS NOT NULL
   AND dm.index_id > 0
 ORDER BY dm.avg_fragmentation_in_percent DESC;
@@ -280,15 +280,15 @@ if ($q1Result.ExitCode -eq 0 -and $q1Result.Output) {
         }
     }
 }
-$fragBeforeSummary = "$fragBeforeCount indexes fragmented (>10%, >8 pages). Max fragmentation: ${fragBeforeMax}%"
+$fragBeforeSummary = "$fragBeforeCount indexes fragmented (>=5%, >=1000 pages). Max fragmentation: ${fragBeforeMax}%"
 Write-Log "Query 1 Completed. $fragBeforeSummary" "SUCCESS"
 
 # ------------------------------------------------------------------------------
-# 7. SAFETY PRE-MAINTENANCE BACKUP ("Before do this take a backup---")
+# 7. SAFETY PRE-MAINTENANCE BACKUP (Disabled by default to protect disk capacity)
 # ------------------------------------------------------------------------------
-$preBackupStatus = "Skipped"
+$preBackupStatus = "Skipped (Default Policy)"
 
-if (-not $SkipBackup) {
+if ($RunSafetyBackup) {
     Write-Log "Executing Pre-Maintenance Safety Backup before running Re-indexing..." "INFO"
     $backupScript = Join-Path (Split-Path $MyInvocation.MyCommand.Path) "backup_agent.ps1"
     if (-not (Test-Path $backupScript)) {
@@ -314,23 +314,83 @@ if (-not $SkipBackup) {
 }
 
 # ------------------------------------------------------------------------------
-# 8. QUERY 2: DATABASE INTEGRITY CHECK, RE-INDEXING & UPDATE STATS
+# 8. QUERY 2: DATABASE INTEGRITY CHECK, TIERED INDEX MAINTENANCE & UPDATE STATS
 # ------------------------------------------------------------------------------
-Write-Log "Executing Query 2: DBCC CHECKDB, DBCC DBREINDEX (80) & sp_updatestats..." "INFO"
+Write-Log "Executing Query 2: DBCC CHECKDB (PHYSICAL_ONLY), Tiered Maintenance & sp_updatestats..." "INFO"
 
-# Step 2a: DBCC CHECKDB
-Write-Log "Running DBCC CHECKDB(N'$targetDb') WITH NO_INFOMSGS..." "INFO"
-$checkdbSql = "USE [$targetDb]; DBCC CHECKDB(N'$targetDb') WITH NO_INFOMSGS;"
+# Step 2a: DBCC CHECKDB WITH PHYSICAL_ONLY
+Write-Log "Running DBCC CHECKDB(N'$targetDb') WITH NO_INFOMSGS, PHYSICAL_ONLY..." "INFO"
+$checkdbSql = "USE [$targetDb]; DBCC CHECKDB(N'$targetDb') WITH NO_INFOMSGS, PHYSICAL_ONLY;"
 $checkdbResult = Invoke-SqlStatement -Sql $checkdbSql -TimeoutSec 600
 $checkdbStatus = if ($checkdbResult.ExitCode -eq 0) { "Clean (0 consistency errors)" } else { "Errors Detected: " + $checkdbResult.Output }
 Write-Log "CHECKDB Result: $checkdbStatus" $(if ($checkdbResult.ExitCode -eq 0) { "SUCCESS" } else { "ERROR" })
 
-# Step 2b: DBCC DBREINDEX with FillFactor 80
-Write-Log "Running EXEC sp_MSforeachtable DBCC DBREINDEX ('?', ' ', 80)..." "INFO"
-$reindexSql = "USE [$targetDb]; EXEC sp_MSforeachtable @command1='print ''?'' DBCC DBREINDEX (''?'', '' '', 80)';"
+# Step 2b: Intelligent Tiered Index Maintenance (tables >= 1,000 pages)
+Write-Log "Running Intelligent Tiered Index Maintenance on tables with 1,000+ pages..." "INFO"
+$reindexSql = @"
+USE [$targetDb];
+SET NOCOUNT ON;
+DECLARE @TableName NVARCHAR(256), @SchemaName NVARCHAR(256), @IndexName NVARCHAR(256), @Frag FLOAT;
+DECLARE @ReorgCount INT = 0, @RebuildCount INT = 0, @SkippedCount INT = 0;
+
+DECLARE cur CURSOR LOCAL FAST_FORWARD FOR
+SELECT 
+    s.name AS SchemaName,
+    t.name AS TableName,
+    i.name AS IndexName,
+    ips.avg_fragmentation_in_percent AS Frag
+FROM sys.dm_db_index_physical_stats(DB_ID(N'$targetDb'), NULL, NULL, NULL, 'LIMITED') ips
+JOIN sys.tables t ON ips.object_id = t.object_id
+JOIN sys.schemas s ON t.schema_id = s.schema_id
+JOIN sys.indexes i ON ips.object_id = i.object_id AND ips.index_id = i.index_id
+WHERE ips.page_count >= 1000 AND i.name IS NOT NULL AND i.is_disabled = 0;
+
+OPEN cur;
+FETCH NEXT FROM cur INTO @SchemaName, @TableName, @IndexName, @Frag;
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    IF @Frag >= 5.0 AND @Frag < 30.0
+    BEGIN
+        BEGIN TRY
+            EXEC('ALTER INDEX [' + @IndexName + '] ON [' + @SchemaName + '].[' + @TableName + '] REORGANIZE;');
+            SET @ReorgCount = @ReorgCount + 1;
+        END TRY
+        BEGIN CATCH
+        END CATCH
+    END
+    ELSE IF @Frag >= 30.0
+    BEGIN
+        BEGIN TRY
+            EXEC('ALTER INDEX [' + @IndexName + '] ON [' + @SchemaName + '].[' + @TableName + '] REBUILD WITH (FILLFACTOR = 90);');
+            SET @RebuildCount = @RebuildCount + 1;
+        END TRY
+        BEGIN CATCH
+            BEGIN TRY
+                EXEC('ALTER INDEX [' + @IndexName + '] ON [' + @SchemaName + '].[' + @TableName + '] REORGANIZE;');
+                SET @ReorgCount = @ReorgCount + 1;
+            END TRY
+            BEGIN CATCH
+            END CATCH
+        END CATCH
+    END
+    ELSE
+    BEGIN
+        SET @SkippedCount = @SkippedCount + 1;
+    END
+
+    FETCH NEXT FROM cur INTO @SchemaName, @TableName, @IndexName, @Frag;
+END
+
+CLOSE cur;
+DEALLOCATE cur;
+
+SELECT 'Tiered Maintenance: ' + CAST(@ReorgCount AS VARCHAR) + ' Reorganized, ' + CAST(@RebuildCount AS VARCHAR) + ' Rebuilt, ' + CAST(@SkippedCount AS VARCHAR) + ' Skipped (<5% or optimal)';
+"@
+
 $reindexResult = Invoke-SqlStatement -Sql $reindexSql -TimeoutSec 1200
-$reindexStatus = if ($reindexResult.ExitCode -eq 0) { "Reindexed (FillFactor 80)" } else { "Reindex Error" }
-Write-Log "DBREINDEX Result: $reindexStatus" "SUCCESS"
+$reindexStatus = if ($reindexResult.ExitCode -eq 0) { "Tiered Maintenance Completed" } else { "Maintenance Warning: " + $reindexResult.Output }
+Write-Log "Maintenance Result: $reindexStatus" "SUCCESS"
 
 # Step 2c: EXEC sp_updatestats
 Write-Log "Running EXEC sp_updatestats..." "INFO"

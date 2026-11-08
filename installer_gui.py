@@ -426,7 +426,7 @@ class InstallerApp(ctk.CTk):
         self.cb_startmenu.pack(anchor="w", pady=3)
         self.cb_startmenu.select()
 
-        self.cb_schedule = ctk.CTkCheckBox(body, text="Enable Automatic Monday 2:00 AM Backup Schedule", font=ctk.CTkFont(size=12))
+        self.cb_schedule = ctk.CTkCheckBox(body, text="Enable Automatic Daily 2:15 AM Backup Schedule", font=ctk.CTkFont(size=12))
         self.cb_schedule.pack(anchor="w", pady=3)
         self.cb_schedule.select()
 
@@ -847,7 +847,7 @@ class InstallerApp(ctk.CTk):
                     "schtasks.exe", "/create",
                     "/tn", DEFAULT_TASK_NAME,
                     "/tr", f'"{target_exe}" --auto',
-                    "/sc", "weekly", "/d", "MON", "/st", "02:00",
+                    "/sc", "daily", "/st", "02:15",
                     "/rl", "HIGHEST", "/f",
                 ]
                 subprocess.run(sched_args, capture_output=True)

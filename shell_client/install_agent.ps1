@@ -313,19 +313,19 @@ $backupScript  = Join-Path $InstallDir "backup_agent.ps1"
 $monitorScript = Join-Path $InstallDir "storage_monitor.ps1"
 $perfScript    = Join-Path $InstallDir "performance_query.ps1"
 
-# Compute staggered time (e.g., 02:00 AM + offset minutes)
+# Compute staggered time (defaults to 02:15 AM off-peak)
 $baseHour = 2
-$baseMinute = $offsetMinutes
+$baseMinute = if ($offsetMinutes -gt 0) { $offsetMinutes } else { 15 }
 $taskTime = "{0:D2}:{1:D2}" -f $baseHour, $baseMinute
 
-# Task 1: Daily Backup
+# Task 1: Daily Backup ('Database Cloud Backup')
 $action1 = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -File `"$backupScript`""
 $trigger1 = New-ScheduledTaskTrigger -Daily -At $taskTime
 $principal1 = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
 $settings1 = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
 
-Register-ScheduledTask -TaskName "DatabaseBackup_AutomatedTask" -Action $action1 -Trigger $trigger1 -Principal $principal1 -Settings $settings1 -Force | Out-Null
-Write-Host "    [OK] Scheduled Task registered: 'DatabaseBackup_AutomatedTask' (Daily at $taskTime)" -ForegroundColor Green
+Register-ScheduledTask -TaskName "Database Cloud Backup" -Action $action1 -Trigger $trigger1 -Principal $principal1 -Settings $settings1 -Force | Out-Null
+Write-Host "    [OK] Scheduled Task registered: 'Database Cloud Backup' (Daily at $taskTime)" -ForegroundColor Green
 
 # Task 2: Storage Monitor (Hourly)
 $action2 = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -File `"$monitorScript`""

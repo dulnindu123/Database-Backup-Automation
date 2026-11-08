@@ -5,8 +5,8 @@ Centralizes version constants, executable names, and default paths across
 the entire system (Core Engine, GUI, Installer, Build Pipeline, and Audit).
 """
 
-APP_VERSION = "5.0.0"
-INSTALLER_VERSION = "5.0.0"
+APP_VERSION = "5.0.1"
+INSTALLER_VERSION = "5.0.1"
 APP_NAME = "Enterprise Database Cloud Backup"
 EXE_NAME = "DatabaseBackupApp.exe"
 INSTALLER_EXE_NAME = "Setup_DatabaseBackup.exe"
@@ -17,9 +17,9 @@ PROGRAM_DATA_DIR = r"C:\ProgramData\DatabaseBackupApp"
 DEFAULT_TASK_NAME = "Database Cloud Backup"
 
 # Single Source of Truth for Build ID
-BUILD_ID = "5.0.0-20261104"
-BUILD_TIME = "2026-11-04T10:30:00Z"
-BUILD_COMMIT = "v5.0-rel"
+BUILD_ID = "5.0.1-20261109"
+BUILD_TIME = "2026-11-09T00:00:00Z"
+BUILD_COMMIT = "v5.0.1-rel"
 DEV_MODE = False
 
 def get_build_info():
