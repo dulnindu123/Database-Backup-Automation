@@ -1,5 +1,5 @@
 # 🐚 Native Windows PowerShell Shell Client
-### Zero-Footprint, 100% Native Windows Script Agent · v4.2.0
+### Zero-Footprint, 100% Native Windows Script Agent · v5.0.0
 
 This directory provides a **100% native Windows PowerShell shell agent** for the **Enterprise Database Cloud Backup Automation System**.
 

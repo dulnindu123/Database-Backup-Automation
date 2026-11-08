@@ -1,5 +1,5 @@
 # 🔍 Senior Engineer Code Review Guide
-### Enterprise Database Cloud Backup Automation · v4.2.0
+### Enterprise Database Cloud Backup Automation · v5.0.0
 
 Welcome! This document is designed to guide a senior software engineer, security architect, or technical lead through reviewing the codebase. It details the **threat model**, **architectural invariants**, **core engineering trade-offs**, and **step-by-step verification commands**.
 
@@ -63,7 +63,7 @@ When reviewing the implementation, observe these key design guarantees:
 - **[`Tools/setup_new_customer.py`](Tools/setup_new_customer.py)**: Interactive admin CLI for onboarding a single customer. Generates RSA keypairs, signs deployment bundle, and provisions ready-to-deploy customer zip.
 - **[`Tools/batch_setup_customers.py`](Tools/batch_setup_customers.py)**: Bulk onboarding engine for multi-tenant deployment. Processes batch customer slugs, generates isolated keypairs, writes `enroll_codes_for_sheet.tsv`, and generates customer packages.
 
-### Cloud Broker (Zero-Billing)
+### Cloud Broker (Cloud Broker)
 - **[`apps_script_broker/Code.gs`](apps_script_broker/Code.gs)**: Serverless upload broker deployed as a Google Apps Script Web App. Manages enrollment, token authentication, upload session generation via Google Drive API, daily rate limiting, and structured telemetry logging to Google Sheets.
 - **[`apps_script_broker/pull_backup.py`](apps_script_broker/pull_backup.py)**: Administrative read-only Google Drive retrieval script for air-gapped recovery operations.
 

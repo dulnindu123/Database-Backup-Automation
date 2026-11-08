@@ -1,88 +1,93 @@
-# System Architecture & Code Guide
+# 🏛️ System Architecture & Code Guide
+### Enterprise Database Cloud Backup Automation · Version 5.0.0
 
-## Overview
-This system is an automated, zero-trust backup architecture designed to securely upload encrypted database backups to Google Drive using Google Apps Script as a Zero-Billing Upload Broker.
+**Classification:** Internal Engineering & Core Code Architecture Reference  
+**App Version:** `v5.0.0` (November 2026 Post-Audit Release)  
+**Security Standard:** Zero-Trust Cryptographic Enforcement  
 
-### Architecture Diagram
+---
+
+## 📌 1. Architectural Overview
+
+The system is a zero-trust backup architecture designed to securely upload encrypted database backups to Google Drive using a stateless Google Apps Script Broker API without storing cloud credentials on client endpoints.
+
+### High-Level Topology
 
 ```mermaid
-graph TD
-    %% Define Node Styles
-    classDef client fill:#f9f9f9,stroke:#333,stroke-width:2px;
-    classDef google fill:#fff,stroke:#4285F4,stroke-width:2px;
-    classDef storage fill:#fff,stroke:#F4B400,stroke-width:2px;
-    classDef admin fill:#fff,stroke:#DB4437,stroke-width:2px;
-    
-    subgraph Customer Sites
-        C1[Client 1\nDatabaseBackupApp]:::client
-        C2[Client 2\nDatabaseBackupApp]:::client
-        C3[Client 3...\nDatabaseBackupApp]:::client
+flowchart TD
+    subgraph CustomerSites ["Customer Sites (70+ Deployments)"]
+        C1["Client 1: DatabaseBackupApp"]
+        C2["Client 2: Pure PowerShell Agent"]
+        C3["Client 3: DatabaseBackupCLI"]
     end
 
-    subgraph Service Provider Cloud (Zero-Billing)
-        GAS[Google Apps Script\nBroker API]:::google
-        GS[Google Sheet\nTokens/Audit DB]:::google
-        GD[Google Drive\n5TB Storage]:::storage
+    subgraph ServiceProviderCloud ["Cloud Infrastructure"]
+        GAS["Google Apps Script Broker API\n(Code.gs)"]
+        GS["Master Google Sheet\n(Tokens, Quotas, Audit & Telemetry)"]
+        GD["Google Drive Enterprise Storage\n(Canonical Per-Tenant Folders)"]
+        Sentinel["Missed-Backup Sentinel\n(Hourly SLA Health Checker)"]
     end
-    
-    subgraph Administration
-        ADM[Air-Gapped Admin PC\npull_backup.py]:::admin
+
+    subgraph AirGappedAdmin ["Disaster Recovery Infrastructure"]
+        ADM["Air-Gapped Admin Workstation\n(decrypt_gui.py / decrypt_backup.py)"]
+        PrivVault["Encrypted Offline Media\n(Primary & Escrow Private Keys)"]
     end
+
+    C1 -->|1. JSON POST: Machine Auth / Request URI| GAS
+    C2 -->|1. JSON POST: Machine Auth / Request URI| GAS
+    C3 -->|1. JSON POST: Machine Auth / Request URI| GAS
+
+    GAS <-->|2. Validate SHA-256 Token & Enforce Quota| GS
+    GAS -->|3. Issue Resumable Upload URI| GD
+    GAS -.->|4. Return Signed URI to Client| C1
     
-    C1 -->|1. JSON POST: Enroll/Request URI| GAS
-    C2 -->|1. JSON POST: Enroll/Request URI| GAS
-    C3 -->|1. JSON POST: Enroll/Request URI| GAS
+    C1 ===>|5. Stream Encrypted Chunks Directly (8MB PUT)| GD
+    Sentinel -->|6. Overdue SLA Alert (>26h)| AdminEmail["dulnindu@spillabs.com"]
     
-    GAS <-->|2. Validate Token/Quota| GS
-    GAS -->|3. Generate Resumable URI| GD
-    GAS -.->|4. Return URI to Client| C1
-    
-    C1 ===>|5. Chunked HTTP PUT (Direct)| GD
-    
-    ADM --->|6. API Read-Only Pull| GD
+    GD -.->|7. Download .dbk2 Ciphertext| ADM
+    PrivVault -->|8. Decrypt Offline| ADM
 ```
 
-## Components
+---
 
-### 1. Client-Side Backup Application (`DatabaseBackupApp`)
-Runs on the customer's machine. It performs the following:
-- Compresses the target database directory.
-- Encrypts the archive using AES-256-GCM chunked stream encryption with dual RSA-4096 envelope keys (via `.dbk2` format).
-- Enrolls with the Apps Script Broker using an `enroll_code` to receive a time-staggered upload offset.
-- Requests a resumable upload URI from the Apps Script Broker.
-- Uploads the encrypted archive directly to Google Drive in 8MB chunks using the `Content-Range` header.
-- Assesses local disk telemetry and reports it to the Broker.
+## 💻 2. Component Code Architecture
 
-**Key Files:**
-- `backup_core.py`: Core backup compression, encryption, and chunked HTTP uploading logic.
-- `broker_client.py`: HTTP client wrapper for communicating with the Apps Script Broker (handling JSON POSTs and 302 redirects).
-- `auto_backup.py`: The scheduled task entrypoint.
-- `crypto_stream.py`: Streaming encryption implementation.
-- `installer_gui.py`: The PyInstaller-built wizard that securely installs the application and handles one-time enrollment.
+### 2.1 Client-Side Core Engine (`backup_core.py`)
+Runs on the customer machine to perform unattended backup operations:
+- **Dumping**: Executes native Microsoft SQL Server backups using `COPY_ONLY` and `CHECKSUM` options via `sqlcmd.exe` or ODBC Driver 18.
+- **Compression**: Streams dump data into `.zip` archive using Deflate Level 9 compression.
+- **Framing & Encryption (`crypto_stream.py`)**: Wraps archive into `.dbk2` binary container using AES-256-GCM authenticated encryption. Ephemeral AES keys are wrapped via dual RSA-OAEP 4096-bit public keys (Primary + Tenant-Isolated Escrow).
+- **Zero Client Secrets**: `scan_config_for_forbidden_secrets()` audits `config.json` and strips storage passwords and Gmail credentials from disk and memory.
+- **External Credentials**: Resolves SQL authentication from ERP parameter files (`SQLPara.txt`) or Windows DPAPI local vaults (`secrets.dat`).
+- **Policy Enforcement**: `fetch_and_cache_server_policy()` fetches signed security policies from the cloud broker and strictly prevents unencrypted execution.
+- **Dual-Engine Alerting**: Alerts dispatch to Cloud Broker Sentinel first; transparently fails over to direct TLS SMTP (`smtp.gmail.com:587`) to `dulnindu@spillabs.com`.
 
-### 2. Google Apps Script Broker (`apps_script_broker/Code.gs`)
-A lightweight, free, serverless API hosted on Google Apps Script. It acts as the gatekeeper to Google Drive, ensuring customers can only upload files (and cannot list, download, or delete them).
+### 2.2 Broker Client (`broker_client.py`)
+Handles all communications between the client and Google Apps Script broker:
+- Seamlessly resolves HTTP 302 redirects issued by Google Apps Script.
+- Authenticates machine identity via SHA-256 token hashing.
+- Exchanges chunks using HTTP `Content-Range` headers for resilient resumable uploads.
 
-**Key Features:**
-- **doPost(e)**: Receives JSON payloads from the client for actions: `enroll`, `verify`, `request_upload`, and `report_status`.
-- **Atomic Enrollment**: Uses `LockService` to ensure a PC can only enroll once. Validates against `ENROLL_CODE` stored in a hidden Google Sheet.
-- **Quota Management**: Limits each PC to 3 uploads per day, verified by scanning the `Audit` sheet.
-- **Resumable Sessions**: Uses `UrlFetchApp` to call the Drive API (`uploadType=resumable`) and returns the session URI back to the client.
+### 2.3 Cloud Broker Backend (`apps_script_broker/Code.gs`)
+Stateless serverless gateway running in Google Apps Script:
+- **`handleRequestUpload()`**: Authenticates machine token against `Tokens` tab in Google Sheets. Enforces destination folder strictly from the authenticated tenant identity (`destFolderId = canonicalFolderId`), completely ignoring client-supplied target folder IDs to eliminate Confused Deputy vulnerabilities.
+- **`checkMissedBackups()`**: Hourly time-driven trigger scanning the `Tokens` tab for overdue backups (>26 hours since last successful upload). Dispatches automated SLA alert emails to `dulnindu@spillabs.com`.
+- **`handleSendAlert()`**: Server-side alerting endpoint for dispatching high-priority operational and security alerts.
 
-### 3. Read-Only Restore Script (`apps_script_broker/pull_backup.py`)
-Since the Broker and Client hold no read credentials (Zero-Trust), restores must be performed on an air-gapped administrative machine.
-- Uses a Service Account with the `https://www.googleapis.com/auth/drive.readonly` scope.
-- Pulls `.dbk2` files down from the central Google Drive.
+### 2.4 Disaster Recovery Suite (`Admin_Installation_Package/2_Disaster_Recovery/`)
+Operates strictly on administrative hardware:
+- **`decrypt_gui.py`**: Graphical wizard for selecting encrypted `.dbk2` archives, loading RSA-4096 private keys, and decrypting clean `.bak` files.
+- **`decrypt_backup.py`**: High-performance command-line decryption utility.
+- **`crypto_stream.py`**: Decryption implementation verifying 128-bit GCM MAC authentication tags, detecting ciphertext tampering, and validating archive headers.
 
-## Security Posture
-- **Zero-Billing**: No Google Cloud Billing account is required.
-- **Ransomware Vulnerability**: Unlike Google Cloud Storage WORM, Google Drive does not support Object Retention Locks. If the primary Google Workspace account running the Apps Script is compromised, an attacker can empty the trash and delete backups.
-- **Encryption**: Files are encrypted client-side using a public key. The private key never touches the customer's machine or the Google Drive.
+### 2.5 Security Audit Test Suite (`run_security_audit_tests.py`)
+Automated test suite verifying the 6 core security guarantees:
+1. Container framing, header integrity, and decryption.
+2. AES-256-GCM ciphertext tampering detection.
+3. Fail-closed escrow policy enforcement.
+4. Forbidden client secrets sanitization.
+5. Preflight tenant escrow key resolution.
+6. RMM status telemetry JSON schema validation.
 
-## Deployment Instructions
-1. Clone the repository and install requirements.
-2. Ensure you have the Apps Script Web App deployed and have your Google Sheet ID and Folder ID ready.
-3. Run `python Tools\setup_new_customer.py`.
-4. The wizard will automatically generate secure RSA keys, bundle them into an Admin-signed `bundle.json`, and output an `ENROLL_CODE`.
-5. Add the `ENROLL_CODE` to the `Config` tab of your Google Sheet.
-6. The wizard automatically copies `Setup_DatabaseBackup.exe` and `AppFiles` into the customer's deployment folder. Zip this folder and send it to the customer. When run, the installer uses true zero-typing to auto-enroll the PC.
+---
+*Enterprise Database Cloud Backup Automation v5.0.0 · Core Code Reference*

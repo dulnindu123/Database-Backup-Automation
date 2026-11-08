@@ -1,5 +1,5 @@
 # 📦 Client / Customer Installation & Operations Guide
-### Enterprise Database Cloud Backup & Maintenance Suite · v4.2.0
+### Enterprise Database Cloud Backup & Maintenance Suite · v5.0.0
 
 This guide is designed for **customer system administrators, IT support technicians, and server engineers** deploying the **Enterprise Database Cloud Backup & Maintenance Suite** on a customer Windows Server or SQL host.
 
