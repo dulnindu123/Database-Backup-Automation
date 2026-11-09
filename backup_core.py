@@ -1154,7 +1154,7 @@ def grant_sql_folder_permissions(folder_path):
                 clean_inst = inst.split("\\", 1)[1] if "\\" in inst else inst
                 if clean_inst.upper() == "MSSQLSERVER":
                     accts.add("NT SERVICE\\MSSQLSERVER")
-                else:
+                elif not re.match(r"^\d+\.\d+\.\d+\.\d+$", clean_inst):
                     accts.add(f"NT SERVICE\\MSSQL${clean_inst}")
         except Exception:
             pass
@@ -2655,6 +2655,7 @@ def detect_sql_server_instances():
     - 64-bit and 32-bit Registry Instance Names (explicit KEY_WOW64_64KEY and KEY_WOW64_32KEY)
     - InstalledInstances Multi-String
     - Active and Registered Windows Services (MSSQLSERVER and MSSQL$*) via Registry, sc.exe, and PowerShell
+    - SQL Server Management Studio (SSMS 17/18/19/20/21/22) Registered Servers & MRU Recent Connections
     """
     instances = []
 
@@ -2665,7 +2666,40 @@ def detect_sql_server_instances():
         if clean and clean not in instances:
             instances.append(clean)
 
-    # 1. 64-bit and 32-bit Registry Instance Names
+    # 1. SQL Server Management Studio (SSMS) Registered Servers & Recent Connections (RegSrvr*.xml)
+    try:
+        import xml.etree.ElementTree as ET
+        appdata = os.environ.get("APPDATA", "")
+        userprofile = os.environ.get("USERPROFILE", "")
+        search_dirs = [
+            os.path.join(appdata, "Microsoft", "SQL Server Management Studio"),
+            os.path.join(userprofile, "AppData", "Roaming", "Microsoft", "SQL Server Management Studio"),
+            os.path.join(userprofile, "AppData", "Roaming", "Microsoft", "Microsoft SQL Server Management Studio")
+        ]
+        seen_files = set()
+        for sdir in search_dirs:
+            if not os.path.exists(sdir):
+                continue
+            for root, _, files in os.walk(sdir):
+                for f in files:
+                    if f.startswith("RegSrvr") and f.endswith(".xml"):
+                        fpath = os.path.join(root, f)
+                        if fpath in seen_files:
+                            continue
+                        seen_files.add(fpath)
+                        try:
+                            tree = ET.parse(fpath)
+                            for elem in tree.iter():
+                                if elem.tag.endswith("ServerName"):
+                                    sname = (elem.text or "").strip()
+                                    if sname:
+                                        _add(sname)
+                        except Exception:
+                            pass
+    except Exception:
+        pass
+
+    # 2. 64-bit and 32-bit Registry Instance Names
     try:
         import winreg
         for subkey in [
@@ -2692,7 +2726,7 @@ def detect_sql_server_instances():
     except Exception:
         pass
 
-    # 2. InstalledInstances Multi-String
+    # 3. InstalledInstances Multi-String
     try:
         import winreg
         for subkey in [
@@ -2717,7 +2751,7 @@ def detect_sql_server_instances():
     except Exception:
         pass
 
-    # 3. Registry Services Check (SYSTEM\CurrentControlSet\Services)
+    # 4. Registry Services Check (SYSTEM\CurrentControlSet\Services)
     try:
         import winreg
         with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Services") as srv_key:
@@ -2735,7 +2769,7 @@ def detect_sql_server_instances():
     except Exception:
         pass
 
-    # 4. Active Windows Services via sc.exe
+    # 5. Active Windows Services via sc.exe
     try:
         res = subprocess.run(["sc", "query", "state=", "all"], capture_output=True, text=True,
                              shell=False, creationflags=_CREATE_NO_WINDOW, timeout=10)
@@ -2750,7 +2784,7 @@ def detect_sql_server_instances():
     except Exception:
         pass
 
-    # 5. PowerShell Get-Service fallback
+    # 6. PowerShell Get-Service fallback
     try:
         ps_cmd = "Get-Service -Name 'MSSQL*' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name"
         res_ps = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_cmd],
