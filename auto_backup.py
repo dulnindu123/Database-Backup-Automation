@@ -289,6 +289,18 @@ def main():
     Primary application entrypoint.
     Inspects sys.argv to dynamically route execution between GUI and CLI daemons.
     """
+    if len(sys.argv) > 1 and platform.system().lower() == "windows":
+        try:
+            if sys.stdout is None or sys.stderr is None:
+                import ctypes
+                if ctypes.windll.kernel32.AttachConsole(-1):
+                    if sys.stdout is None:
+                        sys.stdout = open("CONOUT$", "w", encoding="utf-8", errors="replace")
+                    if sys.stderr is None:
+                        sys.stderr = open("CONOUT$", "w", encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
     # Route 1: Windows Task Scheduler execution
     if "--auto" in sys.argv or "-a" in sys.argv:
         run_automated_mode()
@@ -346,6 +358,12 @@ def main():
         from backup_core import run_verify_restore_drill
         ok, res = run_verify_restore_drill()
         print(f"[{'PASS' if ok else 'FAIL'}] {res}")
+        sys.exit(0 if ok else 1)
+
+    elif "--fix-all" in sys.argv or "--auto-fix" in sys.argv:
+        from backup_core import run_comprehensive_system_fix
+        ok, res = run_comprehensive_system_fix()
+        print(res)
         sys.exit(0 if ok else 1)
 
     # Route 6: Standard user desktop execution (default)
