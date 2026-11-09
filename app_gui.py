@@ -1172,12 +1172,32 @@ class BackupAutomationApp(ctk.CTk):
         """Populates UI input fields from self.config_data."""
         c = self.config_data
         current_sql = c.get("SQL_SERVER_NAME", "")
+
+        # Auto-discover local SQL instances to populate dropdown
+        detected = detect_sql_server_instances()
+        comp_name = os.environ.get("COMPUTERNAME", "").strip()
+        available_instances = []
+        if comp_name:
+            for inst in detected:
+                if inst.upper() != "MSSQLSERVER":
+                    available_instances.append(f"{comp_name}\\{inst}")
+        for inst in detected:
+            if inst.upper() == "MSSQLSERVER":
+                if "localhost" not in available_instances:
+                    available_instances.append("localhost")
+            else:
+                available_instances.append(f"localhost\\{inst}")
+        if "localhost" not in available_instances:
+            available_instances.append("localhost")
+
+        if current_sql and current_sql not in available_instances:
+            available_instances.insert(0, current_sql)
+
+        self.entry_sql_server.configure(values=available_instances)
+        active_sql = current_sql if current_sql else (available_instances[0] if available_instances else "localhost")
         self.entry_sql_server.delete(0, "end")
-        self.entry_sql_server.insert(0, current_sql)
-        current_vals = list(self.entry_sql_server.cget("values") or [])
-        if current_sql and current_sql not in current_vals:
-            current_vals.insert(0, current_sql)
-            self.entry_sql_server.configure(values=current_vals)
+        self.entry_sql_server.insert(0, active_sql)
+        self.sql_instance_var.set(active_sql)
 
         self.entry_sql_user.delete(0, "end")
         self.entry_sql_user.insert(0, c.get("SQL_USERNAME", ""))
@@ -1187,8 +1207,21 @@ class BackupAutomationApp(ctk.CTk):
         self._check_sql_sa_warning()
 
         dbs = c.get("TARGET_DATABASES", [])
+        if not dbs and active_sql:
+            dbs = detect_user_databases(active_sql, c.get("SQL_USERNAME", ""), c.get("SQL_PASSWORD", ""))
+
         self.entry_databases.delete(0, "end")
         self.entry_databases.insert(0, ", ".join(dbs) if dbs else "")
+
+        # Sync across modules
+        if hasattr(self, 'perf_inst_var') and not self.perf_inst_var.get():
+            self.perf_inst_var.set(active_sql)
+        if hasattr(self, 'perf_db_entry') and dbs:
+            self.perf_db_entry.configure(values=dbs)
+            if hasattr(self, 'perf_db_var') and not self.perf_db_var.get():
+                self.perf_db_var.set(dbs[0])
+        if hasattr(self, 'restore_sql_inst_var') and not self.restore_sql_inst_var.get():
+            self.restore_sql_inst_var.set(active_sql)
 
         self.entry_backup_folder.delete(0, "end")
         self.entry_backup_folder.insert(0, c.get("BACKUP_FOLDER", "C:\\temp\\backups"))
@@ -1324,6 +1357,15 @@ class BackupAutomationApp(ctk.CTk):
         # Discover databases for this instance
         user = self.entry_sql_user.get().strip() if hasattr(self, "entry_sql_user") else ""
         pwd = self.entry_sql_pass.get().strip() if hasattr(self, "entry_sql_pass") else ""
+        if not user:
+            try:
+                creds = resolve_sql_credentials(self.config_data if hasattr(self, "config_data") else {})
+                if creds.get("user"):
+                    user = creds["user"]
+                    pwd = creds.get("password", "")
+            except Exception:
+                pass
+
         dbs = detect_user_databases(instance, user, pwd)
         if dbs:
             self.entry_databases.delete(0, "end")
@@ -1333,6 +1375,47 @@ class BackupAutomationApp(ctk.CTk):
                 self.perf_db_entry.configure(values=dbs)
                 if hasattr(self, 'perf_db_var'):
                     self.perf_db_var.set(dbs[0])
+        else:
+            self.entry_databases.delete(0, "end")
+            if hasattr(self, 'perf_db_entry'):
+                self.perf_db_entry.configure(values=[""])
+                if hasattr(self, 'perf_db_var'):
+                    self.perf_db_var.set("")
+            self.append_log(f"No user databases discovered on {instance} (or authentication required).")
+
+    def _refresh_perf_databases(self):
+        """Refreshes databases and instances directly from the Performance Query tab."""
+        inst = self.perf_inst_var.get().strip() if hasattr(self, 'perf_inst_var') else ""
+        user = self.entry_sql_user.get().strip() if hasattr(self, "entry_sql_user") else ""
+        pwd = self.entry_sql_pass.get().strip() if hasattr(self, "entry_sql_pass") else ""
+        if not user:
+            try:
+                creds = resolve_sql_credentials(self.config_data if hasattr(self, "config_data") else {})
+                if creds.get("user"):
+                    user = creds["user"]
+                    pwd = creds.get("password", "")
+            except Exception:
+                pass
+
+        if not inst:
+            self._auto_detect_sql()
+            return
+
+        self.append_log(f"Auto-detecting databases on SQL instance: {inst}...")
+        dbs = detect_user_databases(inst, user, pwd)
+        if dbs:
+            if hasattr(self, 'perf_db_entry'):
+                self.perf_db_entry.configure(values=dbs)
+            if hasattr(self, 'perf_db_var'):
+                self.perf_db_var.set(dbs[0])
+            if hasattr(self, 'entry_databases'):
+                self.entry_databases.delete(0, "end")
+                self.entry_databases.insert(0, ", ".join(dbs))
+            self.append_log(f"Discovered {len(dbs)} database(s) on {inst}: {', '.join(dbs)}")
+            messagebox.showinfo("Databases Detected", f"Successfully discovered {len(dbs)} user database(s) on {inst}:\n\n" + "\n".join(f"• {d}" for d in dbs))
+        else:
+            self.append_log(f"No databases found on {inst}. Scanning all local SQL instances...")
+            self._auto_detect_sql()
 
     def _auto_detect_sql(self):
         """
@@ -1344,20 +1427,30 @@ class BackupAutomationApp(ctk.CTk):
         self.update_idletasks()
         try:
             raw_instances = detect_sql_server_instances()
+            comp_name = os.environ.get("COMPUTERNAME", "").strip()
             formatted_instances = []
-            
-            # Format instance names: 'MSSQLSERVER' -> 'localhost', others -> 'localhost\INSTANCE'
+
+            # 1. Format computer-name prefixed instances (matching SSMS e.g. DULLA\SQLDULLA)
+            if comp_name:
+                for inst in raw_instances:
+                    if inst.upper() == "MSSQLSERVER":
+                        formatted_instances.append(comp_name)
+                    else:
+                        formatted_instances.append(f"{comp_name}\\{inst}")
+
+            # 2. Format localhost prefixed instances (e.g. localhost\SQLDULLA)
             for inst in raw_instances:
                 if inst.upper() == "MSSQLSERVER":
-                    formatted_instances.append("localhost")
+                    if "localhost" not in formatted_instances:
+                        formatted_instances.append("localhost")
                 else:
                     formatted_instances.append(f"localhost\\{inst}")
-                    
-            # Check default instance localhost if not already included
+
+            # 3. Check default instance localhost if not already included
             if "localhost" not in formatted_instances:
-                rc, _, _ = execute_sql_query_adaptive("localhost", "SELECT 1;", timeout=3)
+                rc, _, _ = execute_sql_query_adaptive("localhost", "SELECT 1;", timeout=2)
                 if rc == 0:
-                    formatted_instances.insert(0, "localhost")
+                    formatted_instances.append("localhost")
 
             # Remove duplicates preserving order
             seen = set()
@@ -1374,44 +1467,63 @@ class BackupAutomationApp(ctk.CTk):
             # Test connection & discover databases for all instances
             user = self.entry_sql_user.get().strip() if hasattr(self, "entry_sql_user") else ""
             pwd = self.entry_sql_pass.get().strip() if hasattr(self, "entry_sql_pass") else ""
-            
+
+            if not user:
+                try:
+                    creds = resolve_sql_credentials(self.config_data if hasattr(self, "config_data") else {})
+                    if creds.get("user"):
+                        user = creds["user"]
+                        pwd = creds.get("password", "")
+                except Exception:
+                    pass
+
             results = {}
             best_instance = None
             max_dbs = -1
 
             for inst in unique_instances:
                 # 1. Test Windows Auth
-                win_dbs = detect_user_databases(inst, "", "")
-                win_ok = False
-                rc_win, _, _ = execute_sql_query_adaptive(inst, "SELECT 1;", "", "", timeout=5)
-                if rc_win == 0:
-                    win_ok = True
+                rc_win, _, _ = execute_sql_query_adaptive(inst, "SELECT 1;", "", "", timeout=4)
+                win_ok = (rc_win == 0)
+                win_dbs = detect_user_databases(inst, "", "") if win_ok else []
 
                 # 2. Test SQL Auth if credentials provided
                 sql_ok = False
                 sql_dbs = []
                 if user:
-                    rc_sql, _, _ = execute_sql_query_adaptive(inst, "SELECT 1;", user, pwd, timeout=5)
+                    rc_sql, _, _ = execute_sql_query_adaptive(inst, "SELECT 1;", user, pwd, timeout=4)
                     if rc_sql == 0:
                         sql_ok = True
                         sql_dbs = detect_user_databases(inst, user, pwd)
 
-                active_dbs = sql_dbs if (user and sql_ok) else win_dbs
+                # 3. If neither worked, probe to see if instance is active but needs credentials
+                needs_creds = False
+                if not win_ok and not sql_ok:
+                    rc_probe, _, err_probe = execute_sql_query_adaptive(inst, "SELECT 1;", "sa", "probe_check_only", timeout=3)
+                    err_probe_low = err_probe.lower()
+                    if "login failed" in err_probe_low or "password" in err_probe_low:
+                        needs_creds = True
+
+                active_dbs = sql_dbs if (user and sql_ok and len(sql_dbs) >= len(win_dbs)) else win_dbs
                 auth_desc = []
                 if win_ok:
                     auth_desc.append("Windows Auth: OK")
                 if sql_ok:
                     auth_desc.append(f"SQL Auth ({user}): OK")
                 if not win_ok and not sql_ok:
-                    auth_desc.append("Auth: Credentials Required")
+                    if needs_creds:
+                        auth_desc.append("Instance Active: SQL Credentials Required")
+                    else:
+                        auth_desc.append("Unreachable")
 
                 results[inst] = {
                     "dbs": active_dbs,
                     "auth": ", ".join(auth_desc) if auth_desc else "Unverified",
                     "win_ok": win_ok,
-                    "sql_ok": sql_ok
+                    "sql_ok": sql_ok,
+                    "needs_creds": needs_creds
                 }
-                
+
                 # Auto-select the instance that has user databases (or highest count)
                 if len(active_dbs) > max_dbs:
                     max_dbs = len(active_dbs)
@@ -1420,11 +1532,18 @@ class BackupAutomationApp(ctk.CTk):
             if not best_instance:
                 best_instance = unique_instances[0]
 
+            # Prioritize instances with databases at top of dropdown list
+            sorted_instances = sorted(
+                unique_instances,
+                key=lambda x: (len(results[x]["dbs"]), 1 if (results[x]["win_ok"] or results[x]["sql_ok"]) else 0, 1 if x == best_instance else 0),
+                reverse=True
+            )
+
             # Populate dropdown values & set active selection
-            self.entry_sql_server.configure(values=unique_instances)
+            self.entry_sql_server.configure(values=sorted_instances)
             self.entry_sql_server.set(best_instance)
             self.sql_instance_var.set(best_instance)
-            
+
             # Sync across tabs
             if hasattr(self, 'perf_inst_var'):
                 self.perf_inst_var.set(best_instance)
@@ -1441,12 +1560,12 @@ class BackupAutomationApp(ctk.CTk):
                     if hasattr(self, 'perf_db_var'):
                         self.perf_db_var.set(selected_dbs[0])
 
-            self.append_log(f"Auto-detected {len(unique_instances)} SQL Server instance(s): {', '.join(unique_instances)}")
+            self.append_log(f"Auto-detected {len(sorted_instances)} SQL Server instance(s): {', '.join(sorted_instances)}")
             self.append_log(f"Active selection: {best_instance} ({results[best_instance]['auth']}) — Databases: {', '.join(selected_dbs) if selected_dbs else 'None'}")
 
             # Construct informative message dialog
-            msg_lines = [f"Discovered {len(unique_instances)} SQL Server Instance(s):\n"]
-            for inst in unique_instances:
+            msg_lines = [f"Discovered {len(sorted_instances)} SQL Server Instance(s):\n"]
+            for inst in sorted_instances:
                 info = results[inst]
                 dbs_summary = f"{len(info['dbs'])} database(s) found" if info['dbs'] else "No user databases"
                 prefix = "★ " if inst == best_instance else "• "
@@ -1456,7 +1575,7 @@ class BackupAutomationApp(ctk.CTk):
 
             msg_lines.append(f"\nAuto-selected '{best_instance}' in the dropdown.")
             msg_lines.append("You can select any other instance anytime from the dropdown menu.")
-            
+
             messagebox.showinfo("SQL Server Instances Detected", "\n".join(msg_lines))
 
         finally:
@@ -2952,6 +3071,17 @@ class BackupAutomationApp(ctk.CTk):
         self.perf_inst_var = tk.StringVar(value=inst_default)
         self.perf_inst_entry = ctk.CTkEntry(row1, textvariable=self.perf_inst_var, width=180)
         self.perf_inst_entry.pack(side="left", padx=(0, 10))
+
+        self.btn_perf_refresh_dbs = ctk.CTkButton(
+            row1,
+            text="Auto-Detect Databases",
+            width=160,
+            fg_color="#374151",
+            hover_color="#4b5563",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            command=self._refresh_perf_databases
+        )
+        self.btn_perf_refresh_dbs.pack(side="left")
 
         # Row 2: FillFactor and Safety Backup Toggle
         row2 = ctk.CTkFrame(perf_cfg_card, fg_color="transparent")

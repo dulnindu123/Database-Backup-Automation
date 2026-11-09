@@ -1263,8 +1263,8 @@ def _sql_argv(cli_type, cli_path, sql_server, sql_user, timeout, query, trust_ce
 
 def _sql_env(cli_type, sql_user, sql_password):
     env = os.environ.copy()
-    if sql_user and sql_password:
-        env["SQLCMDPASSWORD" if cli_type == "sqlcmd" else "OSQLPASSWORD"] = sql_password
+    if sql_user:
+        env["SQLCMDPASSWORD" if cli_type == "sqlcmd" else "OSQLPASSWORD"] = sql_password or ""
     return env
 
 
@@ -1277,6 +1277,7 @@ def execute_sql_query_adaptive(sql_server, query, sql_user="", sql_password="", 
     """
     Runs a read-only query with sqlcmd/osql using shell=False. Retries without -C if the
     installed client rejects that flag.  Returns (returncode, stdout, stderr).
+    Uses stdin=subprocess.DEVNULL to prevent hangs on interactive credentials prompts.
     """
     cli_type, cli_path = find_sql_cli_executable()
     env = _sql_env(cli_type, sql_user, sql_password)
@@ -1284,8 +1285,8 @@ def execute_sql_query_adaptive(sql_server, query, sql_user="", sql_password="", 
     def _run(trust):
         return subprocess.run(
             _sql_argv(cli_type, cli_path, sql_server, sql_user, timeout, query, trust, True),
-            shell=False, capture_output=True, text=True, timeout=timeout + 5,
-            env=env, creationflags=_CREATE_NO_WINDOW)
+            shell=False, capture_output=True, text=True, stdin=subprocess.DEVNULL,
+            timeout=timeout + 5, env=env, creationflags=_CREATE_NO_WINDOW)
     try:
         res = _run(True)
         if cli_type == "sqlcmd" and _looks_like_bad_c_flag(res.stdout, res.stderr):
@@ -2650,59 +2651,116 @@ def detect_sql_server_instances():
     """
     Auto-discovers locally installed Microsoft SQL Server instances.
     Enumerates:
-    - 64-bit and 32-bit Registry Instance Names
+    - 64-bit and 32-bit Registry Instance Names (explicit KEY_WOW64_64KEY and KEY_WOW64_32KEY)
     - InstalledInstances Multi-String
-    - Active Windows Services (MSSQLSERVER and MSSQL$*)
+    - Active and Registered Windows Services (MSSQLSERVER and MSSQL$*) via Registry, sc.exe, and PowerShell
     """
     instances = []
-    
+
+    def _add(inst):
+        if not inst:
+            return
+        clean = inst.strip().strip('"').strip("'")
+        if clean and clean not in instances:
+            instances.append(clean)
+
     # 1. 64-bit and 32-bit Registry Instance Names
-    for subkey in [
-        r"SOFTWARE\Microsoft\Microsoft SQL Server\Instance Names\SQL",
-        r"SOFTWARE\WOW6432Node\Microsoft\Microsoft SQL Server\Instance Names\SQL"
-    ]:
-        try:
-            import winreg
-            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, subkey) as key:
-                i = 0
-                while True:
-                    try:
-                        name, _, _ = winreg.EnumValue(key, i)
-                        if name and name not in instances:
-                            instances.append(name)
-                        i += 1
-                    except OSError:
-                        break
-        except Exception:
-            pass
+    try:
+        import winreg
+        for subkey in [
+            r"SOFTWARE\Microsoft\Microsoft SQL Server\Instance Names\SQL",
+            r"SOFTWARE\WOW6432Node\Microsoft\Microsoft SQL Server\Instance Names\SQL"
+        ]:
+            for access in [
+                winreg.KEY_READ | getattr(winreg, "KEY_WOW64_64KEY", 0),
+                winreg.KEY_READ | getattr(winreg, "KEY_WOW64_32KEY", 0),
+                winreg.KEY_READ
+            ]:
+                try:
+                    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, subkey, 0, access) as key:
+                        i = 0
+                        while True:
+                            try:
+                                name, _, _ = winreg.EnumValue(key, i)
+                                _add(name)
+                                i += 1
+                            except OSError:
+                                break
+                except Exception:
+                    pass
+    except Exception:
+        pass
 
     # 2. InstalledInstances Multi-String
-    for subkey in [
-        r"SOFTWARE\Microsoft\Microsoft SQL Server",
-        r"SOFTWARE\WOW6432Node\Microsoft\Microsoft SQL Server"
-    ]:
-        try:
-            import winreg
-            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, subkey) as key:
-                val, _ = winreg.QueryValueEx(key, "InstalledInstances")
-                if isinstance(val, list):
-                    for item in val:
-                        if item and item not in instances:
-                            instances.append(item)
-        except Exception:
-            pass
-
-    # 3. Active Windows Services
     try:
-        res = subprocess.run(["sc", "query", "state=", "all"], capture_output=True, text=True)
+        import winreg
+        for subkey in [
+            r"SOFTWARE\Microsoft\Microsoft SQL Server",
+            r"SOFTWARE\WOW6432Node\Microsoft\Microsoft SQL Server"
+        ]:
+            for access in [
+                winreg.KEY_READ | getattr(winreg, "KEY_WOW64_64KEY", 0),
+                winreg.KEY_READ | getattr(winreg, "KEY_WOW64_32KEY", 0),
+                winreg.KEY_READ
+            ]:
+                try:
+                    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, subkey, 0, access) as key:
+                        val, _ = winreg.QueryValueEx(key, "InstalledInstances")
+                        if isinstance(val, (list, tuple)):
+                            for item in val:
+                                _add(item)
+                        elif isinstance(val, str):
+                            _add(val)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    # 3. Registry Services Check (SYSTEM\CurrentControlSet\Services)
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Services") as srv_key:
+            i = 0
+            while True:
+                try:
+                    sname = winreg.EnumKey(srv_key, i)
+                    if sname.upper() == "MSSQLSERVER":
+                        _add("MSSQLSERVER")
+                    elif sname.upper().startswith("MSSQL$"):
+                        _add(sname[6:])
+                    i += 1
+                except OSError:
+                    break
+    except Exception:
+        pass
+
+    # 4. Active Windows Services via sc.exe
+    try:
+        res = subprocess.run(["sc", "query", "state=", "all"], capture_output=True, text=True,
+                             shell=False, creationflags=_CREATE_NO_WINDOW, timeout=10)
         for line in res.stdout.splitlines():
-            if "SERVICE_NAME: MSSQL$" in line:
-                inst = line.split("MSSQL$")[-1].strip()
-                if inst and inst not in instances:
-                    instances.append(inst)
-            elif "SERVICE_NAME: MSSQLSERVER" in line:
-                if "MSSQLSERVER" not in instances:
-                    instances.append("MSSQLSERVER")
+            upper = line.upper()
+            if "SERVICE_NAME: MSSQL$" in upper:
+                idx = upper.find("SERVICE_NAME: MSSQL$")
+                inst = line[idx + len("SERVICE_NAME: MSSQL$"):].strip()
+                _add(inst)
+            elif "SERVICE_NAME: MSSQLSERVER" in upper:
+                _add("MSSQLSERVER")
+    except Exception:
+        pass
+
+    # 5. PowerShell Get-Service fallback
+    try:
+        ps_cmd = "Get-Service -Name 'MSSQL*' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name"
+        res_ps = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_cmd],
+                                capture_output=True, text=True, shell=False,
+                                creationflags=_CREATE_NO_WINDOW, timeout=10)
+        for line in res_ps.stdout.splitlines():
+            line_s = line.strip()
+            if line_s.upper() == "MSSQLSERVER":
+                _add("MSSQLSERVER")
+            elif line_s.upper().startswith("MSSQL$"):
+                _add(line_s[6:])
     except Exception:
         pass
 
@@ -2716,6 +2774,8 @@ def detect_user_databases(sql_server, sql_user="", sql_password=""):
     - Queries sys.databases on SQL Server 2005+
     - Falls back to master.dbo.sysdatabases on SQL Server 2000 / legacy setups
     - Excludes system databases (database_id / dbid <= 4: master, tempdb, model, msdb)
+    - Automatically tests Windows Authentication if SQL auth fails, and vice versa.
+    - Automatically handles bare instance names (e.g. 'SQLDULLA' -> 'COMPUTERNAME\\SQLDULLA' / 'localhost\\SQLDULLA').
     """
     query = (
         "SET NOCOUNT ON; "
@@ -2724,14 +2784,57 @@ def detect_user_databases(sql_server, sql_user="", sql_password=""):
         "ELSE "
         "  SELECT name FROM master.dbo.sysdatabases WHERE dbid > 4;"
     )
-    rc, stdout, stderr = execute_sql_query_adaptive(sql_server, query, sql_user, sql_password, timeout=15)
-    if rc == 0 and stdout.strip():
+
+    def _parse(stdout):
         lines = []
         for line in stdout.strip().splitlines():
             line_str = line.strip()
             if line_str and not line_str.startswith("-") and not line_str.startswith("(") and not line_str.lower().startswith("name"):
                 lines.append(line_str)
         return lines
+
+    def _query_target(target):
+        # 1. Using provided parameters
+        rc, stdout, _ = execute_sql_query_adaptive(target, query, sql_user, sql_password, timeout=4)
+        if rc == 0:
+            return True, _parse(stdout)
+        # 2. Windows Auth fallback if sql_user provided
+        if sql_user:
+            rc_w, stdout_w, _ = execute_sql_query_adaptive(target, query, "", "", timeout=4)
+            if rc_w == 0:
+                return True, _parse(stdout_w)
+        # 3. External credentials fallback if Windows Auth failed
+        if not sql_user:
+            try:
+                creds = resolve_sql_credentials({})
+                if creds.get("user"):
+                    rc_e, stdout_e, _ = execute_sql_query_adaptive(target, query, creds["user"], creds.get("password", ""), timeout=4)
+                    if rc_e == 0:
+                        return True, _parse(stdout_e)
+            except Exception:
+                pass
+        return False, []
+
+    server_clean = (sql_server or "").strip()
+    if not server_clean:
+        return []
+
+    targets = []
+    if "\\" not in server_clean and server_clean.lower() not in ("localhost", ".", "(local)", "127.0.0.1"):
+        comp_name = os.environ.get("COMPUTERNAME", "").strip()
+        if comp_name:
+            targets.append(f"{comp_name}\\{server_clean}")
+        targets.append(f"localhost\\{server_clean}")
+        targets.append(f".\\{server_clean}")
+        targets.append(server_clean)
+    else:
+        targets.append(server_clean)
+
+    for t in targets:
+        success, res = _query_target(t)
+        if success:
+            return res
+
     return []
 
 
