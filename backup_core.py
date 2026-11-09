@@ -712,10 +712,11 @@ def dispatch_security_alert_email(config, alert_type, db_name, file_name, machin
     """
     Sends an immediate High-Importance security alert via Cloud Broker Sentinel (Playbook A4).
     Zero Client Secrets: No client-side SMTP credentials, passwords, or port 587 connections.
-    Includes resilient fallback to direct SMTP if broker endpoint has not yet been upgraded.
+    Dispatches an automated security alert when zero-trust policy violations occur.
+    Dispatches via Cloud Broker Sentinel (Zero Client Secrets).
     """
     cfg = config or load_config()
-    recipient = cfg.get("SECURITY_ALERT_EMAIL_RECIPIENT") or cfg.get("STORAGE_ALERT_EMAIL_RECIPIENT") or "dulnindu@spillabs.com"
+    recipient = cfg.get("SECURITY_ALERT_EMAIL_RECIPIENT") or cfg.get("STORAGE_ALERT_EMAIL_RECIPIENT") or "backup-alerts@spillabs.com"
     if recipient:
         recipient = recipient.strip().replace(".com.com", ".com")
 
@@ -759,7 +760,7 @@ def dispatch_security_alert_email(config, alert_type, db_name, file_name, machin
         except Exception as e:
             emit_log(f"Broker alert dispatch attempt failed: {e}", "warning")
 
-    # Resilient fallback: direct SMTP delivery
+    # Local event recording if broker alert dispatch fails
     subject = f"[CRITICAL SECURITY ALERT] {alert_type} on {machine_id} ({db_name})"
     timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     html = f"""
@@ -844,7 +845,7 @@ def load_config(config_path=None):
         "STORAGE_C_DRIVE_ALERT_GB": 30,
         "STORAGE_OTHER_DRIVES_ALERT_PERCENT": 90,
         "STORAGE_INCLUDE_NETWORK_DRIVES": True,
-        "STORAGE_ALERT_EMAIL_RECIPIENT": "dulnindu@spillabs.com",
+        "STORAGE_ALERT_EMAIL_RECIPIENT": "backup-alerts@spillabs.com",
         "STORAGE_SHEET_TAB_NAME": "Storage Monitor",
         "STORAGE_SCAN_FREQUENCY": "Daily",
         "PERFORMANCE_SCHEDULE_TIME": "03:30",
@@ -3185,7 +3186,7 @@ def send_storage_alert_email(critical_drives, config, log_cb=None):
     if not critical_drives:
         return False
 
-    recipient = config.get("STORAGE_ALERT_EMAIL_RECIPIENT", "dulnindu@spillabs.com").strip().replace(".com.com", ".com")
+    recipient = config.get("STORAGE_ALERT_EMAIL_RECIPIENT", "backup-alerts@spillabs.com").strip().replace(".com.com", ".com")
     server_name = socket.gethostname()
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     drive_count = len(critical_drives)
@@ -3263,7 +3264,7 @@ def send_test_storage_email(config, log_cb=None):
     Sends a test alert via Cloud Broker Sentinel to verify connectivity and recipient delivery (Playbook A4).
     Uses the Cloud Broker relay over HTTPS (Port 443), with automatic fallback to direct SMTP if broker is awaiting upgrade.
     """
-    recipient = config.get("STORAGE_ALERT_EMAIL_RECIPIENT", "dulnindu@spillabs.com").strip().replace(".com.com", ".com")
+    recipient = config.get("STORAGE_ALERT_EMAIL_RECIPIENT", "backup-alerts@spillabs.com").strip().replace(".com.com", ".com")
     server_name = socket.gethostname()
     broker_url = config.get("BROKER_URL") or config.get("TELEMETRY_BROKER_URL")
     prog_data = os.environ.get("ALLUSERSPROFILE", r"C:\ProgramData")

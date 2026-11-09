@@ -2769,7 +2769,7 @@ class BackupAutomationApp(ctk.CTk):
 
         # Recipient Email
         self._sh_email_row(email_card, "Alert Recipient:", "sh_recipient",
-                          self.config_data.get("STORAGE_ALERT_EMAIL_RECIPIENT", "dulnindu@spillabs.com"))
+                          self.config_data.get("STORAGE_ALERT_EMAIL_RECIPIENT", "backup-alerts@spillabs.com"))
 
         # Relay Provider badge
         relay_row = ctk.CTkFrame(email_card, fg_color="transparent")
@@ -2834,7 +2834,7 @@ class BackupAutomationApp(ctk.CTk):
         self.config_data["STORAGE_C_DRIVE_ALERT_GB"] = max(1, min(c_gb, 500))
         self.config_data["STORAGE_OTHER_DRIVES_ALERT_PERCENT"] = max(50, min(o_pct, 99))
         self.config_data["STORAGE_INCLUDE_NETWORK_DRIVES"] = bool(self.sh_include_network.get())
-        recipient = self.sh_recipient.get().strip().replace(".com.com", ".com") if hasattr(self, "sh_recipient") else "dulnindu@spillabs.com"
+        recipient = self.sh_recipient.get().strip().replace(".com.com", ".com") if hasattr(self, "sh_recipient") else "backup-alerts@spillabs.com"
         self.config_data["STORAGE_ALERT_EMAIL_RECIPIENT"] = recipient
         self.config_data["STORAGE_SCAN_FREQUENCY"] = self.sh_freq_var.get()
 
@@ -3009,8 +3009,8 @@ class BackupAutomationApp(ctk.CTk):
         self.append_log("Dispatching Sentinel Alert test via Cloud Broker (Zero Client Secrets)...")
         ok, msg = send_test_storage_email(self.config_data, log_cb=self.append_log)
         if ok:
-            recipient = self.config_data.get("STORAGE_ALERT_EMAIL_RECIPIENT", "dulnindu@spillabs.com")
-            messagebox.showinfo("Cloud Sentinel Test", f"✅ Sentinel Alert Successfully Dispatched!\n\nTarget: {recipient}\nRelay: Cloud Broker Sentinel (Port 443)\n\nCheck your inbox for the test verification email.")
+            recipient = self.config_data.get("STORAGE_ALERT_EMAIL_RECIPIENT", "backup-alerts@spillabs.com")
+            messagebox.showinfo("Cloud Sentinel Test", f"✅ Sentinel Alert Successfully Dispatched!\n\nTarget: {recipient}\nRelay: Cloud Broker Sentinel (Port 443)\n\nCheck the team alert inbox for the test verification email.")
         else:
             messagebox.showerror("Sentinel Alert Test Failed", f"Failed to dispatch alert via cloud broker:\n\n{msg}")
 
